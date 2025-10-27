@@ -472,6 +472,17 @@ jobs:
         log "生成合并后的luci软件包报告..."
         LUCI_AFTER=$(grep "^CONFIG_PACKAGE_luci.*=y" "$OPENWRT_PATH/.config" | sort)
         
+        # 在控制台输出合并后的luci软件包列表
+        log "=== 合并后的Luci软件包列表 ==="
+        if [ -n "$LUCI_AFTER" ]; then
+          echo "$LUCI_AFTER" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
+            echo "  - $pkg"
+          done
+        else
+          log "  (无Luci软件包)"
+        fi
+        echo "================================"
+        
         # 生成差异报告
         log "生成luci软件包差异报告..."
         {
@@ -499,6 +510,17 @@ jobs:
         # 保存defconfig后的luci软件包列表
         log "生成defconfig后的luci软件包报告..."
         LUCI_DEFCONFIG=$(grep "^CONFIG_PACKAGE_luci.*=y" "$OPENWRT_PATH/.config" | sort)
+        
+        # 在控制台输出defconfig后的luci软件包列表
+        log "=== Defconfig后的Luci软件包列表 ==="
+        if [ -n "$LUCI_DEFCONFIG" ]; then
+          echo "$LUCI_DEFCONFIG" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
+            echo "  - $pkg"
+          done
+        else
+          log "  (无Luci软件包)"
+        fi
+        echo "===================================="
         
         # 生成defconfig后的差异报告
         log "生成defconfig后的luci软件包差异报告..."
