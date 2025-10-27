@@ -1,0 +1,17 @@
+{
+  "immwrt": {
+    "url": "https://github.com/laipeng668/immortalwrt.git",
+    "branch": "master",
+    "short": "immwrt"
+  },
+  "openwrt": {
+    "url": "https://github.com/laipeng668/openwrt.git",
+    "branch": "master",
+    "short": "openwrt"
+  },
+  "libwrt": {
+    "url": "https://github.com/laipeng668/openwrt-6.x.git",
+    "branch": "k6.12-nss",
+    "short": "libwrt"
+  }
+}
