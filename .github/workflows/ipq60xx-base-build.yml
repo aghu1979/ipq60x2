@@ -65,7 +65,7 @@ jobs:
         
         # 初始化日志文件
         echo "=== Build Log Started at $(date) ===" > "$LOG_FILE"
-        echo '{"build_id":"'$BUILD_ID'","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
+        echo '{"build_id":"'$BUILD_ID'","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[],"build_errors":[]}' > "$REPORT_FILE"
         
         # 日志函数
         log() {
@@ -81,7 +81,7 @@ jobs:
                     DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;;
                     INFO)  echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;;
                     WARN)  echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;;
-                    ERROR) echo -e "\033[0;31m[$timestamp] [ERROR] $message\033[0m" ;;
+                    ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;;
                 esac
                 
                 # 文件输出
@@ -98,6 +98,30 @@ jobs:
                         mv "$REPORT_FILE.tmp" "$REPORT_FILE"
                 fi
             fi
+        }
+        
+        # 构建错误记录函数
+        log_build_error() {
+            local error_msg="$1"
+            local package="$2"
+            local timestamp=$(date -Iseconds)
+            
+            # 高亮显示构建错误
+            echo -e "\n\033[1;41;37m🔥 构建错误 🔥\033[0m"
+            echo -e "\033[1;31m错误信息: $error_msg\033[0m"
+            echo -e "\033[1;31m相关包: $package\033[0m"
+            echo -e "\033[1;41;37m================\033[0m\n"
+            
+            # 记录到日志
+            log "ERROR" "构建失败: $error_msg (包: $package)"
+            
+            # 更新报告文件
+            jq --arg msg "$error_msg" --arg pkg "$package" --arg time "$timestamp" \
+                '.build_errors += [{"message":$msg,"package":$pkg,"time":$time}]' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
+                mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+            
+            # 发送GitHub通知
+            echo "::error ::构建失败: $error_msg (包: $package)"
         }
         
         # 步骤开始
@@ -150,7 +174,7 @@ jobs:
         }
         
         # 导出函数
-        export -f log step_start step_complete show_progress
+        export -f log log_build_error step_start step_complete show_progress
         EOF
         
         chmod +x /tmp/logger.sh
@@ -413,6 +437,17 @@ jobs:
           ${{ env.OPENWRT_PATH }}/dl
           ${{ env.OPENWRT_PATH }}/package/feeds
 
+    - name: 缓存DL软件包
+      id: cache_dl
+      uses: actions/cache@main
+      with:
+        key: ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.SOURCE_HASH }}
+        restore-keys: |
+          ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
+          ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-
+        path: |
+          ${{ env.OPENWRT_PATH }}/dl
+
     - name: 检查缓存状态
       run: |
         source "$LOGGER_SCRIPT"
@@ -436,6 +471,15 @@ jobs:
             CACHE_STATUS_FEEDS="MISS"
         fi
         
+        # DL缓存
+        if [ "${{ steps.cache_dl.outputs.cache-hit }}" == "true" ]; then
+            log "INFO" "✅ DL软件包缓存命中"
+            CACHE_STATUS_DL="HIT"
+        else
+            log "INFO" "❌ DL软件包缓存未命中，将重新下载"
+            CACHE_STATUS_DL="MISS"
+        fi
+        
         # 显示缓存大小
         for dir in ".ccache" "staging_dir" "feeds" "dl"; do
             if [ -d "$OPENWRT_PATH/$dir" ]; then
@@ -447,6 +491,7 @@ jobs:
         # 更新报告
         echo "CACHE_STATUS_TOOLCHAIN=$CACHE_STATUS_TOOLCHAIN" >> $GITHUB_ENV
         echo "CACHE_STATUS_FEEDS=$CACHE_STATUS_FEEDS" >> $GITHUB_ENV
+        echo "CACHE_STATUS_DL=$CACHE_STATUS_DL" >> $GITHUB_ENV
         
         step_complete "CACHE_STATUS" "success"
 
@@ -612,7 +657,26 @@ jobs:
             log "INFO" "  (无Luci软件包)"
         fi
         
-        # 生成差异报告
+        # 生成defconfig对比报告
+        log "INFO" "=== Defconfig软件包对比 ==="
+        {
+            echo "## Defconfig后的Luci软件包变化"
+            echo ""
+            echo "### 新增的Luci软件包:"
+            comm -13 <(echo "$LUCI_AFTER") <(echo "$LUCI_DEFCONFIG") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
+                echo "- ✅ $pkg"
+                log "INFO" "  [新增] $pkg"
+            done
+            echo ""
+            echo "### 缺失的Luci软件包:"
+            comm -23 <(echo "$LUCI_AFTER") <(echo "$LUCI_DEFCONFIG") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
+                echo "- ❌ $pkg"
+                log "WARN" "  [缺失] $pkg"
+            done
+            echo ""
+        } > "$GITHUB_WORKSPACE/luci_defconfig_report.md"
+        
+        # 生成合并差异报告
         {
             echo "## Luci软件包合并报告"
             echo ""
@@ -683,6 +747,29 @@ jobs:
         log "INFO" "开始编译基础环境..."
         log "INFO" "使用 $(nproc) 个线程编译"
         
+        # 创建错误监控脚本
+        cat > /tmp/monitor_errors.sh << 'EOF'
+        #!/bin/bash
+        LOG_FILE="$1"
+        ERROR_PATTERNS=("failed to build" "Error:" "ERROR:" "error:" "make.*\*\*\*.*Error")
+        
+        tail -f "$LOG_FILE" | while read line; do
+            for pattern in "${ERROR_PATTERNS[@]}"; do
+                if echo "$line" | grep -q "$pattern"; then
+                    # 提取包名
+                    PACKAGE=$(echo "$line" | grep -o 'package/[^/]*' | head -1 | cut -d'/' -f2)
+                    if [ -z "$PACKAGE" ]; then
+                        PACKAGE="未知"
+                    fi
+                    
+                    # 调用错误记录函数
+                    log_build_error "$line" "$PACKAGE"
+                fi
+            done
+        done
+        EOF
+        chmod +x /tmp/monitor_errors.sh
+        
         # 分阶段编译
         local stages=("工具链和内核" "系统包" "所有包")
         local commands=("toolchain/kernel-headers compile" "package/system/opkg/host/compile" "")
@@ -695,30 +782,64 @@ jobs:
             
             if [ -n "${commands[$i]}" ]; then
                 log "INFO" "编译${stages[$i]}..."
-                if make -j$(nproc) ${commands[$i]}; then
+                
+                # 启动错误监控（后台）
+                /tmp/monitor_errors.sh /tmp/build.log &
+                MONITOR_PID=$!
+                
+                if make -j$(nproc) ${commands[$i]} 2>&1 | tee /tmp/build.log; then
                     log "INFO" "${stages[$i]}编译成功"
                 else
+                    kill $MONITOR_PID 2>/dev/null || true
                     log "WARN" "${stages[$i]}并行编译失败，尝试单线程编译"
-                    if make -j1 V=s ${commands[$i]}; then
+                    
+                    # 单线程编译时也监控错误
+                    /tmp/monitor_errors.sh /tmp/build.log &
+                    MONITOR_PID=$!
+                    
+                    if make -j1 V=s ${commands[$i]} 2>&1 | tee /tmp/build.log; then
                         log "INFO" "${stages[$i]}单线程编译成功"
                     else
+                        kill $MONITOR_PID 2>/dev/null || true
                         log "ERROR" "${stages[$i]}编译彻底失败"
+                        
+                        # 分析最后几行日志，提取关键错误
+                        log_build_error "$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR)" | tail -1)" "编译失败"
                         exit 1
                     fi
                 fi
+                
+                kill $MONITOR_PID 2>/dev/null || true
             else
                 log "INFO" "编译所有包..."
-                if make -j$(nproc); then
+                
+                # 启动错误监控（后台）
+                /tmp/monitor_errors.sh /tmp/build.log &
+                MONITOR_PID=$!
+                
+                if make -j$(nproc) 2>&1 | tee /tmp/build.log; then
                     log "INFO" "所有包编译成功"
                 else
+                    kill $MONITOR_PID 2>/dev/null || true
                     log "WARN" "并行编译失败，尝试单线程编译"
-                    if make -j1 V=s; then
+                    
+                    # 单线程编译时也监控错误
+                    /tmp/monitor_errors.sh /tmp/build.log &
+                    MONITOR_PID=$!
+                    
+                    if make -j1 V=s 2>&1 | tee /tmp/build.log; then
                         log "INFO" "单线程编译成功"
                     else
+                        kill $MONITOR_PID 2>/dev/null || true
                         log "ERROR" "编译彻底失败"
+                        
+                        # 分析最后几行日志，提取关键错误
+                        log_build_error "$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR)" | tail -1)" "编译失败"
                         exit 1
                     fi
                 fi
+                
+                kill $MONITOR_PID 2>/dev/null || true
             fi
         done
         
@@ -755,13 +876,20 @@ jobs:
             echo "=== 缓存状态 ==="
             echo "工具链缓存: $CACHE_STATUS_TOOLCHAIN"
             echo "Feeds缓存: $CACHE_STATUS_FEEDS"
+            echo "DL缓存: $CACHE_STATUS_DL"
             echo ""
             echo "=== 错误统计 ==="
             echo "错误数量: $(jq '.errors | length' "$REPORT_FILE")"
             echo "警告数量: $(jq '.warnings | length' "$REPORT_FILE")"
+            echo "构建错误数量: $(jq '.build_errors | length' "$REPORT_FILE")"
             echo ""
+            if [ "$(jq '.build_errors | length' "$REPORT_FILE")" -gt 0 ]; then
+                echo "=== 构建错误详情 ==="
+                jq -r '.build_errors[] | "- [\(.time)] \(.package): \(.message)"' "$REPORT_FILE"
+                echo ""
+            fi
             if [ "$(jq '.errors | length' "$REPORT_FILE")" -gt 0 ]; then
-                echo "=== 错误详情 ==="
+                echo "=== 其他错误详情 ==="
                 jq -r '.errors[] | "- [\(.time)] \(.step): \(.message)"' "$REPORT_FILE"
                 echo ""
             fi
@@ -806,6 +934,7 @@ jobs:
           ${{ github.workspace }}/build_report.json
           ${{ github.workspace }}/build_summary.txt
           ${{ github.workspace }}/luci_report.md
+          ${{ github.workspace }}/luci_defconfig_report.md
         retention-days: 30
 
     - name: 上传Bin目录
@@ -835,6 +964,7 @@ jobs:
             echo "设备名称: $DEVICE_NAMES"
             echo "工具链缓存: $CACHE_STATUS_TOOLCHAIN"
             echo "Feeds缓存: $CACHE_STATUS_FEEDS"
+            echo "DL缓存: $CACHE_STATUS_DL"
             echo "构建状态: ${{ steps.compile.outputs.status }}"
         } > base_build_info.txt
         
@@ -876,6 +1006,12 @@ jobs:
         # 清理feeds缓存
         gh cache list --key ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
             log "INFO" "删除过期feeds缓存: $key"
+            gh cache delete "$key" || log "WARN" "删除缓存失败: $key"
+        done
+        
+        # 清理DL缓存
+        gh cache list --key ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
+            log "INFO" "删除过期DL缓存: $key"
             gh cache delete "$key" || log "WARN" "删除缓存失败: $key"
         done
         
