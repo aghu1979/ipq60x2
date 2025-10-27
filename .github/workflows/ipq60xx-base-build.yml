@@ -27,8 +27,9 @@ env:
 
 jobs:
   Build:
-    # 关键：添加 continue-on-error 和 fail-fast
+    # 关键：在job级别添加 continue-on-error
     continue-on-error: true
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false  # 关键：不快速失败，让所有任务都执行
       matrix:
