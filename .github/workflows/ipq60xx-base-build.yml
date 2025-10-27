@@ -652,7 +652,7 @@ jobs:
         cat "$CONFIG_BASE" "$CONFIG_BRANCH" > "$OPENWRT_PATH/.config" || {
             log "ERROR" "合并配置文件失败"
             exit 1
-        fi
+        }
         
         # 读取合并后的luci软件包
         LUCI_AFTER=$(grep "^CONFIG_PACKAGE_luci.*=y" "$OPENWRT_PATH/.config" | sort || true)
