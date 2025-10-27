@@ -19,6 +19,11 @@ env:
   
   # 缓存配置 - 移除日期，提高缓存命中率
   CACHE_VERSION: v1
+  
+  # 日志配置
+  LOG_LEVEL: INFO  # DEBUG, INFO, WARN, ERROR
+  LOG_FILE: build.log
+  REPORT_FILE: build_report.json
 
 jobs:
   Build:
@@ -39,39 +44,167 @@ jobs:
     env:
       CHIP_FAMILY: ${{ matrix.chip_family }}
       REPO_CONFIG: ${{ matrix.repo_config }}
+      BUILD_ID: ${{ github.run_id }}-${{ matrix.repo_config }}-${{ matrix.chip_family }}
       
     steps:
 
+    - name: 初始化企业级日志系统
+      id: init_logging
+      run: |
+        # 创建企业级日志框架
+        cat > /tmp/logger.sh << 'EOF'
+        #!/bin/bash
+        
+        # 日志级别定义
+        declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
+        CURRENT_LEVEL=${LOG_LEVELS[$LOG_LEVEL]}
+        
+        # 日志文件
+        LOG_FILE="$GITHUB_WORKSPACE/$LOG_FILE"
+        REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
+        
+        # 初始化日志文件
+        echo "=== Build Log Started at $(date) ===" > "$LOG_FILE"
+        echo '{"build_id":"'$BUILD_ID'","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
+        
+        # 日志函数
+        log() {
+            local level="$1"
+            local message="$2"
+            local step="${3:-$(caller | awk '{print $2}')}"
+            local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+            
+            # 检查日志级别
+            if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then
+                # 控制台输出（带颜色）
+                case $level in
+                    DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;;
+                    INFO)  echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;;
+                    WARN)  echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;;
+                    ERROR) echo -e "\033[0;31m[$timestamp] [ERROR] $message\033[0m" ;;
+                esac
+                
+                # 文件输出
+                echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"
+                
+                # 更新报告文件
+                if [ "$level" = "ERROR" ]; then
+                    jq --arg step "$step" --arg message "$message" --arg time "$timestamp" \
+                        '.errors += [{"step":$step,"message":$message,"time":$time}]' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
+                        mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+                elif [ "$level" = "WARN" ]; then
+                    jq --arg step "$step" --arg message "$message" --arg time "$timestamp" \
+                        '.warnings += [{"step":$step,"message":$message,"time":$time}]' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
+                        mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+                fi
+            fi
+        }
+        
+        # 步骤开始
+        step_start() {
+            local step_name="$1"
+            local description="$2"
+            local timestamp=$(date -Iseconds)
+            
+            log "INFO" "▶ 开始执行: $description" "$step_name"
+            
+            # 更新报告文件
+            jq --arg step "$step_name" --arg desc "$description" --arg time "$timestamp" \
+                '.steps += [{"name":$step,"description":$desc,"status":"running","start_time":$time}]' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
+                mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+        }
+        
+        # 步骤完成
+        step_complete() {
+            local step_name="$1"
+            local status="$2"  # success, failed, warning
+            local timestamp=$(date -Iseconds)
+            
+            if [ "$status" = "success" ]; then
+                log "INFO" "✅ 步骤完成: $step_name" "$step_name"
+            elif [ "$status" = "failed" ]; then
+                log "ERROR" "❌ 步骤失败: $step_name" "$step_name"
+            elif [ "$status" = "warning" ]; then
+                log "WARN" "⚠️ 步骤完成（有警告）: $step_name" "$step_name"
+            fi
+            
+            # 更新报告文件
+            jq --arg step "$step_name" --arg status "$status" --arg time "$timestamp" \
+                '(.steps[] | select(.name == $step)) |= . + {"status":$status,"end_time":$time}' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
+                mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+        }
+        
+        # 进度显示
+        show_progress() {
+            local current="$1"
+            local total="$2"
+            local description="$3"
+            local percent=$((current * 100 / total))
+            local filled=$((percent / 2))
+            local empty=$((50 - filled))
+            
+            printf "\r\033[0;36m[%3d%%] [" "$percent"
+            printf "%*s" $filled | tr ' ' '█'
+            printf "%*s" $empty | tr ' ' '░'
+            printf "] %s\033[0m" "$description"
+        }
+        
+        # 导出函数
+        export -f log step_start step_complete show_progress
+        EOF
+        
+        chmod +x /tmp/logger.sh
+        echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
+        
+        # 初始化日志
+        source /tmp/logger.sh
+        step_start "INIT" "初始化企业级日志系统"
+        log "INFO" "构建ID: $BUILD_ID"
+        log "INFO" "日志级别: $LOG_LEVEL"
+        log "INFO" "工作目录: $GITHUB_WORKSPACE"
+        step_complete "INIT" "success"
+
     - name: 初始化环境
       id: init_env
-      env:
-        DEBIAN_FRONTEND: noninteractive
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "ENV_INIT" "初始化构建环境"
         
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
+        # 设置错误处理
+        set -euo pipefail
+        trap 'log "ERROR" "命令执行失败: $BASH_COMMAND ($LINENO)"' ERR
         
-        warning() {
-          echo -e "\033[1;33m[WARNING]\033[0m $1"
-        }
+        log "INFO" "更新系统包..."
+        if sudo -E apt-get -y update; then
+            log "INFO" "系统包更新成功"
+        else
+            log "ERROR" "系统包更新失败"
+            exit 1
+        fi
         
-        log "更新系统包..."
-        sudo -E apt-get -y update || error "更新系统包失败"
+        log "INFO" "安装依赖..."
+        if sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204); then
+            log "INFO" "依赖安装成功"
+        else
+            log "ERROR" "依赖安装失败"
+            exit 1
+        fi
         
-        log "安装依赖..."
-        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204) || error "安装依赖失败"
+        log "INFO" "配置时区..."
+        sudo -E systemctl daemon-reload || log "WARN" "重载系统服务失败"
+        if sudo timedatectl set-timezone "$TZ"; then
+            log "INFO" "时区设置成功: $TZ"
+        else
+            log "WARN" "时区设置失败"
+        fi
         
-        log "配置时区..."
-        sudo -E systemctl daemon-reload || warning "重载系统服务失败"
-        sudo timedatectl set-timezone "$TZ" || warning "设置时区失败"
+        # 显示系统信息
+        log "INFO" "=== 系统信息 ==="
+        log "INFO" "CPU核心数: $(nproc)"
+        log "INFO" "内存总量: $(free -h | grep '^Mem:' | awk '{print $2}')"
+        log "INFO" "磁盘空间: $(df -h $GITHUB_WORKSPACE | tail -1 | awk '{print $4}')"
         
-        log "环境初始化完成"
+        step_complete "ENV_INIT" "success"
 
     - name: 检出代码
       uses: actions/checkout@main
@@ -79,33 +212,24 @@ jobs:
     - name: 读取仓库配置
       id: read_repo_config
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "READ_CONFIG" "读取仓库配置"
         
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
-        
-        # 切换到工作目录
         cd "$GITHUB_WORKSPACE"
         
-        # 检查仓库配置文件是否存在
+        # 检查仓库配置文件
         REPO_CONFIG_FILE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/repos.json"
         if [ ! -f "$REPO_CONFIG_FILE" ]; then
-          error "仓库配置文件 $REPO_CONFIG_FILE 不存在"
+            log "ERROR" "仓库配置文件不存在: $REPO_CONFIG_FILE"
+            exit 1
         fi
         
-        log "当前工作目录: $(pwd)"
-        log "仓库配置文件路径: $REPO_CONFIG_FILE"
-        
-        # 从JSON文件中读取仓库配置
+        log "INFO" "读取仓库配置: $REPO_CONFIG"
         REPO_INFO=$(jq -r --arg repo "$REPO_CONFIG" '.[$repo]' "$REPO_CONFIG_FILE")
         
         if [ "$REPO_INFO" = "null" ]; then
-          error "未找到仓库配置: $REPO_CONFIG"
+            log "ERROR" "未找到仓库配置: $REPO_CONFIG"
+            exit 1
         fi
         
         REPO_URL=$(echo "$REPO_INFO" | jq -r '.url')
@@ -116,168 +240,158 @@ jobs:
         echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_ENV
         echo "REPO_SHORT=$REPO_SHORT" >> $GITHUB_ENV
         
-        log "使用仓库: $REPO_URL"
-        log "使用分支: $REPO_BRANCH"
-        log "仓库简称: $REPO_SHORT"
+        log "INFO" "仓库URL: $REPO_URL"
+        log "INFO" "分支: $REPO_BRANCH"
+        log "INFO" "简称: $REPO_SHORT"
+        
+        step_complete "READ_CONFIG" "success"
 
     - name: 克隆源代码
       id: clone_source
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "CLONE_SOURCE" "克隆源代码"
         
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
-        
-        warning() {
-          echo -e "\033[1;33m[WARNING]\033[0m $1"
-        }
-        
-        log "检查磁盘空间..."
+        log "INFO" "检查磁盘空间..."
         df -hT "$GITHUB_WORKSPACE"
         
-        log "创建工作目录..."
-        sudo mkdir -p "$OPENWRT_PATH" || error "创建工作目录失败"
-        sudo chown -R $(id -u):$(id -g) "$OPENWRT_PATH" || error "设置工作目录权限失败"
+        log "INFO" "创建工作目录: $OPENWRT_PATH"
+        if ! sudo mkdir -p "$OPENWRT_PATH"; then
+            log "ERROR" "创建工作目录失败"
+            exit 1
+        fi
         
-        log "克隆源代码..."
-        git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" "$OPENWRT_PATH" || error "克隆源代码失败"
+        if ! sudo chown -R $(id -u):$(id -g) "$OPENWRT_PATH"; then
+            log "ERROR" "设置工作目录权限失败"
+            exit 1
+        fi
+        
+        log "INFO" "开始克隆源代码..."
+        if git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" "$OPENWRT_PATH"; then
+            log "INFO" "源代码克隆成功"
+        else
+            log "ERROR" "源代码克隆失败"
+            exit 1
+        fi
         
         cd "$OPENWRT_PATH"
         
-        log "获取版本信息..."
+        # 获取版本信息
         VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
         echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
         
-        # 尝试获取内核版本，如果失败则设为未知
         VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12 2>/dev/null || echo "未知")
         echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
         
-        # 获取源码哈希值，用于缓存键
         SOURCE_HASH=$(git rev-parse HEAD)
         echo "SOURCE_HASH=$SOURCE_HASH" >> $GITHUB_ENV
         
-        log "源代码克隆完成"
+        log "INFO" "源码哈希: $SOURCE_HASH"
+        log "INFO" "内核版本: $VERSION_KERNEL"
+        
+        step_complete "CLONE_SOURCE" "success"
 
     - name: 生成变量
       id: generate_vars
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "GEN_VARS" "生成构建变量"
         
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
-        
-        # 切换到工作目录
         cd "$GITHUB_WORKSPACE"
         
-        log "当前工作目录: $(pwd)"
-        log "工作目录内容:"
-        ls -la
-        
-        log "配置目录内容:"
-        ls -la "${CONFIG_BASE_DIR}" || error "配置目录 ${CONFIG_BASE_DIR} 不存在"
-        
-        # 函数：查找配置文件（支持多种后缀和大小写）
+        # 查找配置文件函数
         find_config_file() {
-          local base_name="$1"
-          local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"
-          
-          # 尝试不带后缀的文件
-          if [ -f "${config_dir}/${base_name}.config" ]; then
-            echo "${config_dir}/${base_name}.config"
-            return 0
-          fi
-          
-          # 尝试带.txt后缀的文件
-          if [ -f "${config_dir}/${base_name}.config.txt" ]; then
-            echo "${config_dir}/${base_name}.config.txt"
-            return 0
-          fi
-          
-          # 使用find命令查找匹配的文件（忽略大小写）
-          local found_file=$(find "$config_dir" -iname "${base_name}.config*" -type f | head -n 1)
-          if [ -n "$found_file" ]; then
-            echo "$found_file"
-            return 0
-          fi
-          
-          return 1
+            local base_name="$1"
+            local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"
+            
+            # 尝试不同格式
+            for ext in ".config" ".config.txt"; do
+                if [ -f "${config_dir}/${base_name}${ext}" ]; then
+                    echo "${config_dir}/${base_name}${ext}"
+                    return 0
+                fi
+            done
+            
+            # 使用find查找
+            local found_file=$(find "$config_dir" -iname "${base_name}.config*" -type f | head -n 1)
+            if [ -n "$found_file" ]; then
+                echo "$found_file"
+                return 0
+            fi
+            
+            return 1
         }
         
-        # 查找基础配置文件
+        # 查找配置文件
+        log "INFO" "查找基础配置文件..."
         CONFIG_BASE=$(find_config_file "base_${CHIP_FAMILY}")
         if [ $? -ne 0 ]; then
-          error "基础配置文件 base_${CHIP_FAMILY}.config 不存在"
+            log "ERROR" "基础配置文件不存在: base_${CHIP_FAMILY}"
+            exit 1
         fi
         
-        # 查找分支配置文件
+        log "INFO" "查找分支配置文件..."
         CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
         if [ $? -ne 0 ]; then
-          error "分支配置文件 base_${REPO_SHORT}.config 不存在"
+            log "ERROR" "分支配置文件不存在: base_${REPO_SHORT}"
+            exit 1
         fi
         
-        # 设置脚本路径（使用绝对路径）
+        # 设置脚本路径
         DIY_SCRIPT="${GITHUB_WORKSPACE}/${DIY_SCRIPT_DIR}/diy.sh"
         REPO_SCRIPT="${GITHUB_WORKSPACE}/${DIY_SCRIPT_DIR}/repo.sh"
         
-        log "基础配置文件路径: $CONFIG_BASE"
-        log "分支配置文件路径: $CONFIG_BRANCH"
-        log "自定义脚本路径: $DIY_SCRIPT"
-        log "软件源脚本路径: $REPO_SCRIPT"
+        log "INFO" "基础配置文件: $CONFIG_BASE"
+        log "INFO" "分支配置文件: $CONFIG_BRANCH"
+        log "INFO" "自定义脚本: $DIY_SCRIPT"
+        log "INFO" "软件源脚本: $REPO_SCRIPT"
         
         echo "CONFIG_BASE=$CONFIG_BASE" >> $GITHUB_ENV
         echo "CONFIG_BRANCH=$CONFIG_BRANCH" >> $GITHUB_ENV
         echo "DIY_SCRIPT=$DIY_SCRIPT" >> $GITHUB_ENV
         echo "REPO_SCRIPT=$REPO_SCRIPT" >> $GITHUB_ENV
         
-        log "提取设备信息..."
-        cp "$CONFIG_BASE" "$OPENWRT_PATH/.config" || error "复制配置文件失败"
-        cd "$OPENWRT_PATH"
+        # 提取设备信息
+        log "INFO" "提取设备信息..."
+        cp "$CONFIG_BASE" "$OPENWRT_PATH/.config" || {
+            log "ERROR" "复制配置文件失败"
+            exit 1
+        }
         
-        log "运行defconfig..."
-        make defconfig > /dev/null 2>&1 || error "运行defconfig失败"
+        cd "$OPENWRT_PATH"
+        if ! make defconfig > /dev/null 2>&1; then
+            log "ERROR" "运行defconfig失败"
+            exit 1
+        fi
         
         SOURCE_REPO="$(echo "$REPO_URL" | awk -F '/' '{print $(NF)}')"
-        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-        
         DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        
         DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
-        
-        # 提取设备名称
-        log "提取设备名称..."
         DEVICE_NAMES=$(grep -oP "CONFIG_TARGET_DEVICE_.*_${CHIP_FAMILY}_DEVICE_\K[^=]+" "$CONFIG_BASE" | tr '\n' ' ')
+        
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
         echo "DEVICE_NAMES=$DEVICE_NAMES" >> $GITHUB_ENV
         
-        # 生成配置文件哈希，用于缓存键
+        # 生成哈希值
         CONFIG_HASH=$(cat "$CONFIG_BASE" "$CONFIG_BRANCH" | sha256sum | cut -d' ' -f1)
-        echo "CONFIG_HASH=$CONFIG_HASH" >> $GITHUB_ENV
-        
-        # 生成feeds哈希，用于缓存键
         FEEDS_HASH=$(cat "$OPENWRT_PATH/feeds.conf.default" 2>/dev/null | sha256sum | cut -d' ' -f1 || echo "default")
+        
+        echo "CONFIG_HASH=$CONFIG_HASH" >> $GITHUB_ENV
         echo "FEEDS_HASH=$FEEDS_HASH" >> $GITHUB_ENV
         
-        log "设备名称: $DEVICE_NAMES"
-        log "变量生成完成"
+        log "INFO" "设备目标: $DEVICE_TARGET"
+        log "INFO" "设备子目标: $DEVICE_SUBTARGET"
+        log "INFO" "设备名称: $DEVICE_NAMES"
+        
+        step_complete "GEN_VARS" "success"
 
     - name: 缓存工具链
       id: cache_toolchain
       uses: actions/cache@main
       with:
-        # 使用源码哈希和配置哈希作为缓存键，确保源码或配置变化时重新构建
         key: ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.SOURCE_HASH }}-${{ env.CONFIG_HASH }}
-        # 提供多个restore-keys，提高缓存命中率
         restore-keys: |
           ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
           ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-
@@ -290,9 +404,7 @@ jobs:
       id: cache_feeds
       uses: actions/cache@main
       with:
-        # 使用源码哈希和feeds哈希作为缓存键
         key: ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.SOURCE_HASH }}-${{ env.FEEDS_HASH }}
-        # 提供多个restore-keys，提高缓存命中率
         restore-keys: |
           ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
           ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-
@@ -303,306 +415,398 @@ jobs:
 
     - name: 检查缓存状态
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "CACHE_STATUS" "检查缓存状态"
         
-        warning() {
-          echo -e "\033[1;33m[WARNING]\033[0m $1"
-        }
-        
-        # 检查工具链缓存命中情况
+        # 工具链缓存
         if [ "${{ steps.cache_toolchain.outputs.cache-hit }}" == "true" ]; then
-          log "✅ 工具链缓存命中！"
+            log "INFO" "✅ 工具链缓存命中"
+            CACHE_STATUS_TOOLCHAIN="HIT"
         else
-          log "❌ 工具链缓存未命中，将重新构建工具链"
+            log "INFO" "❌ 工具链缓存未命中，将重新构建"
+            CACHE_STATUS_TOOLCHAIN="MISS"
         fi
         
-        # 检查feeds缓存命中情况
+        # Feeds缓存
         if [ "${{ steps.cache_feeds.outputs.cache-hit }}" == "true" ]; then
-          log "✅ Feeds缓存命中！"
+            log "INFO" "✅ Feeds缓存命中"
+            CACHE_STATUS_FEEDS="HIT"
         else
-          log "❌ Feeds缓存未命中，将重新更新feeds"
+            log "INFO" "❌ Feeds缓存未命中，将重新更新"
+            CACHE_STATUS_FEEDS="MISS"
         fi
         
-        # 检查缓存目录大小
-        if [ -d "$OPENWRT_PATH/.ccache" ]; then
-          log "ccache大小: $(du -sh "$OPENWRT_PATH/.ccache" | cut -f1)"
-        fi
+        # 显示缓存大小
+        for dir in ".ccache" "staging_dir" "feeds" "dl"; do
+            if [ -d "$OPENWRT_PATH/$dir" ]; then
+                size=$(du -sh "$OPENWRT_PATH/$dir" | cut -f1)
+                log "INFO" "$dir 大小: $size"
+            fi
+        done
         
-        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
-          log "staging_dir大小: $(du -sh "$OPENWRT_PATH/staging_dir" | cut -f1)"
-        fi
+        # 更新报告
+        echo "CACHE_STATUS_TOOLCHAIN=$CACHE_STATUS_TOOLCHAIN" >> $GITHUB_ENV
+        echo "CACHE_STATUS_FEEDS=$CACHE_STATUS_FEEDS" >> $GITHUB_ENV
         
-        if [ -d "$OPENWRT_PATH/feeds" ]; then
-          log "feeds大小: $(du -sh "$OPENWRT_PATH/feeds" | cut -f1)"
-        fi
-        
-        if [ -d "$OPENWRT_PATH/dl" ]; then
-          log "dl大小: $(du -sh "$OPENWRT_PATH/dl" | cut -f1)"
-        fi
+        step_complete "CACHE_STATUS" "success"
 
     - name: 刷新缓存
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "REFRESH_CACHE" "刷新缓存时间戳"
         
-        warning() {
-          echo -e "\033[1;33m[WARNING]\033[0m $1"
-        }
-        
-        log "刷新缓存..."
         if [ -d "$OPENWRT_PATH/staging_dir" ]; then
-          find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
-              find "$dir" -type f -exec touch {} +
-          done
-          log "缓存刷新完成"
+            log "INFO" "刷新staging_dir时间戳..."
+            find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+                find "$dir" -type f -exec touch {} +
+            done
+            log "INFO" "缓存刷新完成"
         else
-          log "未找到staging_dir，跳过缓存刷新"
+            log "WARN" "未找到staging_dir，跳过缓存刷新"
         fi
+        
+        step_complete "REFRESH_CACHE" "success"
 
     - name: 添加第三方软件源
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
-        
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
-        
-        warning() {
-          echo -e "\033[1;33m[WARNING]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "ADD_REPO" "添加第三方软件源"
         
         if [ -f "$REPO_SCRIPT" ]; then
-          log "执行软件源脚本..."
-          chmod +x "$REPO_SCRIPT" || error "设置脚本权限失败"
-          cd "$OPENWRT_PATH"
-          # 直接使用$REPO_SCRIPT，因为它已经包含完整路径
-          "$REPO_SCRIPT" || error "执行软件源脚本失败"
+            log "INFO" "执行软件源脚本: $REPO_SCRIPT"
+            chmod +x "$REPO_SCRIPT" || {
+                log "ERROR" "设置脚本权限失败"
+                exit 1
+            }
+            
+            cd "$OPENWRT_PATH"
+            if "$REPO_SCRIPT"; then
+                log "INFO" "软件源脚本执行成功"
+            else
+                log "ERROR" "软件源脚本执行失败"
+                exit 1
+            fi
         else
-          warning "软件源脚本 $REPO_SCRIPT 不存在，跳过"
+            log "WARN" "软件源脚本不存在，跳过"
         fi
+        
+        step_complete "ADD_REPO" "success"
 
     - name: 安装Feeds
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
-        
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "INSTALL_FEEDS" "安装Feeds"
         
         cd "$OPENWRT_PATH"
         
-        # 如果feeds缓存未命中，则更新feeds
+        # 更新feeds
         if [ "${{ steps.cache_feeds.outputs.cache-hit }}" != "true" ]; then
-          log "更新feeds..."
-          ./scripts/feeds update -a || error "更新feeds失败"
+            log "INFO" "更新feeds..."
+            show_progress 0 2 "更新feeds"
+            if ./scripts/feeds update -a; then
+                show_progress 1 2 "更新feeds"
+                log "INFO" "Feeds更新成功"
+            else
+                log "ERROR" "Feeds更新失败"
+                exit 1
+            fi
         else
-          log "使用缓存的feeds，跳过更新"
+            log "INFO" "使用缓存的feeds，跳过更新"
+            show_progress 1 2 "使用缓存"
         fi
         
-        # 检查是否需要安装feeds
+        # 安装feeds
         if [ ! -d "$OPENWRT_PATH/package/feeds" ] || [ -z "$(ls -A $OPENWRT_PATH/package/feeds)" ]; then
-          log "安装feeds..."
-          ./scripts/feeds install -a || error "安装feeds失败"
+            log "INFO" "安装feeds..."
+            show_progress 1 2 "安装feeds"
+            if ./scripts/feeds install -a; then
+                show_progress 2 2 "安装完成"
+                log "INFO" "Feeds安装成功"
+            else
+                log "ERROR" "Feeds安装失败"
+                exit 1
+            fi
         else
-          log "feeds已安装，跳过安装"
+            log "INFO" "feeds已安装，跳过"
+            show_progress 2 2 "已安装"
         fi
+        
+        echo ""
+        step_complete "INSTALL_FEEDS" "success"
 
     - name: 加载自定义配置
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
-        
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
-        
-        warning() {
-          echo -e "\033[1;33m[WARNING]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "LOAD_CONFIG" "加载自定义配置"
         
         if [ -f "$DIY_SCRIPT" ]; then
-          log "执行自定义脚本..."
-          chmod +x "$DIY_SCRIPT" || error "设置脚本权限失败"
-          cd "$OPENWRT_PATH"
-          # 直接使用$DIY_SCRIPT，因为它已经包含完整路径
-          "$DIY_SCRIPT" || error "执行自定义脚本失败"
+            log "INFO" "执行自定义脚本: $DIY_SCRIPT"
+            chmod +x "$DIY_SCRIPT" || {
+                log "ERROR" "设置脚本权限失败"
+                exit 1
+            }
+            
+            cd "$OPENWRT_PATH"
+            if "$DIY_SCRIPT"; then
+                log "INFO" "自定义脚本执行成功"
+            else
+                log "ERROR" "自定义脚本执行失败"
+                exit 1
+            fi
         else
-          warning "自定义脚本 $DIY_SCRIPT 不存在，跳过"
+            log "WARN" "自定义脚本不存在，跳过"
         fi
+        
+        step_complete "LOAD_CONFIG" "success"
 
     - name: 合并配置文件并生成报告
       id: merge_config
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "MERGE_CONFIG" "合并配置文件"
         
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
+        log "INFO" "合并配置文件..."
         
-        log "合并配置文件..."
-        
-        # 保存合并前的luci软件包列表
-        log "生成合并前的luci软件包报告..."
-        LUCI_BEFORE=$(grep "^CONFIG_PACKAGE_luci.*=y" "$CONFIG_BASE" | sort)
+        # 读取合并前的luci软件包
+        LUCI_BEFORE=$(grep "^CONFIG_PACKAGE_luci.*=y" "$CONFIG_BASE" | sort || true)
         
         # 合并配置文件
-        cat "$CONFIG_BASE" "$CONFIG_BRANCH" > "$OPENWRT_PATH/.config" || error "合并配置文件失败"
+        cat "$CONFIG_BASE" "$CONFIG_BRANCH" > "$OPENWRT_PATH/.config" || {
+            log "ERROR" "合并配置文件失败"
+            exit 1
+        }
         
-        # 保存合并后的luci软件包列表
-        log "生成合并后的luci软件包报告..."
-        LUCI_AFTER=$(grep "^CONFIG_PACKAGE_luci.*=y" "$OPENWRT_PATH/.config" | sort)
+        # 读取合并后的luci软件包
+        LUCI_AFTER=$(grep "^CONFIG_PACKAGE_luci.*=y" "$OPENWRT_PATH/.config" | sort || true)
         
-        # 在控制台输出合并后的luci软件包列表
-        log "=== 合并后的Luci软件包列表 ==="
+        # 显示合并后的luci软件包
+        log "INFO" "=== 合并后的Luci软件包列表 ==="
         if [ -n "$LUCI_AFTER" ]; then
-          echo "$LUCI_AFTER" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            echo "  - $pkg"
-          done
+            echo "$LUCI_AFTER" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
+                log "INFO" "  - $pkg"
+            done
         else
-          log "  (无Luci软件包)"
+            log "INFO" "  (无Luci软件包)"
         fi
-        echo "================================"
+        
+        # 运行defconfig
+        log "INFO" "运行defconfig..."
+        cd "$OPENWRT_PATH"
+        if make defconfig; then
+            log "INFO" "defconfig成功"
+        else
+            log "ERROR" "defconfig失败"
+            exit 1
+        fi
+        
+        # 读取defconfig后的luci软件包
+        LUCI_DEFCONFIG=$(grep "^CONFIG_PACKAGE_luci.*=y" "$OPENWRT_PATH/.config" | sort || true)
+        
+        # 显示defconfig后的luci软件包
+        log "INFO" "=== Defconfig后的Luci软件包列表 ==="
+        if [ -n "$LUCI_DEFCONFIG" ]; then
+            echo "$LUCI_DEFCONFIG" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
+                log "INFO" "  - $pkg"
+            done
+        else
+            log "INFO" "  (无Luci软件包)"
+        fi
         
         # 生成差异报告
-        log "生成luci软件包差异报告..."
         {
-          echo "## Luci软件包合并报告"
-          echo ""
-          echo "### 新增的Luci软件包:"
-          comm -13 <(echo "$LUCI_BEFORE") <(echo "$LUCI_AFTER") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            echo "- ✅ $pkg"
-          done
-          echo ""
-          echo "### 缺失的Luci软件包:"
-          comm -23 <(echo "$LUCI_BEFORE") <(echo "$LUCI_AFTER") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            echo "- ❌ $pkg"
-          done
-          echo ""
+            echo "## Luci软件包合并报告"
+            echo ""
+            echo "### 新增的Luci软件包:"
+            comm -13 <(echo "$LUCI_BEFORE") <(echo "$LUCI_AFTER") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
+                echo "- ✅ $pkg"
+            done
+            echo ""
+            echo "### 缺失的Luci软件包:"
+            comm -23 <(echo "$LUCI_BEFORE") <(echo "$LUCI_AFTER") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
+                echo "- ❌ $pkg"
+            done
+            echo ""
         } > "$GITHUB_WORKSPACE/luci_report.md"
         
-        # 显示报告
-        cat "$GITHUB_WORKSPACE/luci_report.md"
-        
-        log "运行defconfig..."
-        cd "$OPENWRT_PATH"
-        make defconfig || error "运行defconfig失败"
-        
-        # 保存defconfig后的luci软件包列表
-        log "生成defconfig后的luci软件包报告..."
-        LUCI_DEFCONFIG=$(grep "^CONFIG_PACKAGE_luci.*=y" "$OPENWRT_PATH/.config" | sort)
-        
-        # 在控制台输出defconfig后的luci软件包列表
-        log "=== Defconfig后的Luci软件包列表 ==="
-        if [ -n "$LUCI_DEFCONFIG" ]; then
-          echo "$LUCI_DEFCONFIG" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            echo "  - $pkg"
-          done
-        else
-          log "  (无Luci软件包)"
-        fi
-        echo "===================================="
-        
-        # 生成defconfig后的差异报告
-        log "生成defconfig后的luci软件包差异报告..."
-        {
-          echo "## Luci软件包defconfig报告"
-          echo ""
-          echo "### defconfig后新增的Luci软件包:"
-          comm -13 <(echo "$LUCI_AFTER") <(echo "$LUCI_DEFCONFIG") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            echo "- ✅ $pkg"
-          done
-          echo ""
-          echo "### defconfig后缺失的Luci软件包:"
-          comm -23 <(echo "$LUCI_AFTER") <(echo "$LUCI_DEFCONFIG") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            echo "- ❌ $pkg"
-          done
-          echo ""
-        } > "$GITHUB_WORKSPACE/luci_defconfig_report.md"
-        
-        # 显示报告
-        cat "$GITHUB_WORKSPACE/luci_defconfig_report.md"
-        
-        log "配置文件合并和defconfig完成"
+        step_complete "MERGE_CONFIG" "success"
 
     - name: 下载DL软件包
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
-        
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "DOWNLOAD_PKGS" "下载软件包"
         
         cd "$OPENWRT_PATH"
-        log "下载软件包..."
-        make download -j$(nproc) || error "下载软件包失败"
+        log "INFO" "开始下载软件包..."
+        
+        # 监控下载进度
+        if make download -j$(nproc); then
+            log "INFO" "软件包下载成功"
+        else
+            log "ERROR" "软件包下载失败"
+            exit 1
+        fi
+        
+        step_complete "DOWNLOAD_PKGS" "success"
+
+    - name: 清理构建环境
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "CLEAN_ENV" "清理构建环境"
+        
+        cd "$OPENWRT_PATH"
+        log "INFO" "清理构建环境..."
+        
+        if make clean; then
+            log "INFO" "构建环境清理成功"
+        else
+            log "WARN" "构建环境清理失败，继续执行"
+        fi
+        
+        # 确保工具链正确构建
+        log "INFO" "准备工具链..."
+        if make toolchain/install -j$(nproc); then
+            log "INFO" "工具链准备成功"
+        else
+            log "ERROR" "工具链准备失败"
+            exit 1
+        fi
+        
+        step_complete "CLEAN_ENV" "success"
 
     - name: 编译基础环境
       id: compile
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
-        
-        error() {
-          echo -e "\033[1;31m[ERROR]\033[0m $1" >&2
-          exit 1
-        }
-        
-        warning() {
-          echo -e "\033[1;33m[WARNING]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "COMPILE" "编译基础环境"
         
         cd "$OPENWRT_PATH"
-        log "开始编译基础环境..."
-        log "使用 $(nproc) 个线程编译"
+        log "INFO" "开始编译基础环境..."
+        log "INFO" "使用 $(nproc) 个线程编译"
         
-        # 尝试并行编译，如果失败则尝试单线程编译
-        make -j$(nproc) || {
-          warning "并行编译失败，尝试单线程编译..."
-          make -j1 V=s || error "编译彻底失败"
-        }
+        # 分阶段编译
+        local stages=("工具链和内核" "系统包" "所有包")
+        local commands=("toolchain/kernel-headers compile" "package/system/opkg/host/compile" "")
+        local total=3
+        local current=0
         
+        for i in "${!stages[@]}"; do
+            current=$((i + 1))
+            show_progress $current $total "编译${stages[$i]}"
+            
+            if [ -n "${commands[$i]}" ]; then
+                log "INFO" "编译${stages[$i]}..."
+                if make -j$(nproc) ${commands[$i]}; then
+                    log "INFO" "${stages[$i]}编译成功"
+                else
+                    log "WARN" "${stages[$i]}并行编译失败，尝试单线程编译"
+                    if make -j1 V=s ${commands[$i]}; then
+                        log "INFO" "${stages[$i]}单线程编译成功"
+                    else
+                        log "ERROR" "${stages[$i]}编译彻底失败"
+                        exit 1
+                    fi
+                fi
+            else
+                log "INFO" "编译所有包..."
+                if make -j$(nproc); then
+                    log "INFO" "所有包编译成功"
+                else
+                    log "WARN" "并行编译失败，尝试单线程编译"
+                    if make -j1 V=s; then
+                        log "INFO" "单线程编译成功"
+                    else
+                        log "ERROR" "编译彻底失败"
+                        exit 1
+                    fi
+                fi
+            fi
+        done
+        
+        echo ""
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
         
-        log "基础环境编译完成"
+        step_complete "COMPILE" "success"
+
+    - name: 生成构建报告
+      if: always()
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "GEN_REPORT" "生成构建报告"
+        
+        # 完成报告
+        jq --arg time "$(date -Iseconds)" --arg status "${{ steps.compile.outputs.status }}" \
+            '.end_time = $time | .status = $status' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
+            mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+        
+        # 生成摘要报告
+        {
+            echo "=== 构建摘要 ==="
+            echo "构建ID: $BUILD_ID"
+            echo "仓库: $REPO_URL"
+            echo "分支: $REPO_BRANCH"
+            echo "芯片: $CHIP_FAMILY"
+            echo "设备: $DEVICE_NAMES"
+            echo "状态: ${{ steps.compile.outputs.status }}"
+            echo "开始时间: $(jq -r '.start_time' "$REPORT_FILE")"
+            echo "结束时间: $(date -Iseconds)"
+            echo ""
+            echo "=== 缓存状态 ==="
+            echo "工具链缓存: $CACHE_STATUS_TOOLCHAIN"
+            echo "Feeds缓存: $CACHE_STATUS_FEEDS"
+            echo ""
+            echo "=== 错误统计 ==="
+            echo "错误数量: $(jq '.errors | length' "$REPORT_FILE")"
+            echo "警告数量: $(jq '.warnings | length' "$REPORT_FILE")"
+            echo ""
+            if [ "$(jq '.errors | length' "$REPORT_FILE")" -gt 0 ]; then
+                echo "=== 错误详情 ==="
+                jq -r '.errors[] | "- [\(.time)] \(.step): \(.message)"' "$REPORT_FILE"
+                echo ""
+            fi
+            if [ "$(jq '.warnings | length' "$REPORT_FILE")" -gt 0 ]; then
+                echo "=== 警告详情 ==="
+                jq -r '.warnings[] | "- [\(.time)] \(.step): \(.message)"' "$REPORT_FILE"
+                echo ""
+            fi
+        } > "$GITHUB_WORKSPACE/build_summary.txt"
+        
+        log "INFO" "构建报告已生成"
+        cat "$GITHUB_WORKSPACE/build_summary.txt"
+        
+        step_complete "GEN_REPORT" "success"
 
     - name: 检查空间使用情况
       if: (!cancelled())
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "CHECK_SPACE" "检查磁盘空间"
         
-        log "检查磁盘空间使用情况..."
+        log "INFO" "=== 磁盘空间使用情况 ==="
         df -hT
+        
+        log "INFO" "=== 目录大小统计 ==="
+        for dir in "bin" "staging_dir" ".ccache" "feeds" "dl"; do
+            if [ -d "$OPENWRT_PATH/$dir" ]; then
+                size=$(du -sh "$OPENWRT_PATH/$dir" | cut -f1)
+                log "INFO" "$dir: $size"
+            fi
+        done
+        
+        step_complete "CHECK_SPACE" "success"
+
+    - name: 上传构建日志和报告
+      if: always()
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.SOURCE_REPO }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+        path: |
+          ${{ github.workspace }}/build.log
+          ${{ github.workspace }}/build_report.json
+          ${{ github.workspace }}/build_summary.txt
+          ${{ github.workspace }}/luci_report.md
+        retention-days: 30
 
     - name: 上传Bin目录
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
@@ -614,29 +818,31 @@ jobs:
     - name: 整理文件
       if: steps.compile.outputs.status == 'success'
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "ORG_FILES" "整理构建文件"
         
-        log "整理文件..."
         cd "$OPENWRT_PATH/bin/targets/*/*"
         
-        # 创建基础环境标识文件
-        echo "基础环境构建信息" > base_build_info.txt
-        echo "芯片系列: $CHIP_FAMILY" >> base_build_info.txt
-        echo "仓库配置: $REPO_CONFIG" >> base_build_info.txt
-        echo "源码分支: $REPO_BRANCH" >> base_build_info.txt
-        echo "构建时间: $DATE" >> base_build_info.txt
-        echo "内核版本: $VERSION_KERNEL" >> base_build_info.txt
-        echo "设备名称: $DEVICE_NAMES" >> base_build_info.txt
-        echo "工具链缓存命中: ${{ steps.cache_toolchain.outputs.cache-hit }}" >> base_build_info.txt
-        echo "Feeds缓存命中: ${{ steps.cache_feeds.outputs.cache-hit }}" >> base_build_info.txt
+        # 创建构建信息文件
+        {
+            echo "=== 基础环境构建信息 ==="
+            echo "构建ID: $BUILD_ID"
+            echo "芯片系列: $CHIP_FAMILY"
+            echo "仓库配置: $REPO_CONFIG"
+            echo "源码分支: $REPO_BRANCH"
+            echo "构建时间: $DATE"
+            echo "内核版本: $VERSION_KERNEL"
+            echo "设备名称: $DEVICE_NAMES"
+            echo "工具链缓存: $CACHE_STATUS_TOOLCHAIN"
+            echo "Feeds缓存: $CACHE_STATUS_FEEDS"
+            echo "构建状态: ${{ steps.compile.outputs.status }}"
+        } > base_build_info.txt
         
         # 保存配置文件
         cp "$OPENWRT_PATH/.config" "base_${CHIP_FAMILY}_${REPO_SHORT}.config"
         
-        log "文件整理完成"
+        log "INFO" "文件整理完成"
+        step_complete "ORG_FILES" "success"
 
     - name: 上传基础环境到Artifact
       if: steps.compile.outputs.status == 'success'
@@ -653,40 +859,42 @@ jobs:
         retention-days: 30
 
     - name: 清理过期缓存
-      # 只清理超过7天的旧缓存，而不是所有缓存
       if: (!cancelled())
       run: |
-        # 设置日志函数
-        log() {
-          echo -e "\033[1;34m[INFO]\033[0m $1"
-        }
+        source "$LOGGER_SCRIPT"
+        step_start "CLEAN_CACHE" "清理过期缓存"
         
-        warning() {
-          echo -e "\033[1;33m[WARNING]\033[0m $1"
-        }
-        
-        log "清理超过7天的旧缓存..."
-        
-        # 获取7天前的日期
+        log "INFO" "清理超过7天的旧缓存..."
         CUTOFF_DATE=$(date -d '7 days ago' +%Y-%m-%d)
         
         # 清理工具链缓存
         gh cache list --key ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
-          log "删除过期工具链缓存: $key"
-          gh cache delete "$key" || warning "删除缓存 $key 失败"
+            log "INFO" "删除过期工具链缓存: $key"
+            gh cache delete "$key" || log "WARN" "删除缓存失败: $key"
         done
         
         # 清理feeds缓存
         gh cache list --key ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
-          log "删除过期feeds缓存: $key"
-          gh cache delete "$key" || warning "删除缓存 $key 失败"
+            log "INFO" "删除过期feeds缓存: $key"
+            gh cache delete "$key" || log "WARN" "删除缓存失败: $key"
         done
         
-        # 输出当前缓存状态
-        log "当前缓存状态:"
-        echo "ccache: $(du -sh "$OPENWRT_PATH/.ccache" 2>/dev/null | cut -f1 || echo "未找到")"
-        echo "staging: $(du -sh "$OPENWRT_PATH/staging_dir" 2>/dev/null | cut -f1 || echo "未找到")"
-        echo "feeds: $(du -sh "$OPENWRT_PATH/feeds" 2>/dev/null | cut -f1 || echo "未找到")"
-        echo "dl: $(du -sh "$OPENWRT_PATH/dl" 2>/dev/null | cut -f1 || echo "未找到")"
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        step_complete "CLEAN_CACHE" "success"
+
+    - name: 完成构建
+      if: always()
+      run: |
+        source "$LOGGER_SCRIPT"
+        
+        if [ "${{ steps.compile.outputs.status }}" = "success" ]; then
+            log "INFO" "🎉 构建成功完成！"
+            echo "::notice::构建成功完成！构建ID: $BUILD_ID"
+        else
+            log "ERROR" "💥 构建失败！"
+            echo "::error::构建失败！请查看日志了解详情。构建ID: $BUILD_ID"
+        fi
+        
+        # 最终报告
+        echo "::group::构建摘要"
+        cat "$GITHUB_WORKSPACE/build_summary.txt"
+        echo "::endgroup::"
