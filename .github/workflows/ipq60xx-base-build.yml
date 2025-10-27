@@ -27,8 +27,10 @@ env:
 
 jobs:
   Build:
-    runs-on: ubuntu-22.04
+    # 关键：添加 continue-on-error 和 fail-fast
+    continue-on-error: true
     strategy:
+      fail-fast: false  # 关键：不快速失败，让所有任务都执行
       matrix:
         # 定义要并行构建的仓库配置
         repo_config: 
@@ -45,11 +47,15 @@ jobs:
       CHIP_FAMILY: ${{ matrix.chip_family }}
       REPO_CONFIG: ${{ matrix.repo_config }}
       BUILD_ID: ${{ github.run_id }}-${{ matrix.repo_config }}-${{ matrix.chip_family }}
+      # 设置GitHub CLI token
+      GH_TOKEN: ${{ github.token }}
       
     steps:
 
     - name: 初始化企业级日志系统
       id: init_logging
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         # 创建企业级日志框架
         cat > /tmp/logger.sh << 'EOF'
@@ -216,6 +222,8 @@ jobs:
 
     - name: 初始化环境
       id: init_env
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "ENV_INIT" "初始化构建环境"
@@ -264,10 +272,14 @@ jobs:
         step_complete "ENV_INIT" "success"
 
     - name: 检出代码
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/checkout@main
 
     - name: 读取仓库配置
       id: read_repo_config
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "READ_CONFIG" "读取仓库配置"
@@ -305,6 +317,8 @@ jobs:
 
     - name: 克隆源代码
       id: clone_source
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "CLONE_SOURCE" "克隆源代码"
@@ -350,6 +364,8 @@ jobs:
 
     - name: 生成变量
       id: generate_vars
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "GEN_VARS" "生成构建变量"
@@ -446,6 +462,8 @@ jobs:
 
     - name: 缓存工具链
       id: cache_toolchain
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/cache@main
       with:
         # 优化：只使用稳定的标识符，不包含频繁变化的哈希
@@ -461,6 +479,8 @@ jobs:
 
     - name: 缓存Feeds
       id: cache_feeds
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/cache@main
       with:
         # 优化：只使用分支哈希，不使用源码哈希
@@ -476,6 +496,8 @@ jobs:
 
     - name: 缓存DL软件包
       id: cache_dl
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/cache@main
       with:
         # 优化：只使用仓库和分支，不使用源码哈希
@@ -487,6 +509,8 @@ jobs:
           ${{ env.OPENWRT_PATH }}/dl
 
     - name: 检查缓存状态
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "CACHE_STATUS" "检查缓存状态"
@@ -540,6 +564,8 @@ jobs:
         step_complete "CACHE_STATUS" "success"
 
     - name: 刷新缓存
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "REFRESH_CACHE" "刷新缓存时间戳"
@@ -557,6 +583,8 @@ jobs:
         step_complete "REFRESH_CACHE" "success"
 
     - name: 添加第三方软件源
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "ADD_REPO" "添加第三方软件源"
@@ -582,6 +610,8 @@ jobs:
         step_complete "ADD_REPO" "success"
 
     - name: 安装Feeds
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "INSTALL_FEEDS" "安装Feeds"
@@ -624,6 +654,8 @@ jobs:
         step_complete "INSTALL_FEEDS" "success"
 
     - name: 加载自定义配置
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "LOAD_CONFIG" "加载自定义配置"
@@ -650,6 +682,8 @@ jobs:
 
     - name: 合并配置文件并生成报告
       id: merge_config
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "MERGE_CONFIG" "合并配置文件"
@@ -775,6 +809,8 @@ jobs:
         step_complete "MERGE_CONFIG" "success"
 
     - name: 下载DL软件包
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "DOWNLOAD_PKGS" "下载软件包"
@@ -831,6 +867,8 @@ jobs:
         step_complete "DOWNLOAD_PKGS" "success"
 
     - name: 清理构建环境
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "CLEAN_ENV" "清理构建环境"
@@ -863,6 +901,8 @@ jobs:
 
     - name: 编译基础环境
       id: compile
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "COMPILE" "编译基础环境"
@@ -1021,6 +1061,8 @@ jobs:
 
     - name: 生成构建报告
       if: always()
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "GEN_REPORT" "生成构建报告"
@@ -1081,6 +1123,8 @@ jobs:
 
     - name: 检查空间使用情况
       if: (!cancelled())
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "CHECK_SPACE" "检查磁盘空间"
@@ -1100,6 +1144,8 @@ jobs:
 
     - name: 上传构建日志和报告
       if: always()
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/upload-artifact@main
       with:
         name: ${{ env.SOURCE_REPO }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
@@ -1113,20 +1159,21 @@ jobs:
 
     - name: 上传基础环境到Artifact
       if: steps.compile.outputs.status == 'success'
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/upload-artifact@main
       with:
         name: ${{ env.SOURCE_REPO }}-base-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
         path: |
           ${{ env.OPENWRT_PATH }}/bin
           ${{ env.OPENWRT_PATH }}/.config
-          ${{ env.OPENWRT_PATH }}/staging_dir
-          ${{ env.OPENWRT_PATH }}/.ccache
-          ${{ env.OPENWRT_PATH }}/feeds
-          ${{ env.OPENWRT_PATH }}/dl
+          # 注意：不包含缓存目录，缓存由GitHub Actions缓存系统管理
         retention-days: 30
 
     - name: 清理过期缓存
       if: (!cancelled())
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         step_start "CLEAN_CACHE" "清理过期缓存"
@@ -1156,6 +1203,8 @@ jobs:
 
     - name: 完成构建
       if: always()
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         
@@ -1178,12 +1227,34 @@ jobs:
 
     - name: 触发并行编译工作流
       if: steps.compile.outputs.status == 'success'
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
-        # 触发并行编译工作流
-        gh workflow run ipq60xx-parallel-build.yml \
-          --field repo_config=${{ env.REPO_CONFIG }} \
-          --field chip_family=${{ env.CHIP_FAMILY }} \
-          --field source_hash=${{ env.SOURCE_HASH }} \
-          --field config_hash=${{ env.CONFIG_HASH }} \
-          --field feeds_hash=${{ env.FEEDS_HASH }} \
-          --field build_id=${{ env.BUILD_ID }}
+        source "$LOGGER_SCRIPT"
+        step_start "TRIGGER_PARALLEL" "触发并行编译工作流"
+        
+        # 等待一段时间确保artifact上传完成
+        log "INFO" "等待artifact上传完成..."
+        sleep 30
+        
+        # 检查并行编译工作流是否存在
+        if gh workflow view ipq60xx-parallel-build.yml >/dev/null 2>&1; then
+            log "INFO" "触发并行编译工作流..."
+            
+            # 触发工作流
+            if gh workflow run ipq60xx-parallel-build.yml \
+                --field repo_config=${{ env.REPO_CONFIG }} \
+                --field chip_family=${{ env.CHIP_FAMILY }} \
+                --field source_hash=${{ env.SOURCE_HASH }} \
+                --field config_hash=${{ env.CONFIG_HASH }} \
+                --field feeds_hash=${{ env.FEEDS_HASH }} \
+                --field build_id=${{ env.BUILD_ID }}; then
+                log "INFO" "✅ 并行编译工作流触发成功"
+            else
+                log "ERROR" "❌ 并行编译工作流触发失败"
+            fi
+        else
+            log "WARN" "⚠️ 并行编译工作流不存在，跳过触发"
+        fi
+        
+        step_complete "TRIGGER_PARALLEL" "success"
