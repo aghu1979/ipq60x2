@@ -18,7 +18,7 @@ env:
   FIRMWARE_RELEASE: false  # 根据要求，不需要发布release
   
   # 缓存配置 - 移除日期，提高缓存命中率
-  CACHE_VERSION: v1
+  CACHE_VERSION: v2
   
   # 日志配置
   LOG_LEVEL: INFO  # DEBUG, INFO, WARN, ERROR
@@ -448,11 +448,13 @@ jobs:
       id: cache_toolchain
       uses: actions/cache@main
       with:
-        key: ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.SOURCE_HASH }}-${{ env.CONFIG_HASH }}
+        # 优化：只使用稳定的标识符，不包含频繁变化的哈希
+        key: ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
         restore-keys: |
-          ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
-          ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-
-          ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
+          ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-
+          ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
+          ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-
+          ${{ env.CACHE_VERSION }}-toolchain-
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache
           ${{ env.OPENWRT_PATH }}/staging_dir
@@ -461,10 +463,12 @@ jobs:
       id: cache_feeds
       uses: actions/cache@main
       with:
-        key: ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.SOURCE_HASH }}-${{ env.FEEDS_HASH }}
+        # 优化：只使用分支哈希，不使用源码哈希
+        key: ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.FEEDS_HASH }}
         restore-keys: |
           ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
           ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-
+          ${{ env.CACHE_VERSION }}-feeds-
         path: |
           ${{ env.OPENWRT_PATH }}/feeds
           ${{ env.OPENWRT_PATH }}/dl
@@ -474,10 +478,11 @@ jobs:
       id: cache_dl
       uses: actions/cache@main
       with:
-        key: ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.SOURCE_HASH }}
+        # 优化：只使用仓库和分支，不使用源码哈希
+        key: ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}
         restore-keys: |
-          ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
           ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-
+          ${{ env.CACHE_VERSION }}-dl-
         path: |
           ${{ env.OPENWRT_PATH }}/dl
 
@@ -506,12 +511,18 @@ jobs:
         
         # DL缓存
         if [ "${{ steps.cache_dl.outputs.cache-hit }}" == "true" ]; then
-            log "INFO" "验证DL软件包缓存命中"
+            log "INFO" "✅ DL软件包缓存命中"
             CACHE_STATUS_DL="HIT"
         else
             log "INFO" "❌ DL软件包缓存未命中，将重新下载"
             CACHE_STATUS_DL="MISS"
         fi
+        
+        # 显示缓存键信息
+        log "INFO" "=== 缓存键信息 ==="
+        log "INFO" "工具链缓存键: ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}"
+        log "INFO" "Feeds缓存键: ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.FEEDS_HASH }}"
+        log "INFO" "DL缓存键: ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}"
         
         # 显示缓存大小
         for dir in ".ccache" "staging_dir" "feeds" "dl"; do
@@ -1121,22 +1132,22 @@ jobs:
         step_start "CLEAN_CACHE" "清理过期缓存"
         
         log "INFO" "清理超过7天的旧缓存..."
-        CUTOFF_DATE=$(date -d '7 days ago' +%Y-%m-%d-%d)
+        CUTOFF_DATE=$(date -d '7 days ago' +%Y-%m-%d)
         
         # 清理工具链缓存
-        gh cache list --key ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
+        gh cache list --key ${{ env.CACHE_VERSION }}-toolchain- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
             log "INFO" "删除过期工具链缓存: $key"
             gh cache delete "$key" || log "WARN" "删除缓存失败: $key"
         done
         
         # 清理feeds缓存
-        gh cache list --key ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
+        gh cache list --key ${{ env.CACHE_VERSION }}-feeds- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
             log "INFO" "删除过期feeds缓存: $key"
             gh cache delete "$key" || log "WARN" "删除缓存失败: $key"
         done
         
         # 清理DL缓存
-        gh cache list --key ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
+        gh cache list --key ${{ env.CACHE_VERSION }}-dl- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
             log "INFO" "删除过期DL缓存: $key"
             gh cache delete "$key" || log "WARN" "删除缓存失败: $key"
         done
