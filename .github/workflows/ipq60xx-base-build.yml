@@ -657,22 +657,58 @@ jobs:
             log "INFO" "  (无Luci软件包)"
         fi
         
-        # 生成defconfig对比报告
+        # 生成defconfig对比报告并输出到控制台
         log "INFO" "=== Defconfig软件包对比 ==="
+        
+        # 检查是否有新增的软件包
+        NEW_PACKAGES=$(comm -13 <(echo "$LUCI_AFTER") <(echo "$LUCI_DEFCONFIG") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//')
+        if [ -n "$NEW_PACKAGES" ]; then
+            log "INFO" "🔍 发现新增的Luci软件包:"
+            echo "$NEW_PACKAGES" | while read pkg; do
+                log "INFO" "  ✅ $pkg"
+                echo "  ✅ $pkg"
+            done
+        else
+            log "INFO" "ℹ️  无新增的Luci软件包"
+            echo "  ℹ️  无新增的Luci软件包"
+        fi
+        
+        # 检查是否有缺失的软件包
+        MISSING_PACKAGES=$(comm -23 <(echo "$LUCI_AFTER") <(echo "$LUCI_DEFCONFIG") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//')
+        if [ -n "$MISSING_PACKAGES" ]; then
+            log "WARN" "⚠️  发现缺失的Luci软件包:"
+            echo "$MISSING_PACKAGES" | while read pkg; do
+                log "WARN" "  ❌ $pkg"
+                echo "  ❌ $pkg"
+            done
+        else
+            log "INFO" "ℹ️  无缺失的Luci软件包"
+            echo "  ℹ️  无缺失的Luci软件包"
+        fi
+        
+        echo ""
+        
+        # 生成defconfig对比报告文件
         {
             echo "## Defconfig后的Luci软件包变化"
             echo ""
             echo "### 新增的Luci软件包:"
-            comm -13 <(echo "$LUCI_AFTER") <(echo "$LUCI_DEFCONFIG") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-                echo "- ✅ $pkg"
-                log "INFO" "  [新增] $pkg"
-            done
+            if [ -n "$NEW_PACKAGES" ]; then
+                echo "$NEW_PACKAGES" | while read pkg; do
+                    echo "- ✅ $pkg"
+                done
+            else
+                echo "（无新增软件包）"
+            fi
             echo ""
             echo "### 缺失的Luci软件包:"
-            comm -23 <(echo "$LUCI_AFTER") <(echo "$LUCI_DEFCONFIG") | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-                echo "- ❌ $pkg"
-                log "WARN" "  [缺失] $pkg"
-            done
+            if [ -n "$MISSING_PACKAGES" ]; then
+                echo "$MISSING_PACKAGES" | while read pkg; do
+                    echo "- ❌ $pkg"
+                done
+            else
+                echo "（无缺失软件包）"
+            fi
             echo ""
         } > "$GITHUB_WORKSPACE/luci_defconfig_report.md"
         
@@ -702,14 +738,52 @@ jobs:
         cd "$OPENWRT_PATH"
         log "INFO" "开始下载软件包..."
         
+        # 创建错误监控脚本
+        cat > /tmp/monitor_download_errors.sh << 'EOF'
+        #!/bin/bash
+        LOG_FILE="$1"
+        ERROR_PATTERNS=("failed to download" "Error:" "ERROR:" "error:" "404 Not Found" "Connection refused" "timeout")
+        
+        tail -f "$LOG_FILE" | while read line; do
+            for pattern in "${ERROR_PATTERNS[@]}"; do
+                if echo "$line" | grep -qi "$pattern"; then
+                    # 提取包名
+                    PACKAGE=$(echo "$line" | grep -o 'package/[^/]*' | head -1 | cut -d'/' -f2)
+                    if [ -z "$PACKAGE" ]; then
+                        PACKAGE=$(echo "$line" | grep -o '[a-zA-Z0-9_-]*\.tar\.' | head -1 | sed 's/\.tar\.$//')
+                    fi
+                    if [ -z "$PACKAGE" ]; then
+                        PACKAGE="未知"
+                    fi
+                    
+                    # 调用错误记录函数
+                    log_build_error "$line" "$PACKAGE"
+                fi
+            done
+        done
+        EOF
+        chmod +x /tmp/monitor_download_errors.sh
+        
+        # 启动错误监控（后台）
+        /tmp/monitor_download_errors.sh /tmp/download.log &
+        MONITOR_PID=$!
+        
         # 监控下载进度
-        if make download -j$(nproc); then
+        if make download -j$(nproc) 2>&1 | tee /tmp/download.log; then
             log "INFO" "软件包下载成功"
         else
+            kill $MONITOR_PID 2>/dev/null || true
             log "ERROR" "软件包下载失败"
+            
+            # 分析下载错误
+            DOWNLOAD_ERRORS=$(grep -E "(failed|Error|ERROR|404|timeout)" /tmp/download.log | tail -5)
+            if [ -n "$DOWNLOAD_ERRORS" ]; then
+                log_build_error "下载失败: $DOWNLOAD_ERRORS" "下载错误"
+            fi
             exit 1
         fi
         
+        kill $MONITOR_PID 2>/dev/null || true
         step_complete "DOWNLOAD_PKGS" "success"
 
     - name: 清理构建环境
@@ -747,23 +821,47 @@ jobs:
         log "INFO" "开始编译基础环境..."
         log "INFO" "使用 $(nproc) 个线程编译"
         
-        # 创建错误监控脚本
+        # 创建增强的错误监控脚本
         cat > /tmp/monitor_errors.sh << 'EOF'
         #!/bin/bash
         LOG_FILE="$1"
-        ERROR_PATTERNS=("failed to build" "Error:" "ERROR:" "error:" "make.*\*\*\*.*Error")
+        # 扩展错误模式，包含更多错误类型
+        ERROR_PATTERNS=(
+            "failed to build"
+            "failed to install"
+            "Error:"
+            "ERROR:"
+            "error:"
+            "make.*\*\*\*.*Error"
+            "command terminated with signal"
+            "cannot stat"
+            "No such file or directory"
+            "Permission denied"
+            "Segmentation fault"
+            "Compilation failed"
+            "Build failed"
+            "undefined reference"
+            "multiple definition"
+        )
         
         tail -f "$LOG_FILE" | while read line; do
             for pattern in "${ERROR_PATTERNS[@]}"; do
                 if echo "$line" | grep -q "$pattern"; then
-                    # 提取包名
-                    PACKAGE=$(echo "$line" | grep -o 'package/[^/]*' | head -1 | cut -d'/' -f2)
+                    # 提取包名 - 改进包名提取逻辑
+                    PACKAGE=$(echo "$line" | grep -oE 'package/[^/]*|/tmp/[^/]*' | head -1 | cut -d'/' -f2)
+                    if [ -z "$PACKAGE" ]; then
+                        PACKAGE=$(echo "$line" | grep -oE '[a-zA-Z0-9_-]+\.tar\.[a-z0-9]+' | head -1 | sed 's/\.tar\.[a-z0-9]+$//')
+                    fi
+                    if [ -z "$PACKAGE" ]; then
+                        PACKAGE=$(echo "$line" | grep -oE 'ERROR: package/[^\s]+' | sed 's/ERROR: package\///')
+                    fi
                     if [ -z "$PACKAGE" ]; then
                         PACKAGE="未知"
                     fi
                     
                     # 调用错误记录函数
                     log_build_error "$line" "$PACKAGE"
+                    break  # 只记录第一个匹配的错误模式
                 fi
             done
         done
@@ -804,7 +902,12 @@ jobs:
                         log "ERROR" "${stages[$i]}编译彻底失败"
                         
                         # 分析最后几行日志，提取关键错误
-                        log_build_error "$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR)" | tail -1)" "编译失败"
+                        LAST_ERRORS=$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
+                        if [ -n "$LAST_ERRORS" ]; then
+                            echo "$LAST_ERRORS" | while read error_line; do
+                                log_build_error "$error_line" "编译失败"
+                            done
+                        fi
                         exit 1
                     fi
                 fi
@@ -834,7 +937,12 @@ jobs:
                         log "ERROR" "编译彻底失败"
                         
                         # 分析最后几行日志，提取关键错误
-                        log_build_error "$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR)" | tail -1)" "编译失败"
+                        LAST_ERRORS=$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
+                        if [ -n "$LAST_ERRORS" ]; then
+                            echo "$LAST_ERRORS" | while read error_line; do
+                                log_build_error "$error_line" "编译失败"
+                            done
+                        fi
                         exit 1
                     fi
                 fi
