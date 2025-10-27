@@ -2,32 +2,7 @@ name: IPQ60XX-Base-Build
 
 on:
   workflow_dispatch:
-    inputs:
-      chip_family:
-        description: '芯片系列'
-        required: true
-        default: 'ipq60xx'
-        type: choice
-        options:
-          - ipq60xx
-          - ipq80xx
-      repo_config:
-        description: '仓库配置'
-        required: true
-        default: 'immwrt'
-        type: choice
-        options:
-          - immwrt
-          - openwrt
-          - libwrt
   workflow_call:
-    inputs:
-      chip_family:
-        required: true
-        type: string
-      repo_config:
-        required: true
-        type: string
 
 env:
   # 基础配置
@@ -48,11 +23,22 @@ env:
 jobs:
   Build:
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        # 定义要并行构建的仓库配置
+        repo_config: 
+          - immwrt
+          - openwrt
+          - libwrt
+        # 芯片系列 - 暂时注释掉ipq80xx，只保留ipq60xx
+        chip_family:
+          - ipq60xx
+          # - ipq80xx  # 暂时注释，还没有扩展计划
     
     # 使用环境变量设置芯片系列和仓库配置
     env:
-      CHIP_FAMILY: ${{ github.event.inputs.chip_family || inputs.chip_family || 'ipq60xx' }}
-      REPO_CONFIG: ${{ github.event.inputs.repo_config || inputs.repo_config || 'immwrt' }}
+      CHIP_FAMILY: ${{ matrix.chip_family }}
+      REPO_CONFIG: ${{ matrix.repo_config }}
       
     steps:
 
