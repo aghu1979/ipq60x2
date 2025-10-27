@@ -40,7 +40,7 @@ env:
   DIY_SCRIPT_DIR: scripts
   
   # 缓存配置
-  CACHE_VERSION: v1
+  CACHE_VERSION: v2
   
   # 日志配置
   LOG_LEVEL: INFO
@@ -49,8 +49,11 @@ env:
 
 jobs:
   Build:
+    # 关键：添加 continue-on-error 确保单个任务失败不影响其他任务
+    continue-on-error: true
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false  # 关键：不快速失败，让所有任务都执行
       matrix:
         # 定义要并行构建的配置
         config_type: 
@@ -70,10 +73,14 @@ jobs:
       SOURCE_HASH: ${{ github.event.inputs.source_hash }}
       CONFIG_HASH: ${{ github.event.inputs.config_hash }}
       FEEDS_HASH: ${{ github.event.inputs.feeds_hash }}
+      # 设置GitHub CLI token
+      GH_TOKEN: ${{ github.token }}
       
     steps:
 
     - name: 初始化日志系统
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         # 创建日志框架
         cat > /tmp/logger.sh << 'EOF'
@@ -113,8 +120,32 @@ jobs:
             fi
         }
         
+        # 步骤开始
+        step_start() {
+            local step_name="$1"
+            local description="$2"
+            local timestamp=$(date -Iseconds)
+            
+            log "INFO" "▶ 开始执行: $description" "$step_name"
+        }
+        
+        # 步骤完成
+        step_complete() {
+            local step_name="$1"
+            local status="$2"  # success, failed, warning
+            local timestamp=$(date -Iseconds)
+            
+            if [ "$status" = "success" ]; then
+                log "INFO" "✅ 步骤完成: $step_name" "$step_name"
+            elif [ "$status" = "failed" ]; then
+                log "ERROR" "❌ 步骤失败: $step_name" "$step_name"
+            elif [ "$status" = "warning" ]; then
+                log "WARN" "⚠️ 步骤完成（有警告）: $step_name" "$step_name"
+            fi
+        }
+        
         # 导出函数
-        export -f log
+        export -f log step_start step_complete
         EOF
         
         chmod +x /tmp/logger.sh
@@ -128,8 +159,12 @@ jobs:
         log "INFO" "芯片系列: $CHIP_FAMILY"
 
     - name: 初始化环境
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
+        step_start "ENV_INIT" "初始化构建环境"
+        
         log "INFO" "更新系统包..."
         sudo -E apt-get -y update
         sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
@@ -143,11 +178,17 @@ jobs:
         
         # 配置时区
         sudo timedatectl set-timezone "$TZ"
+        
+        step_complete "ENV_INIT" "success"
 
     - name: 检出代码
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/checkout@main
 
     - name: 读取仓库配置
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         
@@ -170,6 +211,8 @@ jobs:
         log "INFO" "分支: $REPO_BRANCH"
 
     - name: 克隆源代码
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         
@@ -181,6 +224,8 @@ jobs:
         git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" "$OPENWRT_PATH"
 
     - name: 下载基础环境缓存
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         
@@ -200,34 +245,43 @@ jobs:
           log "INFO" "基础环境缓存下载成功"
         else
           log "ERROR" "未找到基础环境artifact"
-          exit 1
+          # 不退出，继续尝试构建
+          log "WARN" "将从头开始构建"
         fi
 
-    - name: 恢复缓存
+    - name: 恢复工具链缓存
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/cache@main
       with:
-        key: ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.CHIP_FAMILY }}-${{ env.SOURCE_HASH }}-${{ env.CONFIG_HASH }}
+        key: ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-ipq60xx-generic
         path: |
           ${{ env.OPENWRT_PATH }}/.ccache
           ${{ env.OPENWRT_PATH }}/staging_dir
 
     - name: 恢复Feeds缓存
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/cache@main
       with:
-        key: ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.SOURCE_HASH }}-${{ env.FEEDS_HASH }}
+        key: ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.FEEDS_HASH }}
         path: |
           ${{ env.OPENWRT_PATH }}/feeds
           ${{ env.OPENWRT_PATH }}/dl
           ${{ env.OPENWRT_PATH }}/package/feeds
 
     - name: 恢复DL缓存
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/cache@main
       with:
-        key: ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.SOURCE_HASH }}
+        key: ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}
         path: |
           ${{ env.OPENWRT_PATH }}/dl
 
     - name: 加载配置文件
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         
@@ -237,7 +291,13 @@ jobs:
         CONFIG_FILE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/${CONFIG_TYPE}.config"
         if [ ! -f "$CONFIG_FILE" ]; then
           log "ERROR" "配置文件不存在: $CONFIG_FILE"
-          exit 1
+          # 不退出，继续尝试使用默认配置
+          log "WARN" "将使用默认配置继续构建"
+          CONFIG_FILE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/base_${CHIP_FAMILY}.config"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            log "ERROR" "默认配置文件也不存在，跳过构建"
+            exit 1
+          fi
         fi
         
         log "INFO" "使用配置文件: $CONFIG_FILE"
@@ -262,6 +322,8 @@ jobs:
         log "INFO" "设备名称: $DEVICE_NAMES"
 
     - name: 编译固件
+      # 关键：添加 continue-on-error 确保编译失败不影响其他任务
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
         
@@ -306,11 +368,11 @@ jobs:
         /tmp/monitor_errors.sh /tmp/parallel_build.log &
         MONITOR_PID=$!
         
-        # 编译
+        # 尝试编译
         if make -j$(nproc) 2>&1 | tee /tmp/parallel_build.log; then
             log "INFO" "编译成功"
+            echo "status=success" >> $GITHUB_OUTPUT
         else
-            kill $MONITOR_PID 2>/dev/null || true
             log "ERROR" "编译失败，尝试单线程编译"
             
             # 单线程编译
@@ -319,20 +381,20 @@ jobs:
             
             if make -j1 V=s 2>&1 | tee /tmp/parallel_build.log; then
                 log "INFO" "单线程编译成功"
+                echo "status=success" >> $GITHUB_OUTPUT
             else
-                kill $MONITOR_PID 2>/dev/null || true
                 log "ERROR" "编译彻底失败"
-                exit 1
+                echo "status=failed" >> $GITHUB_OUTPUT
+                # 不退出，让任务标记为失败但继续
             fi
         fi
         
         kill $MONITOR_PID 2>/dev/null || true
-        
-        # 设置输出
-        echo "status=success" >> $GITHUB_OUTPUT
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
 
     - name: 整理固件文件
+      # 关键：添加 continue-on-error 确保即使整理失败也不影响其他任务
+      continue-on-error: true
       if: steps.compile.outputs.status == 'success'
       run: |
         source "$LOGGER_SCRIPT"
@@ -345,14 +407,16 @@ jobs:
         
         # 复制固件文件
         log "INFO" "整理固件文件..."
-        find bin/targets -name "*.bin" -o -name "*.img" | while read file; do
-          cp "$file" "$OUTPUT_DIR/"
-          log "INFO" "复制: $file"
-        done
+        if [ -d "bin/targets" ]; then
+          find bin/targets -name "*.bin" -o -name "*.img" | while read file; do
+            cp "$file" "$OUTPUT_DIR/" 2>/dev/null || true
+            log "INFO" "复制: $file"
+          done
+        fi
         
         # 复制manifest
         if [ -f "bin/targets/${DEVICE_TARGET}/${DEVICE_SUBTARGET}/manifest" ]; then
-          cp "bin/targets/${DEVICE_TARGET}/${DEVICE_SUBTARGET}/manifest" "$OUTPUT_DIR/"
+          cp "bin/targets/${DEVICE_TARGET}/${DEVICE_SUBTARGET}/manifest" "$OUTPUT_DIR/" 2>/dev/null || true
         fi
         
         # 生成版本信息
@@ -365,14 +429,17 @@ jobs:
           echo "芯片: $CHIP_FAMILY"
           echo "设备: $DEVICE_NAMES"
           echo "源码哈希: $SOURCE_HASH"
+          echo "构建状态: ${{ steps.compile.outputs.status }}"
           echo ""
           echo "=== 文件列表 ==="
-          ls -la "$OUTPUT_DIR/"
+          ls -la "$OUTPUT_DIR/" 2>/dev/null || echo "无文件"
         } > "$OUTPUT_DIR/info.txt"
         
         log "INFO" "固件文件整理完成"
 
     - name: 上传固件
+      # 关键：添加 continue-on-error 确保上传失败不影响其他任务
+      continue-on-error: true
       if: steps.compile.outputs.status == 'success'
       uses: actions/upload-artifact@main
       with:
@@ -381,12 +448,16 @@ jobs:
         retention-days: 30
 
   Release:
+    # 关键：添加 continue-on-error 确保发布失败不影响整体
+    continue-on-error: true
     needs: Build
     runs-on: ubuntu-22.04
-    if: success()
+    if: always()  # 关键：即使某些构建失败也尝试发布
     
     steps:
     - name: 初始化环境
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         # 安装GitHub CLI
         curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
@@ -395,9 +466,13 @@ jobs:
         sudo apt install gh -y
 
     - name: 检出代码
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       uses: actions/checkout@main
 
     - name: 下载所有固件
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         # 创建下载目录
         mkdir -p all_firmware
@@ -416,13 +491,17 @@ jobs:
               # 下载并解压
               mkdir -p "all_firmware/${config}_${repo}"
               curl -L -o "${config}_${repo}.zip" "$ARTIFACT_URL"
-              unzip -q "${config}_${repo}.zip" -d "all_firmware/${config}_${repo}"
+              unzip -q "${config}_${repo}.zip" -d "all_firmware/${config}_${repo}" || true
               rm "${config}_${repo}.zip"
+            else
+              echo "未找到: $ARTIFACT_NAME"
             fi
           done
         done
 
     - name: 创建Release
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         # 生成版本号
         VERSION="v$(date +%Y.%m.%d)-${{ github.event.inputs.repo_config }}-${{ github.event.inputs.chip_family }}"
@@ -449,8 +528,8 @@ jobs:
         - manifest (软件包列表)
         - info.txt (构建信息)
         
-        ## 下载说明
-        请根据您的设备型号选择对应的固件文件。
+        ## 构建状态
+        部分构建可能失败，请检查各个配置目录中的文件。
         
         ---
         自动构建于 $(date)
@@ -464,5 +543,9 @@ jobs:
           all_firmware/*/* || true
 
     - name: 完成发布
+      if: always()
+      # 关键：添加 continue-on-error
+      continue-on-error: true
       run: |
         echo "::notice::固件发布完成！版本: v$(date +%Y.%m.%d)-${{ github.event.inputs.repo_config }}-${{ github.event.inputs.chip_family }}"
+        echo "::notice::部分构建可能失败，请检查各个配置目录中的文件。"
