@@ -74,7 +74,7 @@ jobs:
         log() {
             local level="$1"
             local message="$2"
-            local step="${3:-$(caller | awk '{print $2}')}"
+            local step="${3:-$(caller | awk '{print $2}')"
             local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
             
             # 检查日志级别
@@ -114,6 +114,9 @@ jobs:
                 package=$(echo "$error_msg" | grep -o 'package/feeds/[^/]*' | head -1 | cut -d'/' -f4)
                 if [ -z "$package" ]; then
                     package=$(echo "$error_msg" | grep -o 'package/[^/]*' | head -1 | cut -d'/' -f2)
+                fi
+                if [ -z "$package" ]; then
+                    package=$(echo "$error_msg" | grep -o '[a-zA-Z0-9_-]*\.tar\.[a-z0-9]+' | head -1 | sed 's/\.tar\.[a-z0-9]+$//')
                 fi
                 if [ -z "$package" ]; then
                     package="nss-firmware"
@@ -177,7 +180,7 @@ jobs:
             
             # 更新报告文件
             jq --arg step "$step_name" --arg status "$status" --arg time "$timestamp" \
-                '(.steps[] | select(.name == $step)) |= . + {"status":$status,"end_time":$time}' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
+                '(.steps[] | select(.name == $step) |= . + {"status":$status,"end_time":$time}' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
                 mv "$REPORT_FILE.tmp" "$REPORT_FILE" 2>/dev/null || true
         }
         
@@ -496,7 +499,7 @@ jobs:
         
         # DL缓存
         if [ "${{ steps.cache_dl.outputs.cache-hit }}" == "true" ]; then
-            log "INFO" "✅ DL软件包缓存命中"
+            log "INFO" "验证DL软件包缓存命中"
             CACHE_STATUS_DL="HIT"
         else
             log "INFO" "❌ DL软件包缓存未命中，将重新下载"
@@ -642,7 +645,7 @@ jobs:
         cat "$CONFIG_BASE" "$CONFIG_BRANCH" > "$OPENWRT_PATH/.config" || {
             log "ERROR" "合并配置文件失败"
             exit 1
-        }
+        fi
         
         # 读取合并后的luci软件包
         LUCI_AFTER=$(grep "^CONFIG_PACKAGE_luci.*=y" "$OPENWRT_PATH/.config" | sort || true)
@@ -773,7 +776,7 @@ jobs:
                     # 提取包名
                     PACKAGE=$(echo "$line" | grep -o 'package/[^/]*' | head -1 | cut -d'/' -f2)
                     if [ -z "$PACKAGE" ]; then
-                        PACKAGE=$(echo "$line" | grep -o '[a-zA-Z0-9_-]*\.tar\.' | head -1 | sed 's/\.tar\.$//')
+                        PACKAGE=$(echo "$line" | grep -o '[a-zA-Z0-9_-]*\.tar\.' | head -1 | sed 's/\.tar\.[a-z0-9]+$//')
                     fi
                     if [ -z "$PACKAGE" ]; then
                         PACKAGE="未知"
@@ -823,7 +826,7 @@ jobs:
             log "WARN" "构建环境清理失败，继续执行"
         fi
         
-        # 确保工具链正确构建
+        # 珡保工具链正确构建
         log "INFO" "准备工具链..."
         if make toolchain/install -j$(nproc); then
             log "INFO" "工具链准备成功"
@@ -1017,7 +1020,7 @@ jobs:
             echo "芯片: $CHIP_FAMILY"
             echo "设备: $DEVICE_NAMES"
             echo "状态: ${{ steps.compile.outputs.status }}"
-            echo "开始时间: $(jq -r '.start_time' "$REPORT_FILE" 2>/dev/null || echo "未知")"
+            echo "开始时间: $(jq -r '.start_time' "$REPORT_FILE" 2>/dev/null || echo "未知")
             echo "结束时间: $(date -Iseconds)"
             echo ""
             echo "=== 缓存状态 ==="
@@ -1041,7 +1044,7 @@ jobs:
                 echo ""
             fi
             if [ "$(jq '.warnings | length' "$REPORT_FILE" 2>/dev/null || echo "0")" -gt 0 ]; then
-                echo "=== 警告详情 ==="
+                echo "=== 譔告详情 ==="
                 jq -r '.warnings[] | "- [\(.time)] \(.step): \(.message)"' "$REPORT_FILE" 2>/dev/null || echo "无警告"
                 echo ""
             fi
@@ -1084,43 +1087,6 @@ jobs:
           ${{ github.workspace }}/luci_defconfig_report.md
         retention-days: 30
 
-    - name: 上传Bin目录
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      uses: actions/upload-artifact@main
-      with:
-        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
-        path: ${{ env.OPENWRT_PATH }}/bin
-
-    - name: 整理文件
-      if: steps.compile.outputs.status == 'success'
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "ORG_FILES" "整理构建文件"
-        
-        cd "$OPENWRT_PATH/bin/targets/*/*"
-        
-        # 创建构建信息文件
-        {
-            echo "=== 基础环境构建信息 ==="
-            echo "构建ID: $BUILD_ID"
-            echo "芯片系列: $CHIP_FAMILY"
-            echo "仓库配置: $REPO_CONFIG"
-            echo "源码分支: $REPO_BRANCH"
-            echo "构建时间: $DATE"
-            echo "内核版本: $VERSION_KERNEL"
-            echo "设备名称: $DEVICE_NAMES"
-            echo "工具链缓存: $CACHE_STATUS_TOOLCHAIN"
-            echo "Feeds缓存: $CACHE_STATUS_FEEDS"
-            echo "DL缓存: $CACHE_STATUS_DL"
-            echo "构建状态: ${{ steps.compile.outputs.status }}"
-        } > base_build_info.txt
-        
-        # 保存配置文件
-        cp "$OPENWRT_PATH/.config" "base_${CHIP_FAMILY}_${REPO_SHORT}.config"
-        
-        log "INFO" "文件整理完成"
-        step_complete "ORG_FILES" "success"
-
     - name: 上传基础环境到Artifact
       if: steps.compile.outputs.status == 'success'
       uses: actions/upload-artifact@main
@@ -1142,7 +1108,7 @@ jobs:
         step_start "CLEAN_CACHE" "清理过期缓存"
         
         log "INFO" "清理超过7天的旧缓存..."
-        CUTOFF_DATE=$(date -d '7 days ago' +%Y-%m-%d)
+        CUTOFF_DATE=$(date -d '7 days ago' +%Y-%m-%d-%d')
         
         # 清理工具链缓存
         gh cache list --key ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
