@@ -89,13 +89,20 @@ jobs:
           exit 1
         }
         
+        # 切换到工作目录
+        cd $GITHUB_WORKSPACE
+        
         # 检查仓库配置文件是否存在
-        if [ ! -f "${CONFIG_BASE_DIR}/repos.json" ]; then
-          error "仓库配置文件 ${CONFIG_BASE_DIR}/repos.json 不存在"
+        REPO_CONFIG_FILE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/repos.json"
+        if [ ! -f "$REPO_CONFIG_FILE" ]; then
+          error "仓库配置文件 $REPO_CONFIG_FILE 不存在"
         fi
         
+        log "当前工作目录: $(pwd)"
+        log "仓库配置文件路径: $REPO_CONFIG_FILE"
+        
         # 从JSON文件中读取仓库配置
-        REPO_INFO=$(jq -r --arg repo "$REPO_CONFIG" '.[$repo]' ${CONFIG_BASE_DIR}/repos.json)
+        REPO_INFO=$(jq -r --arg repo "$REPO_CONFIG" '.[$repo]' "$REPO_CONFIG_FILE")
         
         if [ "$REPO_INFO" = "null" ]; then
           error "未找到仓库配置: $REPO_CONFIG"
@@ -169,11 +176,26 @@ jobs:
           exit 1
         }
         
-        log "设置配置文件路径..."
-        CONFIG_BASE="${CONFIG_BASE_DIR}/base_${CHIP_FAMILY}.config"
-        CONFIG_BRANCH="${CONFIG_BASE_DIR}/base_${REPO_SHORT}.config"
-        DIY_SCRIPT="${DIY_SCRIPT_DIR}/diy.sh"
-        REPO_SCRIPT="${DIY_SCRIPT_DIR}/repo.sh"
+        # 切换到工作目录
+        cd $GITHUB_WORKSPACE
+        
+        log "当前工作目录: $(pwd)"
+        log "工作目录内容:"
+        ls -la
+        
+        log "配置目录内容:"
+        ls -la ${CONFIG_BASE_DIR} || error "配置目录 ${CONFIG_BASE_DIR} 不存在"
+        
+        # 设置配置文件路径（使用绝对路径）
+        CONFIG_BASE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/base_${CHIP_FAMILY}.config"
+        CONFIG_BRANCH="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/base_${REPO_SHORT}.config"
+        DIY_SCRIPT="${GITHUB_WORKSPACE}/${DIY_SCRIPT_DIR}/diy.sh"
+        REPO_SCRIPT="${GITHUB_WORKSPACE}/${DIY_SCRIPT_DIR}/repo.sh"
+        
+        log "基础配置文件路径: $CONFIG_BASE"
+        log "分支配置文件路径: $CONFIG_BRANCH"
+        log "自定义脚本路径: $DIY_SCRIPT"
+        log "软件源脚本路径: $REPO_SCRIPT"
         
         echo "CONFIG_BASE=$CONFIG_BASE" >> $GITHUB_ENV
         echo "CONFIG_BRANCH=$CONFIG_BRANCH" >> $GITHUB_ENV
@@ -207,11 +229,11 @@ jobs:
         
         # 提取设备名称
         log "提取设备名称..."
-        DEVICE_NAMES=$(grep -oP "CONFIG_TARGET_DEVICE_.*_${CHIP_FAMILY}_DEVICE_\K[^=]+" $CONFIG_BASE | tr '\n' ' ')
+        DEVICE_NAMES=$(grep -oP "CONFIG_TARGET_DEVICE_.*_${CHIP_FAMILY}_DEVICE_\K[^=]+" "$CONFIG_BASE" | tr '\n' ' ')
         echo "DEVICE_NAMES=$DEVICE_NAMES" >> $GITHUB_ENV
         
         # 生成配置文件哈希，用于缓存键
-        CONFIG_HASH=$(cat $CONFIG_BASE $CONFIG_BRANCH | sha256sum | cut -d' ' -f1)
+        CONFIG_HASH=$(cat "$CONFIG_BASE" "$CONFIG_BRANCH" | sha256sum | cut -d' ' -f1)
         echo "CONFIG_HASH=$CONFIG_HASH" >> $GITHUB_ENV
         
         log "设备名称: $DEVICE_NAMES"
@@ -366,10 +388,10 @@ jobs:
         
         # 保存合并前的luci软件包列表
         log "生成合并前的luci软件包报告..."
-        LUCI_BEFORE=$(grep "^CONFIG_PACKAGE_luci.*=y" $CONFIG_BASE | sort)
+        LUCI_BEFORE=$(grep "^CONFIG_PACKAGE_luci.*=y" "$CONFIG_BASE" | sort)
         
         # 合并配置文件
-        cat $CONFIG_BASE $CONFIG_BRANCH > $OPENWRT_PATH/.config || error "合并配置文件失败"
+        cat "$CONFIG_BASE" "$CONFIG_BRANCH" > $OPENWRT_PATH/.config || error "合并配置文件失败"
         
         # 保存合并后的luci软件包列表
         log "生成合并后的luci软件包报告..."
