@@ -868,11 +868,11 @@ jobs:
         EOF
         chmod +x /tmp/monitor_errors.sh
         
-        # 分阶段编译
-        local stages=("工具链和内核" "系统包" "所有包")
-        local commands=("toolchain/kernel-headers compile" "package/system/opkg/host/compile" "")
-        local total=3
-        local current=0
+        # 定义编译阶段（避免在子shell中使用local）
+        stages=("工具链和内核" "系统包" "所有包")
+        commands=("toolchain/kernel-headers compile" "package/system/opkg/host/compile" "")
+        total=3
+        current=0
         
         for i in "${!stages[@]}"; do
             current=$((i + 1))
