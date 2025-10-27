@@ -517,10 +517,7 @@ jobs:
         # 尝试并行编译，如果失败则尝试单线程编译
         make -j$(nproc) || {
           warning "并行编译失败，尝试单线程编译..."
-          make -j1 || {
-            error "编译失败，尝试详细输出..."
-            make -j1 V=s || error "编译彻底失败"
-          }
+          make -j1 V=s || error "编译彻底失败"
         }
         
         echo "status=success" >> $GITHUB_OUTPUT
