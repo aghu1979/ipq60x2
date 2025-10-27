@@ -74,7 +74,7 @@ jobs:
         log() {
             local level="$1"
             local message="$2"
-            local step="${3:-$(caller | awk '{print $2}')"
+            local step="${3:-$(caller | awk '{print $2}')}"
             local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
             
             # 检查日志级别
@@ -180,7 +180,7 @@ jobs:
             
             # 更新报告文件
             jq --arg step "$step_name" --arg status "$status" --arg time "$timestamp" \
-                '(.steps[] | select(.name == $step) |= . + {"status":$status,"end_time":$time}' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
+                '(.steps[] | select(.name == $step) |= . + {"status":$status,"end_time":$time})' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
                 mv "$REPORT_FILE.tmp" "$REPORT_FILE" 2>/dev/null || true
         }
         
@@ -239,6 +239,13 @@ jobs:
             log "ERROR" "依赖安装失败"
             exit 1
         fi
+        
+        # 安装GitHub CLI
+        log "INFO" "安装GitHub CLI..."
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+        sudo apt update
+        sudo apt install gh -y
         
         log "INFO" "配置时区..."
         sudo -E systemctl daemon-reload || log "WARN" "重载系统服务失败"
@@ -826,7 +833,7 @@ jobs:
             log "WARN" "构建环境清理失败，继续执行"
         fi
         
-        # 珡保工具链正确构建
+        # 确保工具链正确构建
         log "INFO" "准备工具链..."
         if make toolchain/install -j$(nproc); then
             log "INFO" "工具链准备成功"
@@ -1020,7 +1027,7 @@ jobs:
             echo "芯片: $CHIP_FAMILY"
             echo "设备: $DEVICE_NAMES"
             echo "状态: ${{ steps.compile.outputs.status }}"
-            echo "开始时间: $(jq -r '.start_time' "$REPORT_FILE" 2>/dev/null || echo "未知")
+            echo "开始时间: $(jq -r '.start_time' "$REPORT_FILE" 2>/dev/null || echo "未知")"
             echo "结束时间: $(date -Iseconds)"
             echo ""
             echo "=== 缓存状态 ==="
@@ -1044,7 +1051,7 @@ jobs:
                 echo ""
             fi
             if [ "$(jq '.warnings | length' "$REPORT_FILE" 2>/dev/null || echo "0")" -gt 0 ]; then
-                echo "=== 譔告详情 ==="
+                echo "=== 警告详情 ==="
                 jq -r '.warnings[] | "- [\(.time)] \(.step): \(.message)"' "$REPORT_FILE" 2>/dev/null || echo "无警告"
                 echo ""
             fi
@@ -1108,7 +1115,7 @@ jobs:
         step_start "CLEAN_CACHE" "清理过期缓存"
         
         log "INFO" "清理超过7天的旧缓存..."
-        CUTOFF_DATE=$(date -d '7 days ago' +%Y-%m-%d-%d')
+        CUTOFF_DATE=$(date -d '7 days ago' +%Y-%m-%d-%d)
         
         # 清理工具链缓存
         gh cache list --key ${{ env.CACHE_VERSION }}-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key,created_at --jq '.[] | select(.created_at < "'$CUTOFF_DATE'") | .key' | while read -r key; do
@@ -1151,3 +1158,15 @@ jobs:
             echo "构建摘要文件不存在"
         fi
         echo "::endgroup::"
+
+    - name: 触发并行编译工作流
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        # 触发并行编译工作流
+        gh workflow run ipq60xx-parallel-build.yml \
+          --field repo_config=${{ env.REPO_CONFIG }} \
+          --field chip_family=${{ env.CHIP_FAMILY }} \
+          --field source_hash=${{ env.SOURCE_HASH }} \
+          --field config_hash=${{ env.CONFIG_HASH }} \
+          --field feeds_hash=${{ env.FEEDS_HASH }} \
+          --field build_id=${{ env.BUILD_ID }}
