@@ -67,6 +67,9 @@ jobs:
         echo "=== Build Log Started at $(date) ===" > "$LOG_FILE"
         echo '{"build_id":"'$BUILD_ID'","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[],"build_errors":[]}' > "$REPORT_FILE"
         
+        # 记录的构建错误，避免重复
+        RECORDED_ERRORS=""
+        
         # 日志函数
         log() {
             local level="$1"
@@ -91,20 +94,29 @@ jobs:
                 if [ "$level" = "ERROR" ]; then
                     jq --arg step "$step" --arg message "$message" --arg time "$timestamp" \
                         '.errors += [{"step":$step,"message":$message,"time":$time}]' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
-                        mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+                        mv "$REPORT_FILE.tmp" "$REPORT_FILE" 2>/dev/null || true
                 elif [ "$level" = "WARN" ]; then
                     jq --arg step "$step" --arg message "$message" --arg time "$timestamp" \
                         '.warnings += [{"step":$step,"message":$message,"time":$time}]' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
-                        mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+                        mv "$REPORT_FILE.tmp" "$REPORT_FILE" 2>/dev/null || true
                 fi
             fi
         }
         
-        # 构建错误记录函数
+        # 构建错误记录函数（避免重复）
         log_build_error() {
             local error_msg="$1"
             local package="$2"
             local timestamp=$(date -Iseconds)
+            
+            # 检查是否已经记录过这个错误
+            local error_key="${package}:${error_msg}"
+            if echo "$RECORDED_ERRORS" | grep -q "$error_key"; then
+                return 0  # 已经记录过，跳过
+            fi
+            
+            # 添加到已记录错误列表
+            RECORDED_ERRORS="${RECORDED_ERRORS}${error_key}\n"
             
             # 高亮显示构建错误
             echo -e "\n\033[1;41;37m🔥 构建错误 🔥\033[0m"
@@ -118,7 +130,7 @@ jobs:
             # 更新报告文件
             jq --arg msg "$error_msg" --arg pkg "$package" --arg time "$timestamp" \
                 '.build_errors += [{"message":$msg,"package":$pkg,"time":$time}]' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
-                mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+                mv "$REPORT_FILE.tmp" "$REPORT_FILE" 2>/dev/null || true
             
             # 发送GitHub通知
             echo "::error ::构建失败: $error_msg (包: $package)"
@@ -135,7 +147,7 @@ jobs:
             # 更新报告文件
             jq --arg step "$step_name" --arg desc "$description" --arg time "$timestamp" \
                 '.steps += [{"name":$step,"description":$desc,"status":"running","start_time":$time}]' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
-                mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+                mv "$REPORT_FILE.tmp" "$REPORT_FILE" 2>/dev/null || true
         }
         
         # 步骤完成
@@ -155,7 +167,7 @@ jobs:
             # 更新报告文件
             jq --arg step "$step_name" --arg status "$status" --arg time "$timestamp" \
                 '(.steps[] | select(.name == $step)) |= . + {"status":$status,"end_time":$time}' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
-                mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+                mv "$REPORT_FILE.tmp" "$REPORT_FILE" 2>/dev/null || true
         }
         
         # 进度显示
@@ -844,6 +856,9 @@ jobs:
             "multiple definition"
         )
         
+        # 记录的错误，避免重复
+        RECORDED_ERRORS=""
+        
         tail -f "$LOG_FILE" | while read line; do
             for pattern in "${ERROR_PATTERNS[@]}"; do
                 if echo "$line" | grep -q "$pattern"; then
@@ -858,6 +873,15 @@ jobs:
                     if [ -z "$PACKAGE" ]; then
                         PACKAGE="未知"
                     fi
+                    
+                    # 检查是否已经记录过这个错误
+                    ERROR_KEY="${PACKAGE}:${line}"
+                    if echo "$RECORDED_ERRORS" | grep -q "$ERROR_KEY"; then
+                        continue  # 已经记录过，跳过
+                    fi
+                    
+                    # 添加到已记录错误列表
+                    RECORDED_ERRORS="${RECORDED_ERRORS}${ERROR_KEY}\n"
                     
                     # 调用错误记录函数
                     log_build_error "$line" "$PACKAGE"
@@ -964,10 +988,15 @@ jobs:
         source "$LOGGER_SCRIPT"
         step_start "GEN_REPORT" "生成构建报告"
         
+        # 确保报告文件存在
+        if [ ! -f "$REPORT_FILE" ]; then
+            echo '{"build_id":"'$BUILD_ID'","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[],"build_errors":[]}' > "$REPORT_FILE"
+        fi
+        
         # 完成报告
         jq --arg time "$(date -Iseconds)" --arg status "${{ steps.compile.outputs.status }}" \
             '.end_time = $time | .status = $status' "$REPORT_FILE" > "$REPORT_FILE.tmp" && \
-            mv "$REPORT_FILE.tmp" "$REPORT_FILE"
+            mv "$REPORT_FILE.tmp" "$REPORT_FILE" 2>/dev/null || true
         
         # 生成摘要报告
         {
@@ -978,7 +1007,7 @@ jobs:
             echo "芯片: $CHIP_FAMILY"
             echo "设备: $DEVICE_NAMES"
             echo "状态: ${{ steps.compile.outputs.status }}"
-            echo "开始时间: $(jq -r '.start_time' "$REPORT_FILE")"
+            echo "开始时间: $(jq -r '.start_time' "$REPORT_FILE" 2>/dev/null || echo "未知")"
             echo "结束时间: $(date -Iseconds)"
             echo ""
             echo "=== 缓存状态 ==="
@@ -987,23 +1016,23 @@ jobs:
             echo "DL缓存: $CACHE_STATUS_DL"
             echo ""
             echo "=== 错误统计 ==="
-            echo "错误数量: $(jq '.errors | length' "$REPORT_FILE")"
-            echo "警告数量: $(jq '.warnings | length' "$REPORT_FILE")"
-            echo "构建错误数量: $(jq '.build_errors | length' "$REPORT_FILE")"
+            echo "错误数量: $(jq '.errors | length' "$REPORT_FILE" 2>/dev/null || echo "0")"
+            echo "警告数量: $(jq '.warnings | length' "$REPORT_FILE" 2>/dev/null || echo "0")"
+            echo "构建错误数量: $(jq '.build_errors | length' "$REPORT_FILE" 2>/dev/null || echo "0")"
             echo ""
-            if [ "$(jq '.build_errors | length' "$REPORT_FILE")" -gt 0 ]; then
+            if [ "$(jq '.build_errors | length' "$REPORT_FILE" 2>/dev/null || echo "0")" -gt 0 ]; then
                 echo "=== 构建错误详情 ==="
-                jq -r '.build_errors[] | "- [\(.time)] \(.package): \(.message)"' "$REPORT_FILE"
+                jq -r '.build_errors[] | "- [\(.time)] \(.package): \(.message)"' "$REPORT_FILE" 2>/dev/null || echo "无构建错误"
                 echo ""
             fi
-            if [ "$(jq '.errors | length' "$REPORT_FILE")" -gt 0 ]; then
+            if [ "$(jq '.errors | length' "$REPORT_FILE" 2>/dev/null || echo "0")" -gt 0 ]; then
                 echo "=== 其他错误详情 ==="
-                jq -r '.errors[] | "- [\(.time)] \(.step): \(.message)"' "$REPORT_FILE"
+                jq -r '.errors[] | "- [\(.time)] \(.step): \(.message)"' "$REPORT_FILE" 2>/dev/null || echo "无其他错误"
                 echo ""
             fi
-            if [ "$(jq '.warnings | length' "$REPORT_FILE")" -gt 0 ]; then
+            if [ "$(jq '.warnings | length' "$REPORT_FILE" 2>/dev/null || echo "0")" -gt 0 ]; then
                 echo "=== 警告详情 ==="
-                jq -r '.warnings[] | "- [\(.time)] \(.step): \(.message)"' "$REPORT_FILE"
+                jq -r '.warnings[] | "- [\(.time)] \(.step): \(.message)"' "$REPORT_FILE" 2>/dev/null || echo "无警告"
                 echo ""
             fi
         } > "$GITHUB_WORKSPACE/build_summary.txt"
@@ -1140,5 +1169,9 @@ jobs:
         
         # 最终报告
         echo "::group::构建摘要"
-        cat "$GITHUB_WORKSPACE/build_summary.txt"
+        if [ -f "$GITHUB_WORKSPACE/build_summary.txt" ]; then
+            cat "$GITHUB_WORKSPACE/build_summary.txt"
+        else
+            echo "构建摘要文件不存在"
+        fi
         echo "::endgroup::"
