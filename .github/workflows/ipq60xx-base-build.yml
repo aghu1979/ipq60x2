@@ -109,6 +109,17 @@ jobs:
             local package="$2"
             local timestamp=$(date -Iseconds)
             
+            # 提取更精确的包名
+            if [ "$package" = "feeds" ]; then
+                package=$(echo "$error_msg" | grep -o 'package/feeds/[^/]*' | head -1 | cut -d'/' -f4)
+                if [ -z "$package" ]; then
+                    package=$(echo "$error_msg" | grep -o 'package/[^/]*' | head -1 | cut -d'/' -f2)
+                fi
+                if [ -z "$package" ]; then
+                    package="nss-firmware"
+                fi
+            fi
+            
             # 检查是否已经记录过这个错误
             local error_key="${package}:${error_msg}"
             if echo "$RECORDED_ERRORS" | grep -q "$error_key"; then
@@ -888,7 +899,6 @@ jobs:
                     break  # 只记录第一个匹配的错误模式
                 fi
             done
-        done
         EOF
         chmod +x /tmp/monitor_errors.sh
         
