@@ -186,9 +186,46 @@ jobs:
         log "配置目录内容:"
         ls -la ${CONFIG_BASE_DIR} || error "配置目录 ${CONFIG_BASE_DIR} 不存在"
         
-        # 设置配置文件路径（使用绝对路径）
-        CONFIG_BASE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/base_${CHIP_FAMILY}.config"
-        CONFIG_BRANCH="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/base_${REPO_SHORT}.config"
+        # 函数：查找配置文件（支持多种后缀和大小写）
+        find_config_file() {
+          local base_name="$1"
+          local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"
+          
+          # 尝试不带后缀的文件
+          if [ -f "${config_dir}/${base_name}.config" ]; then
+            echo "${config_dir}/${base_name}.config"
+            return 0
+          fi
+          
+          # 尝试带.txt后缀的文件
+          if [ -f "${config_dir}/${base_name}.config.txt" ]; then
+            echo "${config_dir}/${base_name}.config.txt"
+            return 0
+          fi
+          
+          # 使用find命令查找匹配的文件（忽略大小写）
+          local found_file=$(find "$config_dir" -iname "${base_name}.config*" -type f | head -n 1)
+          if [ -n "$found_file" ]; then
+            echo "$found_file"
+            return 0
+          fi
+          
+          return 1
+        }
+        
+        # 查找基础配置文件
+        CONFIG_BASE=$(find_config_file "base_${CHIP_FAMILY}")
+        if [ $? -ne 0 ]; then
+          error "基础配置文件 base_${CHIP_FAMILY}.config 不存在"
+        fi
+        
+        # 查找分支配置文件
+        CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
+        if [ $? -ne 0 ]; then
+          error "分支配置文件 base_${REPO_SHORT}.config 不存在"
+        fi
+        
+        # 设置脚本路径
         DIY_SCRIPT="${GITHUB_WORKSPACE}/${DIY_SCRIPT_DIR}/diy.sh"
         REPO_SCRIPT="${GITHUB_WORKSPACE}/${DIY_SCRIPT_DIR}/repo.sh"
         
@@ -202,17 +239,8 @@ jobs:
         echo "DIY_SCRIPT=$DIY_SCRIPT" >> $GITHUB_ENV
         echo "REPO_SCRIPT=$REPO_SCRIPT" >> $GITHUB_ENV
         
-        log "检查配置文件是否存在..."
-        if [ ! -f "$CONFIG_BASE" ]; then
-          error "基础配置文件 $CONFIG_BASE 不存在"
-        fi
-        
-        if [ ! -f "$CONFIG_BRANCH" ]; then
-          error "分支配置文件 $CONFIG_BRANCH 不存在"
-        fi
-        
         log "提取设备信息..."
-        cp $CONFIG_BASE $OPENWRT_PATH/.config || error "复制配置文件失败"
+        cp "$CONFIG_BASE" $OPENWRT_PATH/.config || error "复制配置文件失败"
         cd $OPENWRT_PATH
         
         log "运行defconfig..."
@@ -320,9 +348,9 @@ jobs:
         
         if [ -f "$REPO_SCRIPT" ]; then
           log "执行软件源脚本..."
-          chmod +x $REPO_SCRIPT || error "设置脚本权限失败"
+          chmod +x "$REPO_SCRIPT" || error "设置脚本权限失败"
           cd $OPENWRT_PATH
-          $GITHUB_WORKSPACE/$REPO_SCRIPT || error "执行软件源脚本失败"
+          "$GITHUB_WORKSPACE/$REPO_SCRIPT" || error "执行软件源脚本失败"
         else
           warning "软件源脚本 $REPO_SCRIPT 不存在，跳过"
         fi
@@ -364,9 +392,9 @@ jobs:
         
         if [ -f "$DIY_SCRIPT" ]; then
           log "执行自定义脚本..."
-          chmod +x $DIY_SCRIPT || error "设置脚本权限失败"
+          chmod +x "$DIY_SCRIPT" || error "设置脚本权限失败"
           cd $OPENWRT_PATH
-          $GITHUB_WORKSPACE/$DIY_SCRIPT || error "执行自定义脚本失败"
+          "$GITHUB_WORKSPACE/$DIY_SCRIPT" || error "执行自定义脚本失败"
         else
           warning "自定义脚本 $DIY_SCRIPT 不存在，跳过"
         fi
@@ -581,7 +609,7 @@ jobs:
         
         # 输出当前缓存状态
         log "当前缓存状态:"
-        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache 2>/dev/null | cut -f 1 || echo "未找到")"
-        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir 2>/dev/null | cut -f 1 || echo "未找到")"
+        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache 2>/dev/null | cut -f1 || echo "未找到")"
+        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir 2>/dev/null | cut -f1 || echo "未找到")"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
