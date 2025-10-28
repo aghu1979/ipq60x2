@@ -1,8 +1,5 @@
 #!/bin/bash
 
-# 加载日志函数
-source /tmp/log_functions.sh
-
 # 查找配置文件
 find_config_file() {
     local base_name="$1"
