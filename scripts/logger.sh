@@ -5,6 +5,10 @@ init_logger() {
     local log_type="$1"  # base, prebuild, variant
     local build_id="$2"  # 构建ID
     
+    # 先定义和导出日志函数
+    export_log_functions
+    
+    # 设置日志级别
     declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
     CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
     LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
@@ -14,27 +18,32 @@ init_logger() {
     echo "=== ${log_type} Log Started at $(date) ===" > "$LOG_FILE"
     echo "{\"build_id\":\"${build_id}\",\"start_time\":\"$(date -Iseconds)\",\"steps\":[],\"errors\":[],\"warnings\":[]}" > "$REPORT_FILE"
     
-    # 导出日志函数
-    export_log_functions
+    # 导出环境变量
+    export LOG_FILE REPORT_FILE CURRENT_LEVEL
 }
 
 # 导出日志函数
 export_log_functions() {
     cat << 'EOF' > /tmp/log_functions.sh
+# 日志级别定义
+declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
+
 log() { 
     local level="$1" 
     local message="$2" 
     local step="${3:-$(caller | awk '{print $2}')}"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
-    if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then
+    if [ ${LOG_LEVELS[$level]} -ge ${CURRENT_LEVEL:-1} ]; then
         case $level in
             DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;;
             INFO)  echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;;
             WARN)  echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;;
             ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;;
         esac
-        echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"
+        if [ -n "$LOG_FILE" ]; then
+            echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"
+        fi
     fi
 }
 
