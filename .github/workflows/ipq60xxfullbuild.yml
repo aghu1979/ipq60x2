@@ -52,7 +52,7 @@ jobs:
     - name: 初始化日志系统
       run: |
         chmod +x scripts/logger.sh
-        scripts/logger.sh "base" "base-${{ matrix.repo_config }}-$(date +%s)"
+        source scripts/logger.sh "base" "base-${{ matrix.repo_config }}-$(date +%s)"
         step_start "INIT" "初始化基础构建日志 (${{ matrix.repo_config }})"
 
     - name: 克隆仓库
@@ -194,7 +194,7 @@ jobs:
     - name: 初始化日志系统
       run: |
         chmod +x scripts/logger.sh
-        scripts/logger.sh "prebuild" "prebuild-$(date +%s)"
+        source scripts/logger.sh "prebuild" "prebuild-$(date +%s)"
         step_start "INIT" "初始化预编译构建日志"
 
     - name: 创建目录
@@ -379,7 +379,7 @@ jobs:
     - name: 初始化日志系统
       run: |
         chmod +x scripts/logger.sh
-        scripts/logger.sh "variant" "variant-${{ matrix.repo }}-${{ matrix.variant }}-$(date +%s)"
+        source scripts/logger.sh "variant" "variant-${{ matrix.repo }}-${{ matrix.variant }}-$(date +%s)"
         step_start "INIT" "初始化变体组装日志 (${{ matrix.repo }}-${{ matrix.variant }})"
 
     - name: 创建目录
