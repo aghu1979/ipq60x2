@@ -28,7 +28,7 @@ init_environment() {
     fi
     
     log "INFO" "安装基础依赖..."
-    # 先安装基础依赖，移除不支持的--timeout参数
+    # 先安装基础依赖，移除不支持的--timeout参数和不存在的包
     if sudo -E apt-get -y install --no-install-recommends \
         build-essential \
         ccache \
@@ -38,7 +38,6 @@ init_environment() {
         g++ \
         gawk \
         gettext \
-        java-runtime-common \
         javacc \
         libelf-dev \
         libncurses5-dev \
@@ -63,6 +62,16 @@ init_environment() {
     else
         log "ERROR" "基础依赖安装失败"
         exit 1
+    fi
+    
+    # 尝试安装Java相关依赖，失败不影响整体流程
+    log "INFO" "安装Java相关依赖..."
+    if sudo -E apt-get -y install --no-install-recommends \
+        default-jre \
+        default-jdk; then
+        log "INFO" "Java依赖安装成功"
+    else
+        log "WARN" "Java依赖安装失败，继续执行"
     fi
     
     # 尝试安装可选依赖，失败不影响整体流程
