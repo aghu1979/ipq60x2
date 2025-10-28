@@ -19,7 +19,7 @@ init_environment() {
     fi
     
     log "INFO" "更新系统包..."
-    # 使用更可靠的源，移除不支持的--timeout参数
+    # 使用更可靠的源
     if sudo -E apt-get -y update; then
         log "INFO" "系统包更新成功"
     else
@@ -27,8 +27,8 @@ init_environment() {
         exit 1
     fi
     
-    log "INFO" "安装基础依赖..."
-    # 先安装基础依赖，移除不支持的--timeout参数和不存在的包
+    log "INFO" "安装基础构建工具..."
+    # 安装基础构建工具，排除Java和Python（使用官方actions）
     if sudo -E apt-get -y install --no-install-recommends \
         build-essential \
         ccache \
@@ -43,48 +43,46 @@ init_environment() {
         libncurses5-dev \
         libncursesw5-dev \
         libssl-dev \
-        python3 \
-        python3-debian \
-        python3-distutils \
-        python3-pip \
-        python3-pyelftools \
-        python3-setuptools \
-        python3-venv \
         rsync \
         subversion \
         swig \
         unzip \
         wget \
-        python3-distutils-extra \
         zip \
-        zlib1g-dev; then
-        log "INFO" "基础依赖安装成功"
+        zlib1g-dev \
+        curl \
+        ca-certificates \
+        gnupg \
+        software-properties-common \
+        apt-transport-https \
+        lsb-release \
+        git; then
+        log "INFO" "基础构建工具安装成功"
     else
-        log "ERROR" "基础依赖安装失败"
+        log "ERROR" "基础构建工具安装失败"
         exit 1
     fi
     
-    # 尝试安装Java相关依赖，失败不影响整体流程
-    log "INFO" "安装Java相关依赖..."
-    if sudo -E apt-get -y install --no-install-recommends \
-        default-jre \
-        default-jdk; then
-        log "INFO" "Java依赖安装成功"
-    else
-        log "WARN" "Java依赖安装失败，继续执行"
+    # 清理可能存在的Android SDK和其他不需要的包
+    log "INFO" "清理不需要的包..."
+    # 清理Android相关
+    if [ -d "/usr/local/lib/android" ]; then
+        log "INFO" "发现Android SDK，正在清理..."
+        sudo rm -rf /usr/local/lib/android 2>/dev/null || true
     fi
     
-    # 尝试安装可选依赖，失败不影响整体流程
-    log "INFO" "安装可选依赖..."
-    if sudo -E apt-get -y install --no-install-recommends \
-        $(curl -fsSL is.gd/depends_ubuntu_2204 2>/dev/null | grep -v texlive-lang-greek) || \
-       sudo -E apt-get -y install --no-install-recommends \
-        quilt \
-        xterm; then
-        log "INFO" "可选依赖安装成功"
-    else
-        log "WARN" "可选依赖安装失败，继续执行"
-    fi
+    # 清理Android相关包
+    sudo apt-get -y purge android-sdk-* 2>/dev/null || true
+    sudo apt-get -y autoremove --purge 2>/dev/null || true
+    
+    # 清理不需要的语言环境
+    sudo apt-get -y purge \
+        openjdk-* \
+        default-jre \
+        default-jdk \
+        python3-* \
+        python-* \
+        2>/dev/null || true
     
     # 安装GitHub CLI
     log "INFO" "安装GitHub CLI..."
@@ -93,6 +91,7 @@ init_environment() {
     sudo apt update
     sudo apt install gh -y
     
+    # 配置时区
     log "INFO" "配置时区..."
     sudo -E systemctl daemon-reload || log "WARN" "重载系统服务失败"
     if sudo timedatectl set-timezone "$TZ"; then
@@ -101,11 +100,23 @@ init_environment() {
         log "WARN" "时区设置失败"
     fi
     
+    # 配置ccache
+    log "INFO" "配置ccache..."
+    if ! command -v ccache &> /dev/null; then
+        log "WARN" "ccache未安装"
+    else
+        # 设置ccache缓存目录
+        export CCACHE_DIR=/tmp/ccache
+        mkdir -p $CCACHE_DIR
+        log "INFO" "ccache目录设置为: $CCACHE_DIR"
+    fi
+    
     # 显示系统信息
     log "INFO" "=== 系统信息 ==="
     log "INFO" "CPU核心数: $(nproc)"
     log "INFO" "内存总量: $(free -h | grep '^Mem:' | awk '{print $2}')"
     log "INFO" "磁盘空间: $(df -h $GITHUB_WORKSPACE | tail -1 | awk '{print $4}')"
+    log "INFO" "Ubuntu版本: $(lsb_release -d -s 2>/dev/null || echo 'Unknown')"
     
     step_complete "ENV_INIT" "success"
 }
