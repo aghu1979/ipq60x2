@@ -26,69 +26,7 @@ env:
   REPORT_FILE: build_report.json
 
 jobs:
-  # ==================== 阶段一：并行构建基础环境 (调试版) ====================
-  Build-Bases:
-    if: github.event.inputs.repo_config == 'all' || github.event.inputs.repo_config == ''
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        repo_config: ['openwrt', 'immwrt', 'libwrt']
-    
-    outputs:
-      repo_short_openwrt: ${{ steps.generate_vars.outputs.repo_short_openwrt }}
-      repo_short_immwrt: ${{ steps.generate_vars.outputs.repo_short_immwrt }}
-      repo_short_libwrt: ${{ steps.generate_vars.outputs.repo_short_libwrt }}
-
-    steps:
-    - name: 初始化日志系统
-      run: |
-        cat > /tmp/logger.sh << 'EOF'
-        #!/bin/bash
-        declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
-        CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
-        LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
-        REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
-        echo "=== Build Log Started at $(date) ===" > "$LOG_FILE"
-        echo '{"build_id":"base-'${{ matrix.repo_config }}'-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
-        log() { local level="$1" message="$2" step="${3:-$(caller | awk '{print $2}')}"; local timestamp=$(date '+%Y-%m-%d %H:%M:%S'); if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then case $level in DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;; INFO) echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;; WARN) echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;; ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;; esac; echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"; fi; }
-        step_start() { local step_name="$1" description="$2"; log "INFO" "▶ 开始执行: $description" "$step_name"; }
-        step_complete() { local step_name="$1" status="$2"; if [ "$status" = "success" ]; then log "INFO" "✅ 步骤完成: $step_name" "$step_name"; elif [ "$status" = "failed" ]; then log "ERROR" "❌ 步骤失败: $step_name" "$step_name"; fi; }
-        export -f log step_start step_complete
-        EOF
-        chmod +x /tmp/logger.sh
-        echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
-        source /tmp/logger.sh
-        step_start "INIT" "初始化基础环境构建日志"
-
-    - name: 检出代码
-      uses: actions/checkout@v4
-
-    - name: 读取仓库配置
-      id: read_repo_config
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "READ_CONFIG" "读取仓库配置 (${{ matrix.repo_config }})"
-        REPO_CONFIG_FILE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/repos.json"
-        echo "DEBUG: 尝试读取配置文件: $REPO_CONFIG_FILE"
-        ls -la "${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}" || echo "DEBUG: 配置目录不存在!"
-        REPO_INFO=$(jq -r --arg repo "${{ matrix.repo_config }}" '.[$repo]' "$REPO_CONFIG_FILE")
-        if [ "$REPO_INFO" = "null" ]; then log "ERROR" "未找到仓库配置: ${{ matrix.repo_config }}"; exit 1; fi
-        echo "REPO_URL=$(echo "$REPO_INFO" | jq -r '.url')" >> $GITHUB_ENV
-        echo "REPO_BRANCH=$(echo "$REPO_INFO" | jq -r '.branch')" >> $GITHUB_ENV
-        echo "REPO_SHORT=$(echo "$REPO_INFO" | jq -r '.short')" >> $GITHUB_ENV
-        log "INFO" "仓库: ${{ matrix.repo_config }} ($REPO_URL)"
-        step_complete "READ_CONFIG" "success"
-
-    - name: 克隆源代码
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "CLONE" "克隆源代码"
-        sudo mkdir -p "$OPENWRT_PATH" && sudo chown -R $(id -u):$(id -g) "$OPENWRT_PATH"
-        git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" "$OPENWRT_PATH"
-        step_complete "CLONE" "success"
-
-    - name: 生成变量并检查配置 (调试版)
+    - name: 生成变量并检查配置 (调试版 v2)
       id: generate_vars
       run: |
         # 开启调试模式，打印所有执行的命令
@@ -152,7 +90,22 @@ jobs:
           echo -e "\033[1;44;37m 🔧 运行 defconfig 并检查 $step_name \033[0m"
           echo "=================================================================================="
           log "INFO" "运行 defconfig..."
-          make defconfig > /dev/null 2>&1
+          
+          # 修复：执行 defconfig 并捕获所有输出，包括错误
+          DEFCONFIG_OUTPUT=$(make defconfig 2>&1)
+          DEFCONFIG_EXIT_CODE=$?
+          
+          # 如果 defconfig 失败，打印错误信息并退出
+          if [ $DEFCONFIG_EXIT_CODE -ne 0 ]; then
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            echo "!!! 致命错误: 'make defconfig' 执行失败!"
+            echo "!!! 退出码: $DEFCONFIG_EXIT_CODE"
+            echo "!!! 错误信息如下:"
+            echo "$DEFCONFIG_OUTPUT"
+            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+            exit 1
+          fi
+          
           echo -e "\033[1;36mDefconfig 完成，正在分析软件包变化...\033[0m"
           echo ""
           
