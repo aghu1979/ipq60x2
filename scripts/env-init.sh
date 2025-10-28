@@ -10,20 +10,70 @@ init_environment() {
     set -euo pipefail
     trap 'log "ERROR" "命令执行失败: $BASH_COMMAND ($LINENO)"' ERR
     
+    # 尝试使用缓存的环境
+    if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
+        log "INFO" "使用缓存的环境，跳过初始化"
+        step_complete "ENV_INIT" "success"
+        return 0
+    fi
+    
     log "INFO" "更新系统包..."
-    if sudo -E apt-get -y update; then
+    # 使用更可靠的源和超时设置
+    if sudo -E apt-get -y update --timeout=60; then
         log "INFO" "系统包更新成功"
     else
         log "ERROR" "系统包更新失败"
         exit 1
     fi
     
-    log "INFO" "安装依赖..."
-    if sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204); then
-        log "INFO" "依赖安装成功"
+    log "INFO" "安装基础依赖..."
+    # 先安装基础依赖
+    if sudo -E apt-get -y install --no-install-recommends --timeout=300 \
+        build-essential \
+        ccache \
+        ecj \
+        fastjar \
+        file \
+        g++ \
+        gawk \
+        gettext \
+        java-runtime-common \
+        javacc \
+        libelf-dev \
+        libncurses5-dev \
+        libncursesw5-dev \
+        libssl-dev \
+        python3 \
+        python3-debian \
+        python3-distutils \
+        python3-pip \
+        python3-pyelftools \
+        python3-setuptools \
+        python3-venv \
+        rsync \
+        subversion \
+        swig \
+        unzip \
+        wget \
+        python3-distutils-extra \
+        zip \
+        zlib1g-dev; then
+        log "INFO" "基础依赖安装成功"
     else
-        log "ERROR" "依赖安装失败"
+        log "ERROR" "基础依赖安装失败"
         exit 1
+    fi
+    
+    # 尝试安装可选依赖，失败不影响整体流程
+    log "INFO" "安装可选依赖..."
+    if sudo -E apt-get -y install --no-install-recommends --timeout=300 \
+        $(curl -fsSL is.gd/depends_ubuntu_2204 2>/dev/null | grep -v texlive-lang-greek) || \
+       sudo -E apt-get -y install --no-install-recommends --timeout=300 \
+        quilt \
+        xterm; then
+        log "INFO" "可选依赖安装成功"
+    else
+        log "WARN" "可选依赖安装失败，继续执行"
     fi
     
     # 安装GitHub CLI
