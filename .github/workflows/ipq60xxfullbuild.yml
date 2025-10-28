@@ -78,9 +78,16 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境
+      # 初始化环境 - 修复变量引用问题
       - name: 初始化环境
         run: |
+          # 设置环境变量，指示是否使用缓存
+          if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
+            export USE_CACHE_ENV=true
+          else
+            export USE_CACHE_ENV=false
+          fi
+          
           source scripts/env-init.sh
           init_environment
 
@@ -301,9 +308,16 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境
+      # 初始化环境 - 修复变量引用问题
       - name: 初始化环境
         run: |
+          # 设置环境变量，指示是否使用缓存
+          if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
+            export USE_CACHE_ENV=true
+          else
+            export USE_CACHE_ENV=false
+          fi
+          
           source scripts/env-init.sh
           init_environment
 
@@ -544,9 +558,16 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境
+      # 初始化环境 - 修复变量引用问题
       - name: 初始化环境
         run: |
+          # 设置环境变量，指示是否使用缓存
+          if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
+            export USE_CACHE_ENV=true
+          else
+            export USE_CACHE_ENV=false
+          fi
+          
           source scripts/env-init.sh
           init_environment
 
@@ -787,9 +808,16 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境
+      # 初始化环境 - 修复变量引用问题
       - name: 初始化环境
         run: |
+          # 设置环境变量，指示是否使用缓存
+          if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
+            export USE_CACHE_ENV=true
+          else
+            export USE_CACHE_ENV=false
+          fi
+          
           source scripts/env-init.sh
           init_environment
 
