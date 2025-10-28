@@ -105,8 +105,8 @@ jobs:
           echo -e "\033[1;36m配置文件: $config_file\033[0m"
           echo ""
           
-          # 读取配置文件中的luci软件包
-          local luci_packages=$(grep "^CONFIG_PACKAGE_luci-.*=y" "$config_file" | sort || true)
+          # 读取配置文件中的luci软件包 (修复了正则表达式)
+          local luci_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" "$config_file" | sort || true)
           
           if [ -n "$luci_packages" ]; then
             echo -e "\033[1;32m发现以下 Luci 软件包:\033[0m"
@@ -139,8 +139,8 @@ jobs:
           echo -e "\033[1;36mDefconfig 完成，正在分析软件包变化...\033[0m"
           echo ""
           
-          # 读取defconfig后的luci软件包
-          local after_packages=$(grep "^CONFIG_PACKAGE_luci-.*=y" .config | sort || true)
+          # 读取defconfig后的luci软件包 (修复了正则表达式)
+          local after_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
           
           echo -e "\033[1;32mDefconfig后的最终 Luci 软件包列表:\033[0m"
           if [ -n "$after_packages" ]; then
@@ -160,7 +160,8 @@ jobs:
           # 检查是否有新增的软件包
           local found_new=false
           echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            if ! echo "$before_packages" | grep -q "^CONFIG_PACKAGE_${pkg}=y$"; then
+            # 修复：使用固定字符串匹配，避免正则表达式错误
+            if ! echo "$before_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
               if [ "$found_new" = false ]; then
                 echo -e "\033[1;32m🔍 发现新增的 Luci 软件包:\033[0m"
                 found_new=true
@@ -181,7 +182,8 @@ jobs:
           local found_missing=false
           echo "$before_packages" | while read pkg_line; do
             local pkg=$(echo "$pkg_line" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//')
-            if ! echo "$after_packages" | grep -q "^CONFIG_PACKAGE_${pkg}=y$"; then
+            # 修复：使用固定字符串匹配，避免正则表达式错误
+            if ! echo "$after_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
               if [ "$found_missing" = false ]; then
                 echo -e "\033[1;31m⚠️  发现缺失的 Luci 软件包:\033[0m"
                 found_missing=true
@@ -410,7 +412,7 @@ jobs:
           echo "=================================================================================="
           echo -e "\033[1;36m配置文件: $config_file\033[0m"
           echo ""
-          local luci_packages=$(grep "^CONFIG_PACKAGE_luci-.*=y" "$config_file" | sort || true)
+          local luci_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" "$config_file" | sort || true)
           if [ -n "$luci_packages" ]; then
             echo -e "\033[1;32m发现以下 Luci 软件包:\033[0m"
             echo "$luci_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
@@ -437,7 +439,7 @@ jobs:
           make defconfig > /dev/null 2>&1
           echo -e "\033[1;36mDefconfig 完成，正在分析软件包变化...\033[0m"
           echo ""
-          local after_packages=$(grep "^CONFIG_PACKAGE_luci-.*=y" .config | sort || true)
+          local after_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
           echo -e "\033[1;32mDefconfig后的最终 Luci 软件包列表:\033[0m"
           if [ -n "$after_packages" ]; then
             echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
@@ -452,7 +454,7 @@ jobs:
           echo -e "\033[1;34m------------------- 软件包变化分析 -------------------\033[0m"
           local found_new=false
           echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            if ! echo "$before_packages" | grep -q "^CONFIG_PACKAGE_${pkg}=y$"; then
+            if ! echo "$before_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
               if [ "$found_new" = false ]; then
                 echo -e "\033[1;32m🔍 发现新增的 Luci 软件包:\033[0m"
                 found_new=true
@@ -469,7 +471,7 @@ jobs:
           local found_missing=false
           echo "$before_packages" | while read pkg_line; do
             local pkg=$(echo "$pkg_line" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//')
-            if ! echo "$after_packages" | grep -q "^CONFIG_PACKAGE_${pkg}=y$"; then
+            if ! echo "$after_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
               if [ "$found_missing" = false ]; then
                 echo -e "\033[1;31m⚠️  发现缺失的 Luci 软件包:\033[0m"
                 found_missing=true
@@ -542,7 +544,7 @@ jobs:
         BUILD_LOG="$GITHUB_WORKSPACE/prebuild_parallel.log"
         
         # 提取所有 luci-开头的包
-        PACKAGES=$(grep "^CONFIG_PACKAGE_luci-.*=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
+        PACKAGES=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
         if [ -z "$PACKAGES" ]; then
           log "WARN" "未找到需要预编译的 Luci 软件包，跳过编译。"
           echo "status=success" >> $GITHUB_OUTPUT
@@ -573,7 +575,7 @@ jobs:
         BUILD_LOG="$GITHUB_WORKSPACE/prebuild_serial.log"
         
         # 提取所有 luci-开头的包
-        PACKAGES=$(grep "^CONFIG_PACKAGE_luci-.*=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
+        PACKAGES=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
         
         log "INFO" "开始单线程详细预编译软件包: $PACKAGES"
         if make -j1 V=s $PACKAGES > "$BUILD_LOG" 2>&1; then
@@ -675,7 +677,7 @@ jobs:
           echo "=================================================================================="
           echo -e "\033[1;36m配置文件: $config_file\033[0m"
           echo ""
-          local luci_packages=$(grep "^CONFIG_PACKAGE_luci-.*=y" "$config_file" | sort || true)
+          local luci_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" "$config_file" | sort || true)
           if [ -n "$luci_packages" ]; then
             echo -e "\033[1;32m发现以下 Luci 软件包:\033[0m"
             echo "$luci_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
@@ -702,7 +704,7 @@ jobs:
           make defconfig > /dev/null 2>&1
           echo -e "\033[1;36mDefconfig 完成，正在分析软件包变化...\033[0m"
           echo ""
-          local after_packages=$(grep "^CONFIG_PACKAGE_luci-.*=y" .config | sort || true)
+          local after_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
           echo -e "\033[1;32mDefconfig后的最终 Luci 软件包列表:\033[0m"
           if [ -n "$after_packages" ]; then
             echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
@@ -717,7 +719,7 @@ jobs:
           echo -e "\033[1;34m------------------- 软件包变化分析 -------------------\033[0m"
           local found_new=false
           echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            if ! echo "$before_packages" | grep -q "^CONFIG_PACKAGE_${pkg}=y$"; then
+            if ! echo "$before_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
               if [ "$found_new" = false ]; then
                 echo -e "\033[1;32m🔍 发现新增的 Luci 软件包:\033[0m"
                 found_new=true
@@ -734,7 +736,7 @@ jobs:
           local found_missing=false
           echo "$before_packages" | while read pkg_line; do
             local pkg=$(echo "$pkg_line" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//')
-            if ! echo "$after_packages" | grep -q "^CONFIG_PACKAGE_${pkg}=y$"; then
+            if ! echo "$after_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
               if [ "$found_missing" = false ]; then
                 echo -e "\033[1;31m⚠️  发现缺失的 Luci 软件包:\033[0m"
                 found_missing=true
