@@ -57,6 +57,24 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@main
 
+      # 缓存环境
+      - name: 缓存环境
+        id: cache_env
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-env-ubuntu-
+            ${{ env.CACHE_VERSION }}-env-
+          path: |
+            /usr/local/bin
+            /usr/local/lib
+            /usr/lib
+            /var/lib/apt
+            /var/cache/apt
+            /etc/apt
+
       # 初始化日志系统
       - name: 初始化日志系统
         continue-on-error: true
@@ -162,6 +180,7 @@ jobs:
       - name: 添加第三方软件源
         continue-on-error: true
         run: |
+          source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$REPO_SCRIPT" "软件源"
 
@@ -176,6 +195,7 @@ jobs:
       - name: 加载自定义配置
         continue-on-error: true
         run: |
+          source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$DIY_SCRIPT" "自定义"
 
@@ -283,6 +303,24 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@main
 
+      # 缓存环境
+      - name: 缓存环境
+        id: cache_env
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-env-ubuntu-
+            ${{ env.CACHE_VERSION }}-env-
+          path: |
+            /usr/local/bin
+            /usr/local/lib
+            /usr/lib
+            /var/lib/apt
+            /var/cache/apt
+            /etc/apt
+
       # 初始化日志系统
       - name: 初始化日志系统
         continue-on-error: true
@@ -388,6 +426,7 @@ jobs:
       - name: 添加第三方软件源
         continue-on-error: true
         run: |
+          source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$REPO_SCRIPT" "软件源"
 
@@ -402,6 +441,7 @@ jobs:
       - name: 加载自定义配置
         continue-on-error: true
         run: |
+          source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$DIY_SCRIPT" "自定义"
 
@@ -409,6 +449,7 @@ jobs:
       - name: 合并基础配置和Ultra配置
         continue-on-error: true
         run: |
+          source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           source scripts/config-merger.sh
           
@@ -588,6 +629,24 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@main
 
+      # 缓存环境
+      - name: 缓存环境
+        id: cache_env
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-env-ubuntu-
+            ${{ env.CACHE_VERSION }}-env-
+          path: |
+            /usr/local/bin
+            /usr/local/lib
+            /usr/lib
+            /var/lib/apt
+            /var/cache/apt
+            /etc/apt
+
       # 初始化日志系统
       - name: 初始化日志系统
         continue-on-error: true
@@ -693,6 +752,7 @@ jobs:
       - name: 添加第三方软件源
         continue-on-error: true
         run: |
+          source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$REPO_SCRIPT" "软件源"
 
@@ -707,6 +767,7 @@ jobs:
       - name: 加载自定义配置
         continue-on-error: true
         run: |
+          source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$DIY_SCRIPT" "自定义"
 
@@ -714,6 +775,7 @@ jobs:
       - name: 合并基础配置和变体配置
         continue-on-error: true
         run: |
+          source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           source scripts/config-merger.sh
           
