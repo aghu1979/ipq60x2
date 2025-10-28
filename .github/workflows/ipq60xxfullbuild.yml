@@ -26,7 +26,7 @@ env:
   REPORT_FILE: build_report.json
 
 jobs:
-  # ==================== 阶段一：并行构建基础环境 ====================
+  # ==================== 阶段一：并行构建基础环境 (调试版) ====================
   Build-Bases:
     if: github.event.inputs.repo_config == 'all' || github.event.inputs.repo_config == ''
     runs-on: ubuntu-22.04
@@ -70,6 +70,8 @@ jobs:
         source "$LOGGER_SCRIPT"
         step_start "READ_CONFIG" "读取仓库配置 (${{ matrix.repo_config }})"
         REPO_CONFIG_FILE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/repos.json"
+        echo "DEBUG: 尝试读取配置文件: $REPO_CONFIG_FILE"
+        ls -la "${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}" || echo "DEBUG: 配置目录不存在!"
         REPO_INFO=$(jq -r --arg repo "${{ matrix.repo_config }}" '.[$repo]' "$REPO_CONFIG_FILE")
         if [ "$REPO_INFO" = "null" ]; then log "ERROR" "未找到仓库配置: ${{ matrix.repo_config }}"; exit 1; fi
         echo "REPO_URL=$(echo "$REPO_INFO" | jq -r '.url')" >> $GITHUB_ENV
@@ -86,11 +88,32 @@ jobs:
         git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" "$OPENWRT_PATH"
         step_complete "CLONE" "success"
 
-    - name: 生成变量并检查配置
+    - name: 生成变量并检查配置 (调试版)
       id: generate_vars
       run: |
+        # 开启调试模式，打印所有执行的命令
+        set -x
+        
         source "$LOGGER_SCRIPT"
         step_start "GEN_VARS" "生成构建变量并检查配置"
+        
+        # 打印关键环境变量和路径
+        echo "DEBUG: GITHUB_WORKSPACE = $GITHUB_WORKSPACE"
+        echo "DEBUG: OPENWRT_PATH = $OPENWRT_PATH"
+        echo "DEBUG: CONFIG_BASE_DIR = $CONFIG_BASE_DIR"
+        echo "DEBUG: REPO_SHORT = $REPO_SHORT"
+        
+        # 检查配置目录是否存在
+        CONFIG_DIR_FULL_PATH="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"
+        echo "DEBUG: 检查配置目录: $CONFIG_DIR_FULL_PATH"
+        if [ ! -d "$CONFIG_DIR_FULL_PATH" ]; then
+          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+          echo "!!! 错误: 配置目录不存在: $CONFIG_DIR_FULL_PATH"
+          echo "!!! 请检查您的仓库中是否包含 'configs' 文件夹。"
+          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+          exit 1
+        fi
+        ls -la "$CONFIG_DIR_FULL_PATH"
         
         # 封装配置检查函数
         check_luci_packages() {
@@ -120,7 +143,6 @@ jobs:
           echo ""
         }
         
-        # 封装defconfig后检查函数
         check_defconfig_packages() {
           local before_packages="$1"
           local step_name="$2"
@@ -197,11 +219,33 @@ jobs:
         
         find_config_file() { local base_name="$1"; local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"; for ext in ".config" ".config.txt"; do if [ -f "${config_dir}/${base_name}${ext}" ]; then echo "${config_dir}/${base_name}${ext}"; return 0; fi; done; return 1; }
         
-        # 查找配置文件
+        # 查找配置文件并增加调试信息
+        echo "DEBUG: 正在查找基础配置文件 'base_ipq60xx'..."
         CONFIG_BASE=$(find_config_file "base_ipq60xx")
+        if [ $? -ne 0 ]; then
+          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+          echo "!!! 错误: 找不到基础配置文件 'base_ipq60xx.config'!"
+          echo "!!! 请检查它是否存在于 $CONFIG_DIR_FULL_PATH 目录中。"
+          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+          exit 1
+        fi
+        echo "DEBUG: 找到基础配置文件: $CONFIG_BASE"
+
+        echo "DEBUG: 正在查找分支配置文件 'base_${REPO_SHORT}'..."
         CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
+        if [ $? -ne 0 ]; then
+          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+          echo "!!! 错误: 找不到分支配置文件 'base_${REPO_SHORT}.config'!"
+          echo "!!! 请检查它是否存在于 $CONFIG_DIR_FULL_PATH 目录中。"
+          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+          exit 1
+        fi
+        echo "DEBUG: 找到分支配置文件: $CONFIG_BRANCH"
         
-        # 修复：直接调用函数，不捕获输出，让报告显示在控制台
+        # 关闭调试模式，避免输出过多
+        set +x
+        
+        # 直接调用函数，不捕获输出
         check_luci_packages "$CONFIG_BASE" "基础配置"
         check_luci_packages "$CONFIG_BRANCH" "分支配置"
         
@@ -209,10 +253,10 @@ jobs:
         log "INFO" "合并基础配置和分支配置..."
         cat "$CONFIG_BASE" "$CONFIG_BRANCH" > .config
         
-        # 修复：直接调用函数，不捕获输出
+        # 直接调用函数，不捕获输出
         check_luci_packages ".config" "合并后配置"
         
-        # 修复：先获取合并后的包列表，再调用检查函数
+        # 先获取合并后的包列表，再调用检查函数
         MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
         check_defconfig_packages "$MERGED_LUCI" "基础环境"
         
@@ -232,109 +276,6 @@ jobs:
         fi
         log "INFO" "设备信息: $DEVICE_INFO"
         step_complete "GEN_VARS" "success"
-
-    - name: 缓存工具链和Feeds
-      uses: actions/cache@v4
-      with:
-        key: ${{ env.CACHE_VERSION }}-base-${{ matrix.repo_config }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default') }}
-        restore-keys: |
-          ${{ env.CACHE_VERSION }}-base-${{ matrix.repo_config }}-${{ env.REPO_BRANCH }}-
-          ${{ env.CACHE_VERSION }}-base-${{ matrix.repo_config }}-
-        path: |
-          ${{ env.OPENWRT_PATH }}/staging_dir
-          ${{ env.OPENWRT_PATH }}/dl
-          ${{ env.OPENWRT_PATH }}/feeds
-          ${{ env.OPENWRT_PATH }}/build_dir
-
-    - name: 准备构建环境
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "PREP_ENV" "准备构建环境"
-        cd "$OPENWRT_PATH"
-        
-        log "INFO" "更新feeds..."
-        ./scripts/feeds update -a
-        
-        log "INFO" "安装feeds..."
-        ./scripts/feeds install -a
-        
-        if [ -f "${{ env.DIY_SCRIPT_DIR }}/diy.sh" ]; then 
-          log "INFO" "执行自定义脚本..."
-          chmod +x "${{ env.DIY_SCRIPT_DIR }}/diy.sh" && "${{ env.DIY_SCRIPT_DIR }}/diy.sh"
-        fi
-        
-        log "INFO" "运行defconfig解析依赖..."
-        make defconfig
-        
-        step_complete "PREP_ENV" "success"
-
-    - name: 编译基础环境（并行模式）
-      id: compile_base_parallel
-      continue-on-error: true
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "COMPILE_BASE_PARALLEL" "编译基础环境（并行模式）"
-        cd "$OPENWRT_PATH"
-        
-        BUILD_LOG="$GITHUB_WORKSPACE/build_parallel.log"
-        
-        log "INFO" "开始并行编译基础环境..."
-        if make -j$(nproc) > "$BUILD_LOG" 2>&1; then
-          log "INFO" "并行编译成功"
-          echo "status=success" >> $GITHUB_OUTPUT
-          step_complete "COMPILE_BASE_PARALLEL" "success"
-        else
-          log "ERROR" "并行编译失败，将尝试单线程编译"
-          echo "status=failed" >> $GITHUB_OUTPUT
-          step_complete "COMPILE_BASE_PARALLEL" "failed"
-          exit 1
-        fi
-
-    - name: 编译基础环境（单线程模式）
-      id: compile_base_serial
-      if: steps.compile_base_parallel.outcome == 'failure'
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "COMPILE_BASE_SERIAL" "编译基础环境（单线程详细模式）"
-        cd "$OPENWRT_PATH"
-        
-        BUILD_LOG="$GITHUB_WORKSPACE/build_serial.log"
-        
-        log "INFO" "开始单线程详细编译基础环境..."
-        if make -j1 V=s > "$BUILD_LOG" 2>&1; then
-          log "INFO" "单线程编译成功"
-          echo "status=success" >> $GITHUB_OUTPUT
-          step_complete "COMPILE_BASE_SERIAL" "success"
-        else
-          log "ERROR" "单线程编译也失败了"
-          
-          log "ERROR" "编译错误详情（最后20行）："
-          tail -20 "$BUILD_LOG" | while read line; do
-            log "ERROR" "$line"
-          done
-          
-          echo "status=failed" >> $GITHUB_OUTPUT
-          step_complete "COMPILE_BASE_SERIAL" "failed"
-          exit 1
-        fi
-
-    - name: 上传构建日志
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-logs-${{ matrix.repo_config }}
-        path: |
-          ${{ github.workspace }}/build_parallel.log
-          ${{ github.workspace }}/build_serial.log
-        retention-days: 7
-
-    - name: 上传基础环境
-      if: steps.compile_base_parallel.outcome == 'success' || steps.compile_base_serial.outcome == 'success'
-      uses: actions/upload-artifact@v4
-      with:
-        name: base-env-${{ matrix.repo_config }}
-        path: ${{ env.OPENWRT_PATH }}
-        retention-days: 7
 
   # ==================== 阶段二：集中预编译通用软件包 ====================
   Prebuild-Packages:
