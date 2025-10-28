@@ -13,9 +13,13 @@ init_logger() {
 declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
 CURRENT_LEVEL=${LOG_LEVELS[$LOG_LEVEL]}
 
-# 日志文件
+# 日志文件 - 修复路径问题
 LOG_FILE="$GITHUB_WORKSPACE/$LOG_FILE"
 REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
+
+# 确保日志目录存在
+mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$REPORT_FILE")"
 
 # 初始化日志文件
 echo "=== Build Log Started at $(date) ===" > "$LOG_FILE"
