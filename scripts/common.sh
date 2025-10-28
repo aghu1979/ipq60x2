@@ -131,5 +131,31 @@ wait_and_kill_monitor() {
     fi
 }
 
+# 执行自定义脚本
+execute_custom_script() {
+    local script_path="$1"
+    local script_name="$2"
+    
+    if [ -f "$script_path" ]; then
+        log "INFO" "执行${script_name}脚本: $script_path"
+        chmod +x "$script_path" || {
+            log "ERROR" "设置${script_name}脚本权限失败"
+            return 1
+        }
+        
+        cd "$OPENWRT_PATH"
+        if "$script_path"; then
+            log "INFO" "${script_name}脚本执行成功"
+            return 0
+        else
+            log "ERROR" "${script_name}脚本执行失败"
+            return 1
+        fi
+    else
+        log "WARN" "${script_name}脚本不存在，跳过"
+        return 0
+    fi
+}
+
 # 导出函数
-export -f find_config_file check_result show_progress create_error_monitor wait_and_kill_monitor
+export -f find_config_file check_result show_progress create_error_monitor wait_and_kill_monitor execute_custom_script
