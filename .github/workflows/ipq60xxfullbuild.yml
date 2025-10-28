@@ -1,535 +1,802 @@
-name: IPQ60XX-Triple-Stage-Build
+name: IPQ60XX-Multi-Stage-Build
 
 on:
   workflow_dispatch:
-    inputs:
-      repo_config:
-        description: '选择要构建的仓库 (留空则构建所有)'
-        required: false
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - openwrt
-          - immwrt
-          - libwrt
   workflow_call:
 
 env:
+  # 基础配置
   TZ: Asia/Shanghai
   OPENWRT_PATH: /mnt/openwrt
+  
+  # 仓库配置 - 使用变量以便扩展
   CONFIG_BASE_DIR: configs
   DIY_SCRIPT_DIR: scripts
-  CACHE_VERSION: v3
-  BUILD_LOG_LEVEL: INFO
-  BUILD_LOG_FILE: build.log
+  
+  # 构建配置
+  UPLOAD_BIN_DIR: false
+  FIRMWARE_RELEASE: false  # 根据要求，不需要发布release
+  
+  # 缓存配置 - 移除日期，提高缓存命中率
+  CACHE_VERSION: v2
+  
+  # 日志配置
+  LOG_LEVEL: INFO  # DEBUG, INFO, WARN, ERROR
+  LOG_FILE: build.log
   REPORT_FILE: build_report.json
-  FILE_DATE: ${{ github.run_number }}-${{ github.sha }}
 
 jobs:
-  # ==================== 阶段一：构建基础环境 ====================
-  Build-Bases:
+  # 阶段1: 并行编译3个分支的基础环境
+  Build-Base:
+    name: 构建基础环境
+    continue-on-error: true
     runs-on: ubuntu-22.04
     strategy:
-      fail-fast: false
+      fail-fast: false  # 关键：不快速失败，让所有任务都执行
       matrix:
-        repo_config: ['openwrt', 'immwrt', 'libwrt']
-        include:
-          - repo_config: openwrt
-            repo_url: https://github.com/openwrt/openwrt.git
-            repo_branch: master
-          - repo_config: immwrt
-            repo_url: https://github.com/immortalwrt/immortalwrt.git
-            repo_branch: master
-          - repo_config: libwrt
-            repo_url: https://github.com/LibreWrt/LibreWrt.git
-            repo_branch: master
+        # 定义要并行构建的仓库配置
+        repo_config: 
+          - immwrt
+          - openwrt
+          - libwrt
+        # 芯片系列
+        chip_family:
+          - ipq60xx
     
+    # 使用环境变量设置芯片系列和仓库配置
+    env:
+      CHIP_FAMILY: ${{ matrix.chip_family }}
+      REPO_CONFIG: ${{ matrix.repo_config }}
+      BUILD_ID: ${{ github.run_id }}-${{ matrix.repo_config }}-${{ matrix.chip_family }}-base
+      # 设置GitHub CLI token
+      GH_TOKEN: ${{ github.token }}
+      
     steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
+      # 检出代码
+      - name: 检出代码
+        continue-on-error: true
+        uses: actions/checkout@main
 
-    - name: 初始化日志系统
-      run: |
-        chmod +x scripts/logger.sh
-        source scripts/logger.sh "base-${{ matrix.repo_config }}-$(date +%s)"
-        step_start "INIT" "初始化基础构建日志 (${{ matrix.repo_config }})"
+      # 初始化日志系统
+      - name: 初始化日志系统
+        continue-on-error: true
+        run: |
+          source scripts/logger.sh
+          init_logger "$BUILD_ID"
 
-    - name: 克隆仓库
-      run: |
-        source scripts/logger.sh
-        step_start "CLONE_REPO" "克隆 ${{ matrix.repo_config }} 仓库"
-        
-        # 创建目录
-        sudo mkdir -p ${{ env.OPENWRT_PATH }}
-        sudo chown $USER:$USER ${{ env.OPENWRT_PATH }}
-        
-        # 克隆仓库
-        git clone ${{ matrix.repo_url }} ${{ env.OPENWRT_PATH }}
-        cd ${{ env.OPENWRT_PATH }}
-        git checkout ${{ matrix.repo_branch }}
-        
-        step_complete "CLONE_REPO" "success"
+      # 初始化环境
+      - name: 初始化环境
+        continue-on-error: true
+        run: |
+          source scripts/env-init.sh
+          init_environment
 
-    - name: 生成变量并检查配置
-      id: generate_vars
-      run: |
-        source scripts/logger.sh
-        step_start "GEN_VARS" "生成构建变量并检查配置"
-        
-        # 设置REPO_SHORT变量
-        REPO_SHORT="${{ matrix.repo_config }}"
-        echo "REPO_SHORT=$REPO_SHORT" >> $GITHUB_ENV
-        
-        # 加载软件包检查脚本
-        chmod +x scripts/package_checker.sh
-        source scripts/package_checker.sh
-        
-        # 查找配置文件
-        CONFIG_BASE=$(find_config_file "base_ipq60xx")
-        CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
-        
-        # 检查配置文件
-        check_luci_packages "$CONFIG_BASE" "基础配置"
-        check_luci_packages "$CONFIG_BRANCH" "分支配置"
-        
-        # 合并配置文件
-        log "INFO" "合并基础配置和分支配置..."
-        cat "$CONFIG_BASE" "$CONFIG_BRANCH" > .config
-        
-        # 检查合并后的配置
-        check_luci_packages ".config" "合并后配置"
-        
-        # 保存合并后的软件包列表到文件
-        grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort > /tmp/merged_luci.txt
-        
-        # 设置输出变量
-        echo "repo_short_${REPO_SHORT}=${REPO_SHORT}" >> $GITHUB_OUTPUT
-        
-        # 提取设备信息
-        DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_BOARD=" | awk -F '"' '{print $2}' || echo "未知")
-        if [ "$DEVICE_INFO" = "未知" ]; then
-            DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_ARCH_PACKAGES=" | awk -F '"' '{print $2}' || echo "未知")
-        fi
-        log "INFO" "设备信息: $DEVICE_INFO"
-        step_complete "GEN_VARS" "success"
+      # 读取仓库配置
+      - name: 读取仓库配置
+        continue-on-error: true
+        run: |
+          source scripts/repo-config.sh
+          read_repo_config "$REPO_CONFIG"
 
-    - name: 运行defconfig
-      run: |
-        source scripts/logger.sh
-        step_start "DEFCONFIG" "运行defconfig"
-        cd ${{ env.OPENWRT_PATH }}
-        
-        # 加载软件包检查脚本
-        source scripts/package_checker.sh
-        
-        # 运行defconfig
-        run_defconfig
-        
-        step_complete "DEFCONFIG" "success"
+      # 克隆源代码
+      - name: 克隆源代码
+        continue-on-error: true
+        run: |
+          source scripts/source-clone.sh
+          clone_source "$REPO_URL" "$REPO_BRANCH"
 
-    - name: 生成软件包对比报告
-      run: |
-        source scripts/logger.sh
-        step_start "PACKAGE_REPORT" "生成软件包对比报告"
-        cd ${{ env.OPENWRT_PATH }}
-        
-        # 加载软件包检查脚本
-        source scripts/package_checker.sh
-        
-        # 从文件读取之前的软件包列表
-        MERGED_LUCI=$(cat /tmp/merged_luci.txt)
-        
-        # 生成对比报告
-        generate_package_report "$MERGED_LUCI" "基础环境"
-        
-        step_complete "PACKAGE_REPORT" "success"
+      # 生成变量
+      - name: 生成变量
+        continue-on-error: true
+        run: |
+          source scripts/vars-generator.sh
+          generate_variables "$CHIP_FAMILY" "$REPO_SHORT" "$REPO_URL"
 
-    - name: 安装依赖
-      run: |
-        source scripts/logger.sh
-        step_start "INSTALL_DEPS" "安装构建依赖"
-        cd ${{ env.OPENWRT_PATH }}
-        
-        # 更新包列表并安装依赖
-        sudo apt-get update
-        sudo apt-get install -y build-essential clang flex bison g++ gawk \
-          gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
-          python3-distutils python3-setuptools python3-yaml rsync unzip \
-          zlib1g-dev file swig
-        
-        # 安装OpenWrt特定的依赖
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a
-        
-        step_complete "INSTALL_DEPS" "success"
+      # 设置缓存
+      - name: 设置缓存
+        continue-on-error: true
+        run: |
+          source scripts/cache-manager.sh
+          setup_caches "$SOURCE_REPO" "$REPO_BRANCH" "$DEVICE_TARGET" "$DEVICE_SUBTARGET" "$FEEDS_HASH"
 
-    - name: 构建基础环境
-      run: |
-        source scripts/logger.sh
-        step_start "BUILD_BASE" "构建基础环境"
-        cd ${{ env.OPENWRT_PATH }}
-        
-        # 构建工具链
-        if make -j$(nproc) toolchain/install > /dev/null 2>&1; then
-          log "INFO" "工具链构建成功"
-        else
-          log "ERROR" "工具链构建失败"
-          exit 1
-        fi
-        
-        step_complete "BUILD_BASE" "success"
+      # 缓存工具链
+      - name: 缓存工具链
+        id: cache_toolchain
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.TOOLCHAIN_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-
+            ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
+            ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-
+            ${{ env.CACHE_VERSION }}-toolchain-
+          path: |
+            ${{ env.OPENWRT_PATH }}/.ccache
+            ${{ env.OPENWRT_PATH }}/staging_dir
 
-    - name: 上传基础环境
-      uses: actions/upload-artifact@v4
-      with:
-        name: base-env-${{ matrix.repo_config }}
-        path: ${{ env.OPENWRT_PATH }}
-        retention-days: 7
+      # 缓存Feeds
+      - name: 缓存Feeds
+        id: cache_feeds
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.FEEDS_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
+            ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-
+            ${{ env.CACHE_VERSION }}-feeds-
+          path: |
+            ${{ env.OPENWRT_PATH }}/feeds
+            ${{ env.OPENWRT_PATH }}/dl
+            ${{ env.OPENWRT_PATH }}/package/feeds
 
-  # ==================== 阶段二：集中预编译通用软件包 ====================
-  Prebuild-Packages:
-    needs: Build-Bases
-    runs-on: ubuntu-22.04
-    steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
+      # 缓存DL软件包
+      - name: 缓存DL软件包
+        id: cache_dl
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.DL_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-
+            ${{ env.CACHE_VERSION }}-dl-
+          path: |
+            ${{ env.OPENWRT_PATH }}/dl
 
-    - name: 初始化日志系统
-      run: |
-        chmod +x scripts/logger.sh
-        source scripts/logger.sh "prebuild-$(date +%s)"
-        step_start "INIT" "初始化预编译构建日志"
+      # 检查缓存状态
+      - name: 检查缓存状态
+        continue-on-error: true
+        run: |
+          source scripts/cache-manager.sh
+          check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
 
-    - name: 创建目录
-      run: |
-        source scripts/logger.sh
-        sudo mkdir -p ${{ env.OPENWRT_PATH }}
-        sudo chown $USER:$USER ${{ env.OPENWRT_PATH }}
+      # 刷新缓存
+      - name: 刷新缓存
+        continue-on-error: true
+        run: |
+          source scripts/cache-manager.sh
+          refresh_cache
 
-    - name: 下载基础环境
-      uses: actions/download-artifact@v4
-      with:
-        name: base-env-openwrt
-        path: ${{ env.OPENWRT_PATH }}
+      # 添加第三方软件源
+      - name: 添加第三方软件源
+        continue-on-error: true
+        run: |
+          source "${GITHUB_WORKSPACE}/scripts/common.sh"
+          execute_custom_script "$REPO_SCRIPT" "软件源"
 
-    - name: 生成"超级配置"并检查
-      id: generate_super_config
-      run: |
-        source scripts/logger.sh
-        step_start "GEN_SUPER_CONFIG" "生成包含所有变体软件包的超级配置"
-        cd "$OPENWRT_PATH"
-        
-        # 加载软件包检查脚本
-        source scripts/package_checker.sh
-        
-        # 创建基础配置
-        echo "CONFIG_TARGET_ipq60xx=y" > .config
-        echo "CONFIG_TARGET_ipq60xx_DEVICE_generic=y" >> .config
-        echo "CONFIG_TARGET_DEVICE_ipq60xx_generic=y" >> .config
-        
-        # 检查基础配置
-        check_luci_packages ".config" "基础配置"
-        
-        # 合并所有变体配置
-        for variant in Pro Max Ultra; do
-          log "INFO" "合并 $variant 配置"
-          if [ -f "${{ env.CONFIG_BASE_DIR }}/${variant}.config" ]; then
-            check_luci_packages "${{ env.CONFIG_BASE_DIR }}/${variant}.config" "$variant 配置"
-            cat "${{ env.CONFIG_BASE_DIR }}/${variant}.config" >> .config
-          else
-            log "WARN" "配置文件不存在: ${{ env.CONFIG_BASE_DIR }}/${variant}.config"
-          fi
-        done
-        
-        # 检查超级配置
-        check_luci_packages ".config" "超级配置合并后"
-        
-        # 保存合并后的软件包列表到文件
-        grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort > /tmp/super_luci.txt
-        
-        log "INFO" "超级配置生成完成"
-        step_complete "GEN_SUPER_CONFIG" "success"
+      # 安装Feeds
+      - name: 安装Feeds
+        continue-on-error: true
+        run: |
+          source scripts/feeds-installer.sh
+          install_feeds "${{ steps.cache_feeds.outputs.cache-hit }}"
 
-    - name: 运行defconfig
-      run: |
-        source scripts/logger.sh
-        step_start "DEFCONFIG" "运行defconfig"
-        cd "$OPENWRT_PATH"
-        
-        # 加载软件包检查脚本
-        source scripts/package_checker.sh
-        
-        # 运行defconfig
-        run_defconfig
-        
-        step_complete "DEFCONFIG" "success"
+      # 加载自定义配置
+      - name: 加载自定义配置
+        continue-on-error: true
+        run: |
+          source "${GITHUB_WORKSPACE}/scripts/common.sh"
+          execute_custom_script "$DIY_SCRIPT" "自定义"
 
-    - name: 生成软件包对比报告
-      run: |
-        source scripts/logger.sh
-        step_start "PACKAGE_REPORT" "生成软件包对比报告"
-        cd "$OPENWRT_PATH"
-        
-        # 加载软件包检查脚本
-        source scripts/package_checker.sh
-        
-        # 从文件读取之前的软件包列表
-        SUPER_LUCI=$(cat /tmp/super_luci.txt)
-        
-        # 生成对比报告
-        generate_package_report "$SUPER_LUCI" "超级配置"
-        
-        step_complete "PACKAGE_REPORT" "success"
+      # 合并配置文件
+      - name: 合并配置文件
+        continue-on-error: true
+        run: |
+          source scripts/config-merger.sh
+          merge_configs "$CONFIG_BASE" "$CONFIG_BRANCH"
 
-    - name: 缓存预编译软件包
-      uses: actions/cache@v4
-      with:
-        key: ${{ env.CACHE_VERSION }}-prebuilt-packages-ipq60xx-${{ hashFiles('configs/Pro.config', 'configs/Max.config', 'configs/Ultra.config') }}
-        path: |
-          ${{ env.OPENWRT_PATH }}/staging_dir
-          ${{ env.OPENWRT_PATH }}/build_dir
-          ${{ env.OPENWRT_PATH }}/dl
+      # 下载软件包
+      - name: 下载软件包
+        continue-on-error: true
+        run: |
+          source scripts/builder.sh
+          download_packages
 
-    - name: 预编译所有第三方软件包（并行模式）
-      id: prebuild_parallel
-      continue-on-error: true
-      run: |
-        source scripts/logger.sh
-        step_start "PREBUILD_PKGS_PARALLEL" "预编译所有第三方软件包（并行模式）"
-        cd "$OPENWRT_PATH"
-        
-        BUILD_LOG="$GITHUB_WORKSPACE/prebuild_parallel.log"
-        
-        PACKAGES=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
-        if [ -z "$PACKAGES" ]; then
-          log "WARN" "未找到需要预编译的 Luci 软件包，跳过编译。"
-          echo "status=success" >> $GITHUB_OUTPUT
-          step_complete "PREBUILD_PKGS_PARALLEL" "success"
-        else
-          log "INFO" "即将预编译的软件包: $PACKAGES"
-          if make -j$(nproc) $PACKAGES > "$BUILD_LOG" 2>&1; then
-            log "INFO" "并行预编译成功"
-            echo "status=success" >> $GITHUB_OUTPUT
-            step_complete "PREBUILD_PKGS_PARALLEL" "success"
-          else
-            log "ERROR" "并行预编译失败，将尝试单线程编译"
-            echo "status=failed" >> $GITHUB_OUTPUT
-            step_complete "PREBUILD_PKGS_PARALLEL" "failed"
-            exit 1
-          fi
-        fi
+      # 清理构建环境
+      - name: 清理构建环境
+        continue-on-error: true
+        run: |
+          source scripts/builder.sh
+          clean_environment
 
-    - name: 预编译所有第三方软件包（单线程模式）
-      id: prebuild_serial
-      if: steps.prebuild_parallel.outcome == 'failure'
-      run: |
-        source scripts/logger.sh
-        step_start "PREBUILD_PKGS_SERIAL" "预编译所有第三方软件包（单线程详细模式）"
-        cd "$OPENWRT_PATH"
-        
-        BUILD_LOG="$GITHUB_WORKSPACE/prebuild_serial.log"
-        
-        PACKAGES=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
-        
-        log "INFO" "开始单线程详细预编译软件包: $PACKAGES"
-        if make -j1 V=s $PACKAGES > "$BUILD_LOG" 2>&1; then
-          log "INFO" "单线程预编译成功"
-          echo "status=success" >> $GITHUB_OUTPUT
-          step_complete "PREBUILD_PKGS_SERIAL" "success"
-        else
-          log "ERROR" "单线程预编译也失败了"
-          
-          log "ERROR" "预编译错误详情（最后20行）："
-          tail -20 "$BUILD_LOG" | while read line; do
-            log "ERROR" "$line"
-          done
-          
-          echo "status=failed" >> $GITHUB_OUTPUT
-          step_complete "PREBUILD_PKGS_SERIAL" "failed"
-          exit 1
-        fi
+      # 编译基础环境
+      - name: 编译基础环境
+        id: compile
+        continue-on-error: true
+        run: |
+          source scripts/builder.sh
+          compile_firmware "基础环境"
 
-    - name: 上传预编译日志
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: prebuild-logs
-        path: |
-          ${{ github.workspace }}/prebuild_parallel.log
-          ${{ github.workspace }}/prebuild_serial.log
-        retention-days: 7
+      # 生成构建报告
+      - name: 生成构建报告
+        if: always()
+        continue-on-error: true
+        run: |
+          source scripts/reporter.sh
+          generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
 
-    - name: 上传预编译软件包
-      if: steps.prebuild_parallel.outcome == 'success' || steps.prebuild_serial.outcome == 'success'
-      uses: actions/upload-artifact@v4
-      with:
-        name: prebuilt-packages-ipq60xx
-        path: ${{ env.OPENWRT_PATH }}/staging_dir
-        retention-days: 7
+      # 检查空间使用情况
+      - name: 检查空间使用情况
+        if: (!cancelled())
+        continue-on-error: true
+        run: |
+          source scripts/reporter.sh
+          check_disk_space
 
-  # ==================== 阶段三：并行组装变体固件 ====================
-  Assemble-Variants:
-    needs: [Build-Bases, Prebuild-Packages]
-    if: success() && needs.Prebuild-Packages.result == 'success'
+      # 上传构建日志和报告
+      - name: 上传构建日志和报告
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ env.SOURCE_REPO }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          path: |
+            ${{ github.workspace }}/build.log
+            ${{ github.workspace }}/build_report.json
+            ${{ github.workspace }}/build_summary.txt
+            ${{ github.workspace }}/luci_report.md
+            ${{ github.workspace }}/luci_defconfig_report.md
+          retention-days: 30
+
+      # 上传基础环境到Artifact
+      - name: 上传基础环境到Artifact
+        if: steps.compile.outputs.status == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ env.SOURCE_REPO }}-base-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          path: |
+            ${{ env.OPENWRT_PATH }}/bin
+            ${{ env.OPENWRT_PATH }}/.config
+          retention-days: 30
+
+  # 阶段2: 编译Ultra配置的Luci软件包
+  Build-Ultra-Luci:
+    name: 编译Ultra配置的Luci软件包
+    needs: Build-Base
+    continue-on-error: true
     runs-on: ubuntu-22.04
     strategy:
-      fail-fast: false
+      fail-fast: false  # 关键：不快速失败，让所有任务都执行
       matrix:
-        repo: ['openwrt', 'immwrt', 'libwrt']
-        variant: ['Pro', 'Max', 'Ultra']
+        # 定义要并行构建的仓库配置
+        repo_config: 
+          - immwrt
+          - openwrt
+          - libwrt
+        # 芯片系列
+        chip_family:
+          - ipq60xx
     
+    # 使用环境变量设置芯片系列和仓库配置
+    env:
+      CHIP_FAMILY: ${{ matrix.chip_family }}
+      REPO_CONFIG: ${{ matrix.repo_config }}
+      BUILD_ID: ${{ github.run_id }}-${{ matrix.repo_config }}-${{ matrix.chip_family }}-ultra-luci
+      # 设置GitHub CLI token
+      GH_TOKEN: ${{ github.token }}
+      
     steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
+      # 检出代码
+      - name: 检出代码
+        continue-on-error: true
+        uses: actions/checkout@main
 
-    - name: 初始化日志系统
-      run: |
-        chmod +x scripts/logger.sh
-        source scripts/logger.sh "variant-${{ matrix.repo }}-${{ matrix.variant }}-$(date +%s)"
-        step_start "INIT" "初始化变体组装日志 (${{ matrix.repo }}-${{ matrix.variant }})"
+      # 初始化日志系统
+      - name: 初始化日志系统
+        continue-on-error: true
+        run: |
+          source scripts/logger.sh
+          init_logger "$BUILD_ID"
 
-    - name: 创建目录
-      run: |
-        source scripts/logger.sh
-        sudo mkdir -p ${{ env.OPENWRT_PATH }}
-        sudo chown $USER:$USER ${{ env.OPENWRT_PATH }}
+      # 初始化环境
+      - name: 初始化环境
+        continue-on-error: true
+        run: |
+          source scripts/env-init.sh
+          init_environment
 
-    - name: 下载基础环境
-      uses: actions/download-artifact@v4
-      with:
-        name: base-env-${{ matrix.repo }}
-        path: ${{ env.OPENWRT_PATH }}
+      # 读取仓库配置
+      - name: 读取仓库配置
+        continue-on-error: true
+        run: |
+          source scripts/repo-config.sh
+          read_repo_config "$REPO_CONFIG"
 
-    - name: 下载预编译软件包
-      uses: actions/download-artifact@v4
-      with:
-        name: prebuilt-packages-ipq60xx
-        path: ${{ env.OPENWRT_PATH }}/staging_dir
+      # 克隆源代码
+      - name: 克隆源代码
+        continue-on-error: true
+        run: |
+          source scripts/source-clone.sh
+          clone_source "$REPO_URL" "$REPO_BRANCH"
 
-    - name: 准备变体配置并检查
-      run: |
-        source scripts/logger.sh
-        step_start "PREP_VARIANT" "准备变体配置 (${{ matrix.variant }})"
-        cd "$OPENWRT_PATH"
-        
-        # 加载软件包检查脚本
-        source scripts/package_checker.sh
-        
-        # 查找配置文件
-        CONFIG_BASE=$(find_config_file "base_ipq60xx")
-        CONFIG_VARIANT=$(find_config_file "${{ matrix.variant }}")
-        
-        # 检查配置文件
-        check_luci_packages "$CONFIG_BASE" "基础配置"
-        check_luci_packages "$CONFIG_VARIANT" "${{ matrix.variant }} 配置"
-        
-        # 合并配置文件
-        cat "$CONFIG_BASE" "$CONFIG_VARIANT" > .config.tmp && mv .config.tmp .config
-        
-        # 检查合并后的配置
-        check_luci_packages ".config" "变体合并后配置"
-        
-        # 保存合并后的软件包列表到文件
-        grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort > /tmp/variant_luci.txt
-        
-        step_complete "PREP_VARIANT" "success"
+      # 生成变量
+      - name: 生成变量
+        continue-on-error: true
+        run: |
+          source scripts/vars-generator.sh
+          generate_variables "$CHIP_FAMILY" "$REPO_SHORT" "$REPO_URL"
 
-    - name: 运行defconfig
-      run: |
-        source scripts/logger.sh
-        step_start "DEFCONFIG" "运行defconfig"
-        cd "$OPENWRT_PATH"
-        
-        # 加载软件包检查脚本
-        source scripts/package_checker.sh
-        
-        # 运行defconfig
-        run_defconfig
-        
-        step_complete "DEFCONFIG" "success"
+      # 设置缓存
+      - name: 设置缓存
+        continue-on-error: true
+        run: |
+          source scripts/cache-manager.sh
+          setup_caches "$SOURCE_REPO" "$REPO_BRANCH" "$DEVICE_TARGET" "$DEVICE_SUBTARGET" "$FEEDS_HASH"
 
-    - name: 生成软件包对比报告
-      run: |
-        source scripts/logger.sh
-        step_start "PACKAGE_REPORT" "生成软件包对比报告"
-        cd "$OPENWRT_PATH"
-        
-        # 加载软件包检查脚本
-        source scripts/package_checker.sh
-        
-        # 从文件读取之前的软件包列表
-        VARIANT_LUCI=$(cat /tmp/variant_luci.txt)
-        
-        # 生成对比报告
-        generate_package_report "$VARIANT_LUCI" "变体 ${{ matrix.variant }}"
-        
-        step_complete "PACKAGE_REPORT" "success"
+      # 缓存工具链
+      - name: 缓存工具链
+        id: cache_toolchain
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.TOOLCHAIN_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-
+            ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
+            ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-
+            ${{ env.CACHE_VERSION }}-toolchain-
+          path: |
+            ${{ env.OPENWRT_PATH }}/.ccache
+            ${{ env.OPENWRT_PATH }}/staging_dir
 
-    - name: 组装固件（并行模式）
-      id: assemble_parallel
-      continue-on-error: true
-      run: |
-        source scripts/logger.sh
-        step_start "ASSEMBLE_FIRMWARE_PARALLEL" "组装最终固件（并行模式）"
-        cd "$OPENWRT_PATH"
-        
-        BUILD_LOG="$GITHUB_WORKSPACE/assemble_parallel.log"
-        
-        if make -j$(nproc) > "$BUILD_LOG" 2>&1; then
-          log "INFO" "并行组装固件成功"
-          echo "status=success" >> $GITHUB_OUTPUT
-          step_complete "ASSEMBLE_FIRMWARE_PARALLEL" "success"
-        else
-          log "ERROR" "并行组装固件失败，将尝试单线程组装"
-          echo "status=failed" >> $GITHUB_OUTPUT
-          step_complete "ASSEMBLE_FIRMWARE_PARALLEL" "failed"
-          exit 1
-        fi
+      # 缓存Feeds
+      - name: 缓存Feeds
+        id: cache_feeds
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.FEEDS_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
+            ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-
+            ${{ env.CACHE_VERSION }}-feeds-
+          path: |
+            ${{ env.OPENWRT_PATH }}/feeds
+            ${{ env.OPENWRT_PATH }}/dl
+            ${{ env.OPENWRT_PATH }}/package/feeds
 
-    - name: 组装固件（单线程模式）
-      id: assemble_serial
-      if: steps.assemble_parallel.outcome == 'failure'
-      run: |
-        source scripts/logger.sh
-        step_start "ASSEMBLE_FIRMWARE_SERIAL" "组装最终固件（单线程详细模式）"
-        cd "$OPENWRT_PATH"
-        
-        BUILD_LOG="$GITHUB_WORKSPACE/assemble_serial.log"
-        
-        if make -j1 V=s > "$BUILD_LOG" 2>&1; then
-          log "INFO" "单线程组装固件成功"
-          echo "status=success" >> $GITHUB_OUTPUT
-          step_complete "ASSEMBLE_FIRMWARE_SERIAL" "success"
-        else
-          log "ERROR" "单线程组装固件也失败了"
+      # 缓存DL软件包
+      - name: 缓存DL软件包
+        id: cache_dl
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.DL_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-
+            ${{ env.CACHE_VERSION }}-dl-
+          path: |
+            ${{ env.OPENWRT_PATH }}/dl
+
+      # 检查缓存状态
+      - name: 检查缓存状态
+        continue-on-error: true
+        run: |
+          source scripts/cache-manager.sh
+          check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
+
+      # 刷新缓存
+      - name: 刷新缓存
+        continue-on-error: true
+        run: |
+          source scripts/cache-manager.sh
+          refresh_cache
+
+      # 添加第三方软件源
+      - name: 添加第三方软件源
+        continue-on-error: true
+        run: |
+          source "${GITHUB_WORKSPACE}/scripts/common.sh"
+          execute_custom_script "$REPO_SCRIPT" "软件源"
+
+      # 安装Feeds
+      - name: 安装Feeds
+        continue-on-error: true
+        run: |
+          source scripts/feeds-installer.sh
+          install_feeds "${{ steps.cache_feeds.outputs.cache-hit }}"
+
+      # 加载自定义配置
+      - name: 加载自定义配置
+        continue-on-error: true
+        run: |
+          source "${GITHUB_WORKSPACE}/scripts/common.sh"
+          execute_custom_script "$DIY_SCRIPT" "自定义"
+
+      # 合并基础配置和Ultra配置
+      - name: 合并基础配置和Ultra配置
+        continue-on-error: true
+        run: |
+          source "${GITHUB_WORKSPACE}/scripts/common.sh"
+          source scripts/config-merger.sh
           
-          log "ERROR" "组装固件错误详情（最后20行）："
-          tail -20 "$BUILD_LOG" | while read line; do
-            log "ERROR" "$line"
-          done
+          # 查找Ultra配置文件
+          CONFIG_ULTRA=$(find_config_file "Ultra")
+          if [ $? -ne 0 ]; then
+              log "ERROR" "Ultra配置文件不存在"
+              exit 1
+          fi
           
-          echo "status=failed" >> $GITHUB_OUTPUT
-          step_complete "ASSEMBLE_FIRMWARE_SERIAL" "failed"
-          exit 1
-        fi
+          log "INFO" "Ultra配置文件: $CONFIG_ULTRA"
+          echo "CONFIG_ULTRA=$CONFIG_ULTRA" >> $GITHUB_ENV
+          
+          # 合并基础配置和分支配置
+          merge_configs "$CONFIG_BASE" "$CONFIG_BRANCH"
+          
+          # 保存合并后的配置
+          cp "$OPENWRT_PATH/.config" "$OPENWRT_PATH/.config.base"
+          
+          # 合并基础配置和Ultra配置
+          merge_configs "$CONFIG_BASE" "$CONFIG_ULTRA"
+          
+          # 保存Ultra配置
+          cp "$OPENWRT_PATH/.config" "$OPENWRT_PATH/.config.ultra"
 
-    - name: 上传固件产物
-      if: steps.assemble_parallel.outcome == 'success' || steps.assemble_serial.outcome == 'success'
-      uses: actions/upload-artifact@v4
-      with:
-        name: firmware-${{ matrix.repo }}-${{ matrix.variant }}-${{ env.FILE_DATE }}
-        path: ${{ env.OPENWRT_PATH }}/bin/targets/
-        retention-days: 30
+      # 提取Ultra配置中的Luci软件包
+      - name: 提取Ultra配置中的Luci软件包
+        continue-on-error: true
+        run: |
+          source "$LOGGER_SCRIPT"
+          step_start "EXTRACT_LUCI" "提取Ultra配置中的Luci软件包"
+          
+          # 提取Ultra配置中的Luci软件包
+          LUCI_PACKAGES=$(grep "^CONFIG_PACKAGE_luci.*=y" "$CONFIG_ULTRA" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
+          
+          if [ -z "$LUCI_PACKAGES" ]; then
+              log "WARN" "Ultra配置中没有找到Luci软件包"
+              echo "LUCI_PACKAGES=" >> $GITHUB_ENV
+          else
+              log "INFO" "Ultra配置中的Luci软件包: $LUCI_PACKAGES"
+              echo "LUCI_PACKAGES=$LUCI_PACKAGES" >> $GITHUB_ENV
+              
+              # 生成Luci软件包列表文件
+              echo "$LUCI_PACKAGES" | tr ' ' '\n' > "$GITHUB_WORKSPACE/ultra_luci_packages.txt"
+          fi
+          
+          step_complete "EXTRACT_LUCI" "success"
 
-    - name: 上传构建日志
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: logs-${{ matrix.repo }}-${{ matrix.variant }}-${{ env.FILE_DATE }}
-        path: |
-          ${{ github.workspace }}/$BUILD_LOG_FILE
-          ${{ github.workspace }}/$REPORT_FILE
-          ${{ github.workspace }}/assemble_parallel.log
-          ${{ github.workspace }}/assemble_serial.log
-        retention-days: 7
+      # 恢复基础配置
+      - name: 恢复基础配置
+        continue-on-error: true
+        run: |
+          source "$LOGGER_SCRIPT"
+          step_start "RESTORE_CONFIG" "恢复基础配置"
+          
+          # 恢复基础配置
+          cp "$OPENWRT_PATH/.config.base" "$OPENWRT_PATH/.config"
+          
+          # 运行defconfig
+          cd "$OPENWRT_PATH"
+          if make defconfig; then
+              log "INFO" "defconfig成功"
+          else
+              log "ERROR" "defconfig失败"
+              exit 1
+          fi
+          
+          step_complete "RESTORE_CONFIG" "success"
+
+      # 下载软件包
+      - name: 下载软件包
+        continue-on-error: true
+        run: |
+          source scripts/builder.sh
+          download_packages
+
+      # 清理构建环境
+      - name: 清理构建环境
+        continue-on-error: true
+        run: |
+          source scripts/builder.sh
+          clean_environment
+
+      # 编译Ultra配置的Luci软件包
+      - name: 编译Ultra配置的Luci软件包
+        id: compile
+        continue-on-error: true
+        run: |
+          source scripts/builder.sh
+          
+          if [ -n "$LUCI_PACKAGES" ]; then
+              # 编译Ultra配置中的Luci软件包
+              compile_packages "$LUCI_PACKAGES" "Ultra配置的Luci"
+          else
+              log "INFO" "没有需要编译的Luci软件包"
+              echo "status=success" >> $GITHUB_OUTPUT
+              echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+              echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+          fi
+
+      # 生成构建报告
+      - name: 生成构建报告
+        if: always()
+        continue-on-error: true
+        run: |
+          source scripts/reporter.sh
+          generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
+
+      # 检查空间使用情况
+      - name: 检查空间使用情况
+        if: (!cancelled())
+        continue-on-error: true
+        run: |
+          source scripts/reporter.sh
+          check_disk_space
+
+      # 上传构建日志和报告
+      - name: 上传构建日志和报告
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ env.SOURCE_REPO }}-ultra-luci-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          path: |
+            ${{ github.workspace }}/build.log
+            ${{ github.workspace }}/build_report.json
+            ${{ github.workspace }}/build_summary.txt
+            ${{ github.workspace }}/ultra_luci_packages.txt
+          retention-days: 30
+
+      # 上传Ultra Luci软件包到Artifact
+      - name: 上传Ultra Luci软件包到Artifact
+        if: steps.compile.outputs.status == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ env.SOURCE_REPO }}-ultra-luci-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          path: |
+            ${{ env.OPENWRT_PATH }}/bin
+          retention-days: 30
+
+  # 阶段3: 并行编译3个分支下3个变体配置文件
+  Build-Variants:
+    name: 编译变体配置
+    needs: Build-Ultra-Luci
+    continue-on-error: true
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false  # 关键：不快速失败，让所有任务都执行
+      matrix:
+        # 定义要并行构建的仓库配置
+        repo_config: 
+          - immwrt
+          - openwrt
+          - libwrt
+        # 定义要并行构建的变体配置
+        variant_config: 
+          - Pro
+          - Max
+          - Ultra
+        # 芯片系列
+        chip_family:
+          - ipq60xx
+    
+    # 使用环境变量设置芯片系列和仓库配置
+    env:
+      CHIP_FAMILY: ${{ matrix.chip_family }}
+      REPO_CONFIG: ${{ matrix.repo_config }}
+      VARIANT_CONFIG: ${{ matrix.variant_config }}
+      BUILD_ID: ${{ github.run_id }}-${{ matrix.repo_config }}-${{ matrix.chip_family }}-${{ matrix.variant_config }}
+      # 设置GitHub CLI token
+      GH_TOKEN: ${{ github.token }}
+      
+    steps:
+      # 检出代码
+      - name: 检出代码
+        continue-on-error: true
+        uses: actions/checkout@main
+
+      # 初始化日志系统
+      - name: 初始化日志系统
+        continue-on-error: true
+        run: |
+          source scripts/logger.sh
+          init_logger "$BUILD_ID"
+
+      # 初始化环境
+      - name: 初始化环境
+        continue-on-error: true
+        run: |
+          source scripts/env-init.sh
+          init_environment
+
+      # 读取仓库配置
+      - name: 读取仓库配置
+        continue-on-error: true
+        run: |
+          source scripts/repo-config.sh
+          read_repo_config "$REPO_CONFIG"
+
+      # 克隆源代码
+      - name: 克隆源代码
+        continue-on-error: true
+        run: |
+          source scripts/source-clone.sh
+          clone_source "$REPO_URL" "$REPO_BRANCH"
+
+      # 生成变量
+      - name: 生成变量
+        continue-on-error: true
+        run: |
+          source scripts/vars-generator.sh
+          generate_variables "$CHIP_FAMILY" "$REPO_SHORT" "$REPO_URL"
+
+      # 设置缓存
+      - name: 设置缓存
+        continue-on-error: true
+        run: |
+          source scripts/cache-manager.sh
+          setup_caches "$SOURCE_REPO" "$REPO_BRANCH" "$DEVICE_TARGET" "$DEVICE_SUBTARGET" "$FEEDS_HASH"
+
+      # 缓存工具链
+      - name: 缓存工具链
+        id: cache_toolchain
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.TOOLCHAIN_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-
+            ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
+            ${{ env.CACHE_VERSION }}-toolchain-${{ env.SOURCE_REPO }}-
+            ${{ env.CACHE_VERSION }}-toolchain-
+          path: |
+            ${{ env.OPENWRT_PATH }}/.ccache
+            ${{ env.OPENWRT_PATH }}/staging_dir
+
+      # 缓存Feeds
+      - name: 缓存Feeds
+        id: cache_feeds
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.FEEDS_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-
+            ${{ env.CACHE_VERSION }}-feeds-${{ env.SOURCE_REPO }}-
+            ${{ env.CACHE_VERSION }}-feeds-
+          path: |
+            ${{ env.OPENWRT_PATH }}/feeds
+            ${{ env.OPENWRT_PATH }}/dl
+            ${{ env.OPENWRT_PATH }}/package/feeds
+
+      # 缓存DL软件包
+      - name: 缓存DL软件包
+        id: cache_dl
+        continue-on-error: true
+        uses: actions/cache@main
+        with:
+          key: ${{ env.DL_KEY }}
+          restore-keys: |
+            ${{ env.CACHE_VERSION }}-dl-${{ env.SOURCE_REPO }}-
+            ${{ env.CACHE_VERSION }}-dl-
+          path: |
+            ${{ env.OPENWRT_PATH }}/dl
+
+      # 检查缓存状态
+      - name: 检查缓存状态
+        continue-on-error: true
+        run: |
+          source scripts/cache-manager.sh
+          check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
+
+      # 刷新缓存
+      - name: 刷新缓存
+        continue-on-error: true
+        run: |
+          source scripts/cache-manager.sh
+          refresh_cache
+
+      # 添加第三方软件源
+      - name: 添加第三方软件源
+        continue-on-error: true
+        run: |
+          source "${GITHUB_WORKSPACE}/scripts/common.sh"
+          execute_custom_script "$REPO_SCRIPT" "软件源"
+
+      # 安装Feeds
+      - name: 安装Feeds
+        continue-on-error: true
+        run: |
+          source scripts/feeds-installer.sh
+          install_feeds "${{ steps.cache_feeds.outputs.cache-hit }}"
+
+      # 加载自定义配置
+      - name: 加载自定义配置
+        continue-on-error: true
+        run: |
+          source "${GITHUB_WORKSPACE}/scripts/common.sh"
+          execute_custom_script "$DIY_SCRIPT" "自定义"
+
+      # 合并基础配置和变体配置
+      - name: 合并基础配置和变体配置
+        continue-on-error: true
+        run: |
+          source "${GITHUB_WORKSPACE}/scripts/common.sh"
+          source scripts/config-merger.sh
+          
+          # 查找变体配置文件
+          CONFIG_VARIANT=$(find_config_file "$VARIANT_CONFIG")
+          if [ $? -ne 0 ]; then
+              log "ERROR" "${VARIANT_CONFIG}配置文件不存在"
+              exit 1
+          fi
+          
+          log "INFO" "${VARIANT_CONFIG}配置文件: $CONFIG_VARIANT"
+          echo "CONFIG_VARIANT=$CONFIG_VARIANT" >> $GITHUB_ENV
+          
+          # 合并基础配置和分支配置
+          merge_configs "$CONFIG_BASE" "$CONFIG_BRANCH"
+          
+          # 保存合并后的配置
+          cp "$OPENWRT_PATH/.config" "$OPENWRT_PATH/.config.base"
+          
+          # 合并基础配置和变体配置
+          merge_variant_config "$CONFIG_BASE" "$CONFIG_VARIANT" "$VARIANT_CONFIG"
+
+      # 下载软件包
+      - name: 下载软件包
+        continue-on-error: true
+        run: |
+          source scripts/builder.sh
+          download_packages
+
+      # 清理构建环境
+      - name: 清理构建环境
+        continue-on-error: true
+        run: |
+          source scripts/builder.sh
+          clean_environment
+
+      # 编译变体配置
+      - name: 编译变体配置
+        id: compile
+        continue-on-error: true
+        run: |
+          source scripts/builder.sh
+          compile_firmware "${VARIANT_CONFIG}变体"
+
+      # 生成构建报告
+      - name: 生成构建报告
+        if: always()
+        continue-on-error: true
+        run: |
+          source scripts/reporter.sh
+          generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
+
+      # 检查空间使用情况
+      - name: 检查空间使用情况
+        if: (!cancelled())
+        continue-on-error: true
+        run: |
+          source scripts/reporter.sh
+          check_disk_space
+
+      # 上传构建日志和报告
+      - name: 上传构建日志和报告
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          path: |
+            ${{ github.workspace }}/build.log
+            ${{ github.workspace }}/build_report.json
+            ${{ github.workspace }}/build_summary.txt
+            ${{ github.workspace }}/luci_${{ env.VARIANT_CONFIG }}_report.md
+            ${{ github.workspace }}/luci_${{ env.VARIANT_CONFIG }}_defconfig_report.md
+          retention-days: 30
+
+      # 上传变体配置到Artifact
+      - name: 上传变体配置到Artifact
+        if: steps.compile.outputs.status == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@main
+        with:
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          path: |
+            ${{ env.OPENWRT_PATH }}/bin
+            ${{ env.OPENWRT_PATH }}/.config
+          retention-days: 30
