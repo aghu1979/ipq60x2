@@ -52,7 +52,7 @@ jobs:
     - name: 初始化日志系统
       run: |
         chmod +x scripts/logger.sh
-        source scripts/logger.sh "base" "base-${{ matrix.repo_config }}-$(date +%s)"
+        source scripts/logger.sh "base-${{ matrix.repo_config }}-$(date +%s)"
         step_start "INIT" "初始化基础构建日志 (${{ matrix.repo_config }})"
 
     - name: 克隆仓库
@@ -98,11 +98,8 @@ jobs:
         # 检查合并后的配置
         check_luci_packages ".config" "合并后配置"
         
-        # 保存合并后的软件包列表
-        MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
-        echo "MERGED_LUCI<<EOF" >> $GITHUB_ENV
-        echo "$MERGED_LUCI" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+        # 保存合并后的软件包列表到文件
+        grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort > /tmp/merged_luci.txt
         
         # 设置输出变量
         echo "repo_short_${REPO_SHORT}=${REPO_SHORT}" >> $GITHUB_OUTPUT
@@ -121,7 +118,6 @@ jobs:
         cd ${{ env.OPENWRT_PATH }}
         
         # 加载软件包检查脚本
-        chmod +x scripts/package_checker.sh
         source scripts/package_checker.sh
         
         # 运行defconfig
@@ -135,8 +131,10 @@ jobs:
         cd ${{ env.OPENWRT_PATH }}
         
         # 加载软件包检查脚本
-        chmod +x scripts/package_checker.sh
         source scripts/package_checker.sh
+        
+        # 从文件读取之前的软件包列表
+        MERGED_LUCI=$(cat /tmp/merged_luci.txt)
         
         # 生成对比报告
         generate_package_report "$MERGED_LUCI" "基础环境"
@@ -194,7 +192,7 @@ jobs:
     - name: 初始化日志系统
       run: |
         chmod +x scripts/logger.sh
-        source scripts/logger.sh "prebuild" "prebuild-$(date +%s)"
+        source scripts/logger.sh "prebuild-$(date +%s)"
         step_start "INIT" "初始化预编译构建日志"
 
     - name: 创建目录
@@ -215,7 +213,6 @@ jobs:
         cd "$OPENWRT_PATH"
         
         # 加载软件包检查脚本
-        chmod +x scripts/package_checker.sh
         source scripts/package_checker.sh
         
         # 创建基础配置
@@ -240,11 +237,8 @@ jobs:
         # 检查超级配置
         check_luci_packages ".config" "超级配置合并后"
         
-        # 保存合并后的软件包列表
-        SUPER_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
-        echo "SUPER_LUCI<<EOF" >> $GITHUB_ENV
-        echo "$SUPER_LUCI" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+        # 保存合并后的软件包列表到文件
+        grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort > /tmp/super_luci.txt
         
         log "INFO" "超级配置生成完成"
         step_complete "GEN_SUPER_CONFIG" "success"
@@ -255,7 +249,6 @@ jobs:
         cd "$OPENWRT_PATH"
         
         # 加载软件包检查脚本
-        chmod +x scripts/package_checker.sh
         source scripts/package_checker.sh
         
         # 运行defconfig
@@ -269,8 +262,10 @@ jobs:
         cd "$OPENWRT_PATH"
         
         # 加载软件包检查脚本
-        chmod +x scripts/package_checker.sh
         source scripts/package_checker.sh
+        
+        # 从文件读取之前的软件包列表
+        SUPER_LUCI=$(cat /tmp/super_luci.txt)
         
         # 生成对比报告
         generate_package_report "$SUPER_LUCI" "超级配置"
@@ -379,7 +374,7 @@ jobs:
     - name: 初始化日志系统
       run: |
         chmod +x scripts/logger.sh
-        source scripts/logger.sh "variant" "variant-${{ matrix.repo }}-${{ matrix.variant }}-$(date +%s)"
+        source scripts/logger.sh "variant-${{ matrix.repo }}-${{ matrix.variant }}-$(date +%s)"
         step_start "INIT" "初始化变体组装日志 (${{ matrix.repo }}-${{ matrix.variant }})"
 
     - name: 创建目录
@@ -405,7 +400,6 @@ jobs:
         cd "$OPENWRT_PATH"
         
         # 加载软件包检查脚本
-        chmod +x scripts/package_checker.sh
         source scripts/package_checker.sh
         
         # 查找配置文件
@@ -422,11 +416,8 @@ jobs:
         # 检查合并后的配置
         check_luci_packages ".config" "变体合并后配置"
         
-        # 保存合并后的软件包列表
-        VARIANT_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
-        echo "VARIANT_LUCI<<EOF" >> $GITHUB_ENV
-        echo "$VARIANT_LUCI" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+        # 保存合并后的软件包列表到文件
+        grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort > /tmp/variant_luci.txt
         
         step_complete "PREP_VARIANT" "success"
 
@@ -436,7 +427,6 @@ jobs:
         cd "$OPENWRT_PATH"
         
         # 加载软件包检查脚本
-        chmod +x scripts/package_checker.sh
         source scripts/package_checker.sh
         
         # 运行defconfig
@@ -450,8 +440,10 @@ jobs:
         cd "$OPENWRT_PATH"
         
         # 加载软件包检查脚本
-        chmod +x scripts/package_checker.sh
         source scripts/package_checker.sh
+        
+        # 从文件读取之前的软件包列表
+        VARIANT_LUCI=$(cat /tmp/variant_luci.txt)
         
         # 生成对比报告
         generate_package_report "$VARIANT_LUCI" "变体 ${{ matrix.variant }}"
