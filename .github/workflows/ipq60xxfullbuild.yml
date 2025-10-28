@@ -54,23 +54,47 @@ jobs:
     steps:
       # 检出代码
       - name: 检出代码
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
-      # 缓存环境 - 修复权限问题
+      # 设置Python环境 - 使用官方action
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            setup.py
+
+      # 设置Java环境 - 使用官方action
+      - name: 设置Java环境
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+          cache-dependency-path: |
+            build.gradle
+            **/*.gradle
+            **/gradle-wrapper.properties
+
+      # 缓存环境 - 修复权限问题，排除Android目录
       - name: 缓存环境
         id: cache_env
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
-          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04
+          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04-${{ runner.os }}
           restore-keys: |
-            ${{ env.CACHE_VERSION }}-env-ubuntu-
+            ${{ env.CACHE_VERSION }}-env-ubuntu-22.04-
             ${{ env.CACHE_VERSION }}-env-
           path: |
             /usr/local/bin
             /usr/local/lib
-            /usr/lib
             ~/.cache
             ~/.local
+            # 排除Android目录
+            !/usr/local/lib/android
+            !/usr/local/share/android
 
       # 初始化日志系统
       - name: 初始化日志系统
@@ -78,7 +102,7 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境 - 修复变量引用问题
+      # 初始化环境 - 使用官方actions后的自定义初始化
       - name: 初始化环境
         run: |
           # 设置环境变量，指示是否使用缓存
@@ -118,7 +142,7 @@ jobs:
       # 缓存工具链
       - name: 缓存工具链
         id: cache_toolchain
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.TOOLCHAIN_KEY }}
           restore-keys: |
@@ -133,7 +157,7 @@ jobs:
       # 缓存Feeds
       - name: 缓存Feeds
         id: cache_feeds
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.FEEDS_KEY }}
           restore-keys: |
@@ -148,7 +172,7 @@ jobs:
       # 缓存DL软件包
       - name: 缓存DL软件包
         id: cache_dl
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.DL_KEY }}
           restore-keys: |
@@ -265,7 +289,7 @@ jobs:
       # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
         if: always()
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SOURCE_REPO }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -280,7 +304,7 @@ jobs:
       # 上传基础环境到Artifact - 添加唯一ID避免冲突
       - name: 上传基础环境到Artifact
         if: steps.compile.outputs.status == 'success'
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SOURCE_REPO }}-base-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -318,23 +342,47 @@ jobs:
     steps:
       # 检出代码
       - name: 检出代码
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
-      # 缓存环境 - 修复权限问题
+      # 设置Python环境 - 使用官方action
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            setup.py
+
+      # 设置Java环境 - 使用官方action
+      - name: 设置Java环境
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+          cache-dependency-path: |
+            build.gradle
+            **/*.gradle
+            **/gradle-wrapper.properties
+
+      # 缓存环境 - 修复权限问题，排除Android目录
       - name: 缓存环境
         id: cache_env
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
-          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04
+          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04-${{ runner.os }}
           restore-keys: |
-            ${{ env.CACHE_VERSION }}-env-ubuntu-
+            ${{ env.CACHE_VERSION }}-env-ubuntu-22.04-
             ${{ env.CACHE_VERSION }}-env-
           path: |
             /usr/local/bin
             /usr/local/lib
-            /usr/lib
             ~/.cache
             ~/.local
+            # 排除Android目录
+            !/usr/local/lib/android
+            !/usr/local/share/android
 
       # 初始化日志系统
       - name: 初始化日志系统
@@ -342,7 +390,7 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境 - 修复变量引用问题
+      # 初始化环境 - 使用官方actions后的自定义初始化
       - name: 初始化环境
         run: |
           # 设置环境变量，指示是否使用缓存
@@ -382,7 +430,7 @@ jobs:
       # 缓存工具链
       - name: 缓存工具链
         id: cache_toolchain
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.TOOLCHAIN_KEY }}
           restore-keys: |
@@ -397,7 +445,7 @@ jobs:
       # 缓存Feeds
       - name: 缓存Feeds
         id: cache_feeds
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.FEEDS_KEY }}
           restore-keys: |
@@ -412,7 +460,7 @@ jobs:
       # 缓存DL软件包
       - name: 缓存DL软件包
         id: cache_dl
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.DL_KEY }}
           restore-keys: |
@@ -538,7 +586,7 @@ jobs:
         if: (!cancelled())
         run: |
           source "$LOGGER_SCRIPT"
-          log "INFO" "=== 磁盘空间使用情况 ==="
+          log "INFO" "=== 硬盘空间使用情况 ==="
           df -hT $GITHUB_WORKSPACE | tail -1
           
           if [ -d "$OPENWRT_PATH/bin" ]; then
@@ -549,7 +597,7 @@ jobs:
       # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
         if: always()
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -564,7 +612,7 @@ jobs:
       # 上传Ultra变体配置到Artifact - 添加唯一ID避免冲突
       - name: 上传Ultra变体配置到Artifact
         if: steps.compile.outputs.status == 'success'
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -602,23 +650,47 @@ jobs:
     steps:
       # 检出代码
       - name: 检出代码
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
-      # 缓存环境 - 修复权限问题
+      # 设置Python环境 - 使用官方action
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            setup.py
+
+      # 设置Java环境 - 使用官方action
+      - name: 设置Java环境
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+          cache-dependency-path: |
+            build.gradle
+            **/*.gradle
+            **/gradle-wrapper.properties
+
+      # 缓存环境 - 修复权限问题，排除Android目录
       - name: 缓存环境
         id: cache_env
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
-          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04
+          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04-${{ runner.os }}
           restore-keys: |
-            ${{ env.CACHE_VERSION }}-env-ubuntu-
+            ${{ env.CACHE_VERSION }}-env-ubuntu-22.04-
             ${{ env.CACHE_VERSION }}-env-
           path: |
             /usr/local/bin
             /usr/local/lib
-            /usr/lib
             ~/.cache
             ~/.local
+            # 排除Android目录
+            !/usr/local/lib/android
+            !/usr/local/share/android
 
       # 初始化日志系统
       - name: 初始化日志系统
@@ -626,7 +698,7 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境 - 修复变量引用问题
+      # 初始化环境 - 使用官方actions后的自定义初始化
       - name: 初始化环境
         run: |
           # 设置环境变量，指示是否使用缓存
@@ -666,7 +738,7 @@ jobs:
       # 缓存工具链
       - name: 缓存工具链
         id: cache_toolchain
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.TOOLCHAIN_KEY }}
           restore-keys: |
@@ -681,7 +753,7 @@ jobs:
       # 缓存Feeds
       - name: 缓存Feeds
         id: cache_feeds
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.FEEDS_KEY }}
           restore-keys: |
@@ -696,7 +768,7 @@ jobs:
       # 缓存DL软件包
       - name: 缓存DL软件包
         id: cache_dl
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.DL_KEY }}
           restore-keys: |
@@ -833,7 +905,7 @@ jobs:
       # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
         if: always()
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -848,7 +920,7 @@ jobs:
       # 上传Max变体配置到Artifact - 添加唯一ID避免冲突
       - name: 上传Max变体配置到Artifact
         if: steps.compile.outputs.status == 'success'
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -886,23 +958,47 @@ jobs:
     steps:
       # 检出代码
       - name: 检出代码
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
-      # 缓存环境 - 修复权限问题
+      # 设置Python环境 - 使用官方action
+      - name: 设置Python环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            setup.py
+
+      # 设置Java环境 - 使用官方action
+      - name: 设置Java环境
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+          cache-dependency-path: |
+            build.gradle
+            **/*.gradle
+            **/gradle-wrapper.properties
+
+      # 缓存环境 - 修复权限问题，排除Android目录
       - name: 缓存环境
         id: cache_env
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
-          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04
+          key: ${{ env.CACHE_VERSION }}-env-ubuntu-22.04-${{ runner.os }}
           restore-keys: |
-            ${{ env.CACHE_VERSION }}-env-ubuntu-
+            ${{ env.CACHE_VERSION }}-env-ubuntu-22.04-
             ${{ env.CACHE_VERSION }}-env-
           path: |
             /usr/local/bin
             /usr/local/lib
-            /usr/lib
             ~/.cache
             ~/.local
+            # 排除Android目录
+            !/usr/local/lib/android
+            !/usr/local/share/android
 
       # 初始化日志系统
       - name: 初始化日志系统
@@ -910,7 +1006,7 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境 - 修复变量引用问题
+      # 初始化环境 - 使用官方actions后的自定义初始化
       - name: 初始化环境
         run: |
           # 设置环境变量，指示是否使用缓存
@@ -950,7 +1046,7 @@ jobs:
       # 缓存工具链
       - name: 缓存工具链
         id: cache_toolchain
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.TOOLCHAIN_KEY }}
           restore-keys: |
@@ -965,7 +1061,7 @@ jobs:
       # 缓存Feeds
       - name: 缓存Feeds
         id: cache_feeds
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.FEEDS_KEY }}
           restore-keys: |
@@ -980,7 +1076,7 @@ jobs:
       # 缓存DL软件包
       - name: 缓存DL软件包
         id: cache_dl
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
           key: ${{ env.DL_KEY }}
           restore-keys: |
@@ -1117,7 +1213,7 @@ jobs:
       # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
         if: always()
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -1132,7 +1228,7 @@ jobs:
       # 上传Pro变体配置到Artifact - 添加唯一ID避免冲突
       - name: 上传Pro变体配置到Artifact
         if: steps.compile.outputs.status == 'success'
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
