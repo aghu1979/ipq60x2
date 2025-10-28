@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 加载日志函数
+source scripts/logger.sh
+
 # 查找配置文件
 find_config_file() {
     local base_name="$1"
@@ -99,6 +102,3 @@ generate_package_report() {
     
     echo ""
 }
-
-# 导出函数
-export -f find_config_file check_luci_packages run_defconfig generate_package_report
