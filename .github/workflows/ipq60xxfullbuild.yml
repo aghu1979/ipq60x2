@@ -21,8 +21,9 @@ env:
   CONFIG_BASE_DIR: configs
   DIY_SCRIPT_DIR: scripts
   CACHE_VERSION: v3
-  LOG_LEVEL: INFO
-  LOG_FILE: build.log
+  # 修复：重命名环境变量，避免与OpenWrt内部变量冲突
+  BUILD_LOG_LEVEL: INFO
+  BUILD_LOG_FILE: build.log
   REPORT_FILE: build_report.json
 
 jobs:
@@ -45,9 +46,10 @@ jobs:
       run: |
         cat > /tmp/logger.sh << 'EOF'
         #!/bin/bash
+        # 修复：使用重命名后的环境变量
         declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
-        CURRENT_LEVEL=${LOG_LEVELS[$LOG_LEVEL]}
-        LOG_FILE="$GITHUB_WORKSPACE/$LOG_FILE"
+        CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
+        LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
         REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
         echo "=== Build Log Started at $(date) ===" > "$LOG_FILE"
         echo '{"build_id":"base-'${{ matrix.repo_config }}'-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
@@ -97,7 +99,6 @@ jobs:
           local config_file="$1"
           local step_name="$2"
           
-          # 直接输出到控制台，不使用折叠
           echo ""
           echo "=================================================================================="
           echo -e "\033[1;44;37m 🔍 检查 $step_name 配置中的 Luci 软件包 \033[0m"
@@ -105,7 +106,6 @@ jobs:
           echo -e "\033[1;36m配置文件: $config_file\033[0m"
           echo ""
           
-          # 读取配置文件中的luci软件包 (修复了正则表达式)
           local luci_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" "$config_file" | sort || true)
           
           if [ -n "$luci_packages" ]; then
@@ -121,11 +121,9 @@ jobs:
           echo "=================================================================================="
           echo ""
           
-          # 返回luci软件包列表
           echo "$luci_packages"
         }
         
-        # 封装defconfig后检查函数
         check_defconfig_packages() {
           local before_packages="$1"
           local step_name="$2"
@@ -139,7 +137,6 @@ jobs:
           echo -e "\033[1;36mDefconfig 完成，正在分析软件包变化...\033[0m"
           echo ""
           
-          # 读取defconfig后的luci软件包 (修复了正则表达式)
           local after_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
           
           echo -e "\033[1;32mDefconfig后的最终 Luci 软件包列表:\033[0m"
@@ -153,14 +150,11 @@ jobs:
             log "INFO" "  (无 Luci 软件包)"
           fi
           
-          # 生成对比报告 - 使用更健壮的grep循环替代comm
           echo ""
           echo -e "\033[1;34m------------------- 软件包变化分析 -------------------\033[0m"
           
-          # 检查是否有新增的软件包
           local found_new=false
           echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            # 修复：使用固定字符串匹配，避免正则表达式错误
             if ! echo "$before_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
               if [ "$found_new" = false ]; then
                 echo -e "\033[1;32m🔍 发现新增的 Luci 软件包:\033[0m"
@@ -178,11 +172,9 @@ jobs:
           
           echo ""
           
-          # 检查是否有缺失的软件包
           local found_missing=false
           echo "$before_packages" | while read pkg_line; do
             local pkg=$(echo "$pkg_line" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//')
-            # 修复：使用固定字符串匹配，避免正则表达式错误
             if ! echo "$after_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
               if [ "$found_missing" = false ]; then
                 echo -e "\033[1;31m⚠️  发现缺失的 Luci 软件包:\033[0m"
@@ -203,36 +195,25 @@ jobs:
           echo "=================================================================================="
           echo ""
           
-          # 返回defconfig后的软件包列表
           echo "$after_packages"
         }
         
-        # 导出函数供后续使用
         export -f check_luci_packages check_defconfig_packages
         
         find_config_file() { local base_name="$1"; local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"; for ext in ".config" ".config.txt"; do if [ -f "${config_dir}/${base_name}${ext}" ]; then echo "${config_dir}/${base_name}${ext}"; return 0; fi; done; return 1; }
         
-        # 查找配置文件
         CONFIG_BASE=$(find_config_file "base_ipq60xx")
         CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
         
-        # 检查基础配置
         BASE_LUCI=$(check_luci_packages "$CONFIG_BASE" "基础配置")
-        
-        # 检查分支配置
         BRANCH_LUCI=$(check_luci_packages "$CONFIG_BRANCH" "分支配置")
         
-        # 合并配置文件
         log "INFO" "合并基础配置和分支配置..."
         cat "$CONFIG_BASE" "$CONFIG_BRANCH" > .config
         
-        # 检查合并后的配置
         MERGED_LUCI=$(check_luci_packages ".config" "合并后配置")
-        
-        # 运行defconfig并检查
         FINAL_LUCI=$(check_defconfig_packages "$MERGED_LUCI" "基础环境")
         
-        # 为每个仓库设置输出变量
         if [ "${{ matrix.repo_config }}" = "openwrt" ]; then
           echo "repo_short_openwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
         elif [ "${{ matrix.repo_config }}" = "immwrt" ]; then
@@ -241,7 +222,6 @@ jobs:
           echo "repo_short_libwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
         fi
         
-        # 提取设备信息，增加健壮性
         DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_BOARD=" | awk -F '"' '{print $2}' || echo "未知")
         if [ "$DEVICE_INFO" = "未知" ]; then
           DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_ARCH_PACKAGES=" | awk -F '"' '{print $2}' || echo "未知")
@@ -268,21 +248,17 @@ jobs:
         step_start "PREP_ENV" "准备构建环境"
         cd "$OPENWRT_PATH"
         
-        # 更新feeds
         log "INFO" "更新feeds..."
         ./scripts/feeds update -a
         
-        # 安装feeds
         log "INFO" "安装feeds..."
         ./scripts/feeds install -a
         
-        # 执行自定义脚本
         if [ -f "${{ env.DIY_SCRIPT_DIR }}/diy.sh" ]; then 
           log "INFO" "执行自定义脚本..."
           chmod +x "${{ env.DIY_SCRIPT_DIR }}/diy.sh" && "${{ env.DIY_SCRIPT_DIR }}/diy.sh"
         fi
         
-        # 再次运行defconfig确保所有依赖正确解析
         log "INFO" "运行defconfig解析依赖..."
         make defconfig
         
@@ -296,10 +272,8 @@ jobs:
         step_start "COMPILE_BASE_PARALLEL" "编译基础环境（并行模式）"
         cd "$OPENWRT_PATH"
         
-        # 设置编译日志文件
         BUILD_LOG="$GITHUB_WORKSPACE/build_parallel.log"
         
-        # 尝试并行编译
         log "INFO" "开始并行编译基础环境..."
         if make -j$(nproc) > "$BUILD_LOG" 2>&1; then
           log "INFO" "并行编译成功"
@@ -320,10 +294,8 @@ jobs:
         step_start "COMPILE_BASE_SERIAL" "编译基础环境（单线程详细模式）"
         cd "$OPENWRT_PATH"
         
-        # 设置编译日志文件
         BUILD_LOG="$GITHUB_WORKSPACE/build_serial.log"
         
-        # 尝试单线程详细编译
         log "INFO" "开始单线程详细编译基础环境..."
         if make -j1 V=s > "$BUILD_LOG" 2>&1; then
           log "INFO" "单线程编译成功"
@@ -332,7 +304,6 @@ jobs:
         else
           log "ERROR" "单线程编译也失败了"
           
-          # 提取最后几行错误信息
           log "ERROR" "编译错误详情（最后20行）："
           tail -20 "$BUILD_LOG" | while read line; do
             log "ERROR" "$line"
@@ -371,8 +342,8 @@ jobs:
         cat > /tmp/logger.sh << 'EOF'
         #!/bin/bash
         declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
-        CURRENT_LEVEL=${LOG_LEVELS[$LOG_LEVEL]}
-        LOG_FILE="$GITHUB_WORKSPACE/$LOG_FILE"
+        CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
+        LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
         REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
         echo "=== Prebuild Log Started at $(date) ===" > "$LOG_FILE"
         echo '{"build_id":"prebuild-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
@@ -402,7 +373,6 @@ jobs:
         step_start "GEN_SUPER_CONFIG" "生成包含所有变体软件包的超级配置"
         cd "$OPENWRT_PATH"
         
-        # 封装配置检查函数 (与阶段一相同)
         check_luci_packages() {
           local config_file="$1"
           local step_name="$2"
@@ -493,31 +463,23 @@ jobs:
         
         export -f check_luci_packages check_defconfig_packages
         
-        # 创建基础配置
         echo "CONFIG_TARGET_ipq60xx=y" > .config
         echo "CONFIG_TARGET_ipq60xx_DEVICE_generic=y" >> .config
         echo "CONFIG_TARGET_DEVICE_ipq60xx_generic=y" >> .config
         
-        # 检查基础配置
         BASE_LUCI=$(check_luci_packages ".config" "基础配置")
         
-        # 合并所有变体配置
         for variant in Pro Max Ultra; do
           log "INFO" "合并 $variant 配置"
           if [ -f "${{ env.CONFIG_BASE_DIR }}/${variant}.config" ]; then
-            # 检查变体配置
             VARIANT_LUCI=$(check_luci_packages "${{ env.CONFIG_BASE_DIR }}/${variant}.config" "$variant 配置")
-            # 合并配置文件
             cat "${{ env.CONFIG_BASE_DIR }}/${variant}.config" >> .config
           else
             log "WARN" "配置文件不存在: ${{ env.CONFIG_BASE_DIR }}/${variant}.config"
           fi
         done
         
-        # 检查合并后的配置
         MERGED_LUCI=$(check_luci_packages ".config" "超级配置合并后")
-        
-        # 运行defconfig并检查
         FINAL_LUCI=$(check_defconfig_packages "$MERGED_LUCI" "超级配置")
         
         log "INFO" "超级配置生成完成"
@@ -540,10 +502,8 @@ jobs:
         step_start "PREBUILD_PKGS_PARALLEL" "预编译所有第三方软件包（并行模式）"
         cd "$OPENWRT_PATH"
         
-        # 设置编译日志文件
         BUILD_LOG="$GITHUB_WORKSPACE/prebuild_parallel.log"
         
-        # 提取所有 luci-开头的包
         PACKAGES=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
         if [ -z "$PACKAGES" ]; then
           log "WARN" "未找到需要预编译的 Luci 软件包，跳过编译。"
@@ -571,10 +531,8 @@ jobs:
         step_start "PREBUILD_PKGS_SERIAL" "预编译所有第三方软件包（单线程详细模式）"
         cd "$OPENWRT_PATH"
         
-        # 设置编译日志文件
         BUILD_LOG="$GITHUB_WORKSPACE/prebuild_serial.log"
         
-        # 提取所有 luci-开头的包
         PACKAGES=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
         
         log "INFO" "开始单线程详细预编译软件包: $PACKAGES"
@@ -585,7 +543,6 @@ jobs:
         else
           log "ERROR" "单线程预编译也失败了"
           
-          # 提取最后几行错误信息
           log "ERROR" "预编译错误详情（最后20行）："
           tail -20 "$BUILD_LOG" | while read line; do
             log "ERROR" "$line"
@@ -631,8 +588,8 @@ jobs:
         cat > /tmp/logger.sh << 'EOF'
         #!/bin/bash
         declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
-        CURRENT_LEVEL=${LOG_LEVELS[$LOG_LEVEL]}
-        LOG_FILE="$GITHUB_WORKSPACE/$LOG_FILE"
+        CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
+        LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
         REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
         echo "=== Variant Log Started at $(date) ===" > "$LOG_FILE"
         echo '{"build_id":"variant-${{ matrix.repo }}-${{ matrix.variant }}-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
@@ -659,7 +616,7 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: prebuilt-packages-ipq60xx
-        path: ${{ env.OPENWRT_PATH }}/staging_dir # 覆盖staging_dir
+        path: ${{ env.OPENWRT_PATH }}/staging_dir
 
     - name: 准备变体配置并检查
       run: |
@@ -667,7 +624,6 @@ jobs:
         step_start "PREP_VARIANT" "准备变体配置 (${{ matrix.variant }})"
         cd "$OPENWRT_PATH"
         
-        # 封装配置检查函数 (与阶段一相同)
         check_luci_packages() {
           local config_file="$1"
           local step_name="$2"
@@ -760,23 +716,15 @@ jobs:
         
         find_config_file() { local base_name="$1"; local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"; for ext in ".config" ".config.txt"; do if [ -f "${config_dir}/${base_name}${ext}" ]; then echo "${config_dir}/${base_name}${ext}"; return 0; fi; done; return 1; }
         
-        # 查找配置文件
         CONFIG_BASE=$(find_config_file "base_ipq60xx")
         CONFIG_VARIANT=$(find_config_file "${{ matrix.variant }}")
         
-        # 检查基础配置
         BASE_LUCI=$(check_luci_packages "$CONFIG_BASE" "基础配置")
-        
-        # 检查变体配置
         VARIANT_LUCI=$(check_luci_packages "$CONFIG_VARIANT" "${{ matrix.variant }} 配置")
         
-        # 合并配置文件
         cat "$CONFIG_BASE" "$CONFIG_VARIANT" > .config.tmp && mv .config.tmp .config
         
-        # 检查合并后的配置
         MERGED_LUCI=$(check_luci_packages ".config" "变体合并后配置")
-        
-        # 运行defconfig并检查
         FINAL_LUCI=$(check_defconfig_packages "$MERGED_LUCI" "变体 ${{ matrix.variant }}")
         
         step_complete "PREP_VARIANT" "success"
@@ -789,7 +737,6 @@ jobs:
         step_start "ASSEMBLE_FIRMWARE_PARALLEL" "组装最终固件（并行模式）"
         cd "$OPENWRT_PATH"
         
-        # 设置编译日志文件
         BUILD_LOG="$GITHUB_WORKSPACE/assemble_parallel.log"
         
         if make -j$(nproc) > "$BUILD_LOG" 2>&1; then
@@ -811,7 +758,6 @@ jobs:
         step_start "ASSEMBLE_FIRMWARE_SERIAL" "组装最终固件（单线程详细模式）"
         cd "$OPENWRT_PATH"
         
-        # 设置编译日志文件
         BUILD_LOG="$GITHUB_WORKSPACE/assemble_serial.log"
         
         if make -j1 V=s > "$BUILD_LOG" 2>&1; then
@@ -821,7 +767,6 @@ jobs:
         else
           log "ERROR" "单线程组装固件也失败了"
           
-          # 提取最后几行错误信息
           log "ERROR" "组装固件错误详情（最后20行）："
           tail -20 "$BUILD_LOG" | while read line; do
             log "ERROR" "$line"
@@ -846,7 +791,7 @@ jobs:
       with:
         name: logs-${{ matrix.repo }}-${{ matrix.variant }}-${{ env.FILE_DATE }}
         path: |
-          ${{ github.workspace }}/$LOG_FILE
+          ${{ github.workspace }}/$BUILD_LOG_FILE
           ${{ github.workspace }}/$REPORT_FILE
           ${{ github.workspace }}/assemble_parallel.log
           ${{ github.workspace }}/assemble_serial.log
