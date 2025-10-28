@@ -61,6 +61,29 @@ jobs:
         source /tmp/logger.sh
         step_start "INIT" "初始化基础环境构建日志"
 
+    - name: 检查系统资源
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "CHECK_RESOURCES" "检查系统资源"
+        log "INFO" "CPU核心数: $(nproc)"
+        log "INFO" "内存总量: $(free -h | grep '^Mem:' | awk '{print $2}')"
+        log "INFO" "可用内存: $(free -h | grep '^Mem:' | awk '{print $7}')"
+        log "INFO" "磁盘空间: $(df -h $GITHUB_WORKSPACE | tail -1 | awk '{print $4}')"
+        
+        # 检查内存是否足够
+        AVAILABLE_MEM=$(free -m | grep '^Mem:' | awk '{print $7}')
+        if [ "$AVAILABLE_MEM" -lt 2048 ]; then
+          log "WARN" "可用内存不足2GB，可能导致编译失败"
+        fi
+        
+        # 检查磁盘空间是否足够
+        AVAILABLE_SPACE=$(df $GITHUB_WORKSPACE | tail -1 | awk '{print $4}')
+        if [ "$AVAILABLE_SPACE" -lt 10485760 ]; then  # 10GB
+          log "WARN" "可用磁盘空间不足10GB，可能导致编译失败"
+        fi
+        
+        step_complete "CHECK_RESOURCES" "success"
+
     - name: 检出代码
       uses: actions/checkout@v4
 
@@ -109,10 +132,30 @@ jobs:
         log "INFO" "设备信息: $(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')"
         step_complete "GEN_VARS" "success"
 
+    - name: 清理旧的缓存（如果需要）
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "CLEAN_CACHE" "检查并清理可能损坏的缓存"
+        
+        # 检查缓存目录是否存在且有效
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          log "INFO" "检查现有工具链缓存..."
+          # 检查关键文件是否存在
+          if [ ! -f "$OPENWRT_PATH/staging_dir/host/bin/ccache" ] && [ ! -f "$OPENWRT_PATH/staging_dir/toolchain-arm_cortex-a7+neon-vfpv4_gcc-11.2.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-gcc" ]; then
+            log "WARN" "工具链缓存可能损坏，清理中..."
+            rm -rf "$OPENWRT_PATH/staging_dir"
+          fi
+        fi
+        
+        step_complete "CLEAN_CACHE" "success"
+
     - name: 缓存工具链和Feeds
       uses: actions/cache@v4
       with:
         key: ${{ env.CACHE_VERSION }}-base-${{ matrix.repo_config }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default') }}
+        restore-keys: |
+          ${{ env.CACHE_VERSION }}-base-${{ matrix.repo_config }}-${{ env.REPO_BRANCH }}-
+          ${{ env.CACHE_VERSION }}-base-${{ matrix.repo_config }}-
         path: |
           ${{ env.OPENWRT_PATH }}/staging_dir
           ${{ env.OPENWRT_PATH }}/dl
@@ -124,20 +167,110 @@ jobs:
         source "$LOGGER_SCRIPT"
         step_start "PREP_ENV" "准备构建环境"
         cd "$OPENWRT_PATH"
-        if [ ! -d "feeds" ]; then ./scripts/feeds update -a; fi
+        
+        # 更新feeds
+        if [ ! -d "feeds" ]; then 
+          log "INFO" "更新feeds..."
+          ./scripts/feeds update -a
+        else
+          log "INFO" "feeds已存在，跳过更新"
+        fi
+        
+        # 安装feeds
+        log "INFO" "安装feeds..."
         ./scripts/feeds install -a
-        if [ -f "${{ env.DIY_SCRIPT_DIR }}/diy.sh" ]; then chmod +x "${{ env.DIY_SCRIPT_DIR }}/diy.sh" && "${{ env.DIY_SCRIPT_DIR }}/diy.sh"; fi
+        
+        # 执行自定义脚本
+        if [ -f "${{ env.DIY_SCRIPT_DIR }}/diy.sh" ]; then 
+          log "INFO" "执行自定义脚本..."
+          chmod +x "${{ env.DIY_SCRIPT_DIR }}/diy.sh" && "${{ env.DIY_SCRIPT_DIR }}/diy.sh"
+        fi
+        
         step_complete "PREP_ENV" "success"
 
-    - name: 编译基础环境
+    - name: 编译基础环境（并行模式）
+      id: compile_base_parallel
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
-        step_start "COMPILE_BASE" "编译基础环境"
+        step_start "COMPILE_BASE_PARALLEL" "编译基础环境（并行模式）"
         cd "$OPENWRT_PATH"
-        make -j$(nproc) toolchain/kernel-headers compile
-        step_complete "COMPILE_BASE" "success"
+        
+        # 设置编译日志文件
+        BUILD_LOG="$GITHUB_WORKSPACE/build_parallel.log"
+        
+        # 尝试并行编译
+        log "INFO" "开始并行编译基础环境..."
+        if make -j$(nproc) toolchain/kernel-headers compile > "$BUILD_LOG" 2>&1; then
+          log "INFO" "并行编译成功"
+          echo "status=success" >> $GITHUB_OUTPUT
+          step_complete "COMPILE_BASE_PARALLEL" "success"
+        else
+          log "ERROR" "并行编译失败，将尝试单线程编译"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          step_complete "COMPILE_BASE_PARALLEL" "failed"
+          exit 1
+        fi
+
+    - name: 编译基础环境（单线程模式）
+      id: compile_base_serial
+      if: steps.compile_base_parallel.outcome == 'failure'
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "COMPILE_BASE_SERIAL" "编译基础环境（单线程详细模式）"
+        cd "$OPENWRT_PATH"
+        
+        # 设置编译日志文件
+        BUILD_LOG="$GITHUB_WORKSPACE/build_serial.log"
+        
+        # 尝试单线程详细编译
+        log "INFO" "开始单线程详细编译基础环境..."
+        if make -j1 V=s toolchain/kernel-headers compile > "$BUILD_LOG" 2>&1; then
+          log "INFO" "单线程编译成功"
+          echo "status=success" >> $GITHUB_OUTPUT
+          step_complete "COMPILE_BASE_SERIAL" "success"
+        else
+          log "ERROR" "单线程编译也失败了"
+          
+          # 提取最后几行错误信息
+          log "ERROR" "编译错误详情（最后20行）："
+          tail -20 "$BUILD_LOG" | while read line; do
+            log "ERROR" "$line"
+          done
+          
+          # 查找常见的错误模式
+          if grep -q "error:" "$BUILD_LOG"; then
+            log "ERROR" "发现编译错误："
+            grep -n "error:" "$BUILD_LOG" | tail -5 | while read line; do
+              log "ERROR" "$line"
+            done
+          fi
+          
+          if grep -q "No space left on device" "$BUILD_LOG"; then
+            log "ERROR" "磁盘空间不足！"
+          fi
+          
+          if grep -q "Permission denied" "$BUILD_LOG"; then
+            log "ERROR" "权限问题！"
+          fi
+          
+          echo "status=failed" >> $GITHUB_OUTPUT
+          step_complete "COMPILE_BASE_SERIAL" "failed"
+          exit 1
+        fi
+
+    - name: 上传构建日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs-${{ matrix.repo_config }}
+        path: |
+          ${{ github.workspace }}/build_parallel.log
+          ${{ github.workspace }}/build_serial.log
+        retention-days: 7
 
     - name: 上传基础环境
+      if: steps.compile_base_parallel.outcome == 'success' || steps.compile_base_serial.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: base-env-${{ matrix.repo_config }}
@@ -211,24 +344,90 @@ jobs:
           ${{ env.OPENWRT_PATH }}/build_dir
           ${{ env.OPENWRT_PATH }}/dl
 
-    - name: 预编译所有第三方软件包
+    - name: 预编译所有第三方软件包（并行模式）
+      id: prebuild_parallel
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
-        step_start "PREBUILD_PKGS" "预编译所有第三方软件包"
+        step_start "PREBUILD_PKGS_PARALLEL" "预编译所有第三方软件包（并行模式）"
         cd "$OPENWRT_PATH"
+        
+        # 设置编译日志文件
+        BUILD_LOG="$GITHUB_WORKSPACE/prebuild_parallel.log"
         
         # 提取所有 luci-开头的包
         PACKAGES=$(grep "^CONFIG_PACKAGE_luci-.*=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
         if [ -z "$PACKAGES" ]; then
           log "WARN" "未找到需要预编译的 Luci 软件包，跳过编译。"
+          echo "status=success" >> $GITHUB_OUTPUT
+          step_complete "PREBUILD_PKGS_PARALLEL" "success"
         else
           log "INFO" "即将预编译的软件包: $PACKAGES"
-          make -j$(nproc) $PACKAGES/compile
+          if make -j$(nproc) $PACKAGES/compile > "$BUILD_LOG" 2>&1; then
+            log "INFO" "并行预编译成功"
+            echo "status=success" >> $GITHUB_OUTPUT
+            step_complete "PREBUILD_PKGS_PARALLEL" "success"
+          else
+            log "ERROR" "并行预编译失败，将尝试单线程编译"
+            echo "status=failed" >> $GITHUB_OUTPUT
+            step_complete "PREBUILD_PKGS_PARALLEL" "failed"
+            exit 1
+          fi
         fi
+
+    - name: 预编译所有第三方软件包（单线程模式）
+      id: prebuild_serial
+      if: steps.prebuild_parallel.outcome == 'failure'
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "PREBUILD_PKGS_SERIAL" "预编译所有第三方软件包（单线程详细模式）"
+        cd "$OPENWRT_PATH"
         
-        step_complete "PREBUILD_PKGS" "success"
+        # 设置编译日志文件
+        BUILD_LOG="$GITHUB_WORKSPACE/prebuild_serial.log"
+        
+        # 提取所有 luci-开头的包
+        PACKAGES=$(grep "^CONFIG_PACKAGE_luci-.*=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
+        
+        log "INFO" "开始单线程详细预编译软件包: $PACKAGES"
+        if make -j1 V=s $PACKAGES/compile > "$BUILD_LOG" 2>&1; then
+          log "INFO" "单线程预编译成功"
+          echo "status=success" >> $GITHUB_OUTPUT
+          step_complete "PREBUILD_PKGS_SERIAL" "success"
+        else
+          log "ERROR" "单线程预编译也失败了"
+          
+          # 提取最后几行错误信息
+          log "ERROR" "预编译错误详情（最后20行）："
+          tail -20 "$BUILD_LOG" | while read line; do
+            log "ERROR" "$line"
+          done
+          
+          # 查找常见的错误模式
+          if grep -q "error:" "$BUILD_LOG"; then
+            log "ERROR" "发现编译错误："
+            grep -n "error:" "$BUILD_LOG" | tail -5 | while read line; do
+              log "ERROR" "$line"
+            done
+          fi
+          
+          echo "status=failed" >> $GITHUB_OUTPUT
+          step_complete "PREBUILD_PKGS_SERIAL" "failed"
+          exit 1
+        fi
+
+    - name: 上传预编译日志
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: prebuild-logs
+        path: |
+          ${{ github.workspace }}/prebuild_parallel.log
+          ${{ github.workspace }}/prebuild_serial.log
+        retention-days: 7
 
     - name: 上传预编译软件包
+      if: steps.prebuild_parallel.outcome == 'success' || steps.prebuild_serial.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: prebuilt-packages-ipq60xx
@@ -294,15 +493,59 @@ jobs:
         make defconfig
         step_complete "PREP_VARIANT" "success"
 
-    - name: 组装固件
+    - name: 组装固件（并行模式）
+      id: assemble_parallel
+      continue-on-error: true
       run: |
         source "$LOGGER_SCRIPT"
-        step_start "ASSEMBLE_FIRMWARE" "组装最终固件"
+        step_start "ASSEMBLE_FIRMWARE_PARALLEL" "组装最终固件（并行模式）"
         cd "$OPENWRT_PATH"
-        make -j$(nproc) # 此步骤会非常快
-        step_complete "ASSEMBLE_FIRMWARE" "success"
+        
+        # 设置编译日志文件
+        BUILD_LOG="$GITHUB_WORKSPACE/assemble_parallel.log"
+        
+        if make -j$(nproc) > "$BUILD_LOG" 2>&1; then
+          log "INFO" "并行组装固件成功"
+          echo "status=success" >> $GITHUB_OUTPUT
+          step_complete "ASSEMBLE_FIRMWARE_PARALLEL" "success"
+        else
+          log "ERROR" "并行组装固件失败，将尝试单线程组装"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          step_complete "ASSEMBLE_FIRMWARE_PARALLEL" "failed"
+          exit 1
+        fi
+
+    - name: 组装固件（单线程模式）
+      id: assemble_serial
+      if: steps.assemble_parallel.outcome == 'failure'
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "ASSEMBLE_FIRMWARE_SERIAL" "组装最终固件（单线程详细模式）"
+        cd "$OPENWRT_PATH"
+        
+        # 设置编译日志文件
+        BUILD_LOG="$GITHUB_WORKSPACE/assemble_serial.log"
+        
+        if make -j1 V=s > "$BUILD_LOG" 2>&1; then
+          log "INFO" "单线程组装固件成功"
+          echo "status=success" >> $GITHUB_OUTPUT
+          step_complete "ASSEMBLE_FIRMWARE_SERIAL" "success"
+        else
+          log "ERROR" "单线程组装固件也失败了"
+          
+          # 提取最后几行错误信息
+          log "ERROR" "组装固件错误详情（最后20行）："
+          tail -20 "$BUILD_LOG" | while read line; do
+            log "ERROR" "$line"
+          done
+          
+          echo "status=failed" >> $GITHUB_OUTPUT
+          step_complete "ASSEMBLE_FIRMWARE_SERIAL" "failed"
+          exit 1
+        fi
 
     - name: 上传固件产物
+      if: steps.assemble_parallel.outcome == 'success' || steps.assemble_serial.outcome == 'success'
       uses: actions/upload-artifact@v4
       with:
         name: firmware-${{ matrix.repo }}-${{ matrix.variant }}-${{ env.FILE_DATE }}
@@ -317,4 +560,6 @@ jobs:
         path: |
           ${{ github.workspace }}/$LOG_FILE
           ${{ github.workspace }}/$REPORT_FILE
+          ${{ github.workspace }}/assemble_parallel.log
+          ${{ github.workspace }}/assemble_serial.log
         retention-days: 7
