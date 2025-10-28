@@ -46,32 +46,17 @@ jobs:
             repo_branch: master
     
     steps:
-    - name: 初始化日志系统
-      run: |
-        cat > /tmp/logger.sh << 'EOF'
-        #!/bin/bash
-        declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
-        CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
-        LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
-        REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
-        echo "=== Base Log Started at $(date) ===" > "$LOG_FILE"
-        echo '{"build_id":"base-${{ matrix.repo_config }}-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
-        log() { local level="$1" message="$2" step="${3:-$(caller | awk '{print $2}')}"; local timestamp=$(date '+%Y-%m-%d %H:%M:%S'); if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then case $level in DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;; INFO) echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;; WARN) echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;; ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;; esac; echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"; fi; }
-        step_start() { local step_name="$1" description="$2"; log "INFO" "▶ 开始执行: $description" "$step_name"; }
-        step_complete() { local step_name="$1" status="$2"; if [ "$status" = "success" ]; then log "INFO" "✅ 步骤完成: $step_name" "$step_name"; elif [ "$status" = "failed" ]; then log "ERROR" "❌ 步骤失败: $step_name" "$step_name"; fi; }
-        export -f log step_start step_complete
-        EOF
-        chmod +x /tmp/logger.sh
-        echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
-        source /tmp/logger.sh
-        step_start "INIT" "初始化基础构建日志 (${{ matrix.repo_config }})"
-
     - name: 检出代码
       uses: actions/checkout@v4
 
+    - name: 初始化日志系统
+      run: |
+        chmod +x scripts/logger.sh
+        scripts/logger.sh "base" "base-${{ matrix.repo_config }}-$(date +%s)"
+        step_start "INIT" "初始化基础构建日志 (${{ matrix.repo_config }})"
+
     - name: 克隆仓库
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "CLONE_REPO" "克隆 ${{ matrix.repo_config }} 仓库"
         
         # 创建目录
@@ -88,174 +73,21 @@ jobs:
     - name: 生成变量并检查配置
       id: generate_vars
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "GEN_VARS" "生成构建变量并检查配置"
         
         # 设置REPO_SHORT变量
         REPO_SHORT="${{ matrix.repo_config }}"
         echo "REPO_SHORT=$REPO_SHORT" >> $GITHUB_ENV
         
-        # 打印关键环境变量和路径
-        echo "DEBUG: GITHUB_WORKSPACE = $GITHUB_WORKSPACE"
-        echo "DEBUG: OPENWRT_PATH = $OPENWRT_PATH"
-        echo "DEBUG: CONFIG_BASE_DIR = $CONFIG_BASE_DIR"
-        echo "DEBUG: REPO_SHORT = $REPO_SHORT"
+        # 加载软件包检查脚本
+        chmod +x scripts/package_checker.sh
+        source scripts/package_checker.sh
         
-        # 检查配置目录是否存在
-        CONFIG_DIR_FULL_PATH="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"
-        echo "DEBUG: 检查配置目录: $CONFIG_DIR_FULL_PATH"
-        if [ ! -d "$CONFIG_DIR_FULL_PATH" ]; then
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-          echo "!!! 错误: 配置目录不存在: $CONFIG_DIR_FULL_PATH"
-          echo "!!! 请检查您的仓库中是否包含 'configs' 文件夹。"
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-          exit 1
-        fi
-        ls -la "$CONFIG_DIR_FULL_PATH"
-        
-        # 封装配置检查函数
-        check_luci_packages() {
-          local config_file="$1"
-          local step_name="$2"
-          
-          echo ""
-          echo "=================================================================================="
-          echo -e "\033[1;44;37m 🔍 检查 $step_name 配置中的 Luci 软件包 \033[0m"
-          echo "=================================================================================="
-          echo -e "\033[1;36m配置文件: $config_file\033[0m"
-          echo ""
-          
-          local luci_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" "$config_file" | sort || true)
-          
-          if [ -n "$luci_packages" ]; then
-            echo -e "\033[1;32m发现以下 Luci 软件包:\033[0m"
-            echo "$luci_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-              echo -e "  \033[0;32m✓ $pkg\033[0m"
-              log "INFO" "  - $pkg"
-            done
-          else
-            echo -e "\033[1;33m(无 Luci 软件包)\033[0m"
-            log "INFO" "  (无 Luci 软件包)"
-          fi
-          echo "=================================================================================="
-          echo ""
-        }
-        
-        check_defconfig_packages() {
-          local before_packages="$1"
-          local step_name="$2"
-          
-          echo ""
-          echo "=================================================================================="
-          echo -e "\033[1;44;37m 🔧 运行 defconfig 并检查 $step_name \033[0m"
-          echo "=================================================================================="
-          log "INFO" "运行 defconfig..."
-          
-          # 修复：执行 defconfig 并捕获所有输出，包括错误
-          DEFCONFIG_OUTPUT=$(make defconfig 2>&1)
-          DEFCONFIG_EXIT_CODE=$?
-          
-          # 如果 defconfig 失败，打印错误信息并退出
-          if [ $DEFCONFIG_EXIT_CODE -ne 0 ]; then
-            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-            echo "!!! 致命错误: 'make defconfig' 执行失败!"
-            echo "!!! 退出码: $DEFCONFIG_EXIT_CODE"
-            echo "!!! 错误信息如下:"
-            echo "$DEFCONFIG_OUTPUT"
-            echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-            exit 1
-          fi
-          
-          echo -e "\033[1;36mDefconfig 完成，正在分析软件包变化...\033[0m"
-          echo ""
-          
-          local after_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
-          
-          echo -e "\033[1;32mDefconfig后的最终 Luci 软件包列表:\033[0m"
-          if [ -n "$after_packages" ]; then
-            echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-              echo -e "  \033[0;32m✓ $pkg\033[0m"
-              log "INFO" "  - $pkg"
-            done
-          else
-            echo -e "\033[1;33m(无 Luci 软件包)\033[0m"
-            log "INFO" "  (无 Luci 软件包)"
-          fi
-          
-          echo ""
-          echo -e "\033[1;34m------------------- 软件包变化分析 -------------------\033[0m"
-          
-          local found_new=false
-          echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            if ! echo "$before_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
-              if [ "$found_new" = false ]; then
-                echo -e "\033[1;32m🔍 发现新增的 Luci 软件包:\033[0m"
-                found_new=true
-              fi
-              echo -e "  \033[0;32m✅ $pkg\033[0m"
-              log "INFO" "  ✅ $pkg"
-            fi
-          done
-          
-          if [ "$found_new" = false ]; then
-            echo -e "\033[1;37mℹ️  无新增的 Luci 软件包\033[0m"
-            log "INFO" "ℹ️  无新增的Luci软件包"
-          fi
-          
-          echo ""
-          
-          local found_missing=false
-          echo "$before_packages" | while read pkg_line; do
-            local pkg=$(echo "$pkg_line" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//')
-            if ! echo "$after_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
-              if [ "$found_missing" = false ]; then
-                echo -e "\033[1;31m⚠️  发现缺失的 Luci 软件包:\033[0m"
-                found_missing=true
-              fi
-              echo -e "  \033[0;31m❌ $pkg\033[0m"
-              log "WARN" "  ❌ $pkg"
-            fi
-          done
-          
-          if [ "$found_missing" = false ]; then
-            echo -e "\033[1;37mℹ️  无缺失的 Luci 软件包\033[0m"
-            log "INFO" "ℹ️  无缺失的Luci软件包"
-          else
-            echo -e "\n\033[1;31m注意：缺失的软件包可能是因为依赖不满足或已被移除\033[0m"
-          fi
-          
-          echo "=================================================================================="
-          echo ""
-        }
-        
-        export -f check_luci_packages check_defconfig_packages
-        
-        find_config_file() { local base_name="$1"; local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"; for ext in ".config" ".config.txt"; do if [ -f "${config_dir}/${base_name}${ext}" ]; then echo "${config_dir}/${base_name}${ext}"; return 0; fi; done; return 1; }
-        
-        # 查找配置文件并增加调试信息
-        echo "DEBUG: 正在查找基础配置文件 'base_ipq60xx'..."
+        # 查找配置文件
         CONFIG_BASE=$(find_config_file "base_ipq60xx")
-        if [ $? -ne 0 ]; then
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-          echo "!!! 错误: 找不到基础配置文件 'base_ipq60xx.config'!"
-          echo "!!! 请检查它是否存在于 $CONFIG_DIR_FULL_PATH 目录中。"
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-          exit 1
-        fi
-        echo "DEBUG: 找到基础配置文件: $CONFIG_BASE"
-
-        echo "DEBUG: 正在查找分支配置文件 'base_${REPO_SHORT}'..."
         CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
-        if [ $? -ne 0 ]; then
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-          echo "!!! 错误: 找不到分支配置文件 'base_${REPO_SHORT}.config'!"
-          echo "!!! 请检查它是否存在于 $CONFIG_DIR_FULL_PATH 目录中。"
-          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-          exit 1
-        fi
-        echo "DEBUG: 找到分支配置文件: $CONFIG_BRANCH"
         
-        # 直接调用函数，不捕获输出
+        # 检查配置文件
         check_luci_packages "$CONFIG_BASE" "基础配置"
         check_luci_packages "$CONFIG_BRANCH" "分支配置"
         
@@ -263,27 +95,56 @@ jobs:
         log "INFO" "合并基础配置和分支配置..."
         cat "$CONFIG_BASE" "$CONFIG_BRANCH" > .config
         
-        # 直接调用函数，不捕获输出
+        # 检查合并后的配置
         check_luci_packages ".config" "合并后配置"
         
-        # 先获取合并后的包列表，再调用检查函数
+        # 保存合并后的软件包列表
         MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
-        check_defconfig_packages "$MERGED_LUCI" "基础环境"
+        echo "MERGED_LUCI<<EOF" >> $GITHUB_ENV
+        echo "$MERGED_LUCI" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
         
-        # 为每个仓库设置输出变量
+        # 设置输出变量
         echo "repo_short_${REPO_SHORT}=${REPO_SHORT}" >> $GITHUB_OUTPUT
         
-        # 提取设备信息，增加健壮性
+        # 提取设备信息
         DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_BOARD=" | awk -F '"' '{print $2}' || echo "未知")
         if [ "$DEVICE_INFO" = "未知" ]; then
-          DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_ARCH_PACKAGES=" | awk -F '"' '{print $2}' || echo "未知")
+            DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_ARCH_PACKAGES=" | awk -F '"' '{print $2}' || echo "未知")
         fi
         log "INFO" "设备信息: $DEVICE_INFO"
         step_complete "GEN_VARS" "success"
 
+    - name: 运行defconfig
+      run: |
+        step_start "DEFCONFIG" "运行defconfig"
+        cd ${{ env.OPENWRT_PATH }}
+        
+        # 加载软件包检查脚本
+        chmod +x scripts/package_checker.sh
+        source scripts/package_checker.sh
+        
+        # 运行defconfig
+        run_defconfig
+        
+        step_complete "DEFCONFIG" "success"
+
+    - name: 生成软件包对比报告
+      run: |
+        step_start "PACKAGE_REPORT" "生成软件包对比报告"
+        cd ${{ env.OPENWRT_PATH }}
+        
+        # 加载软件包检查脚本
+        chmod +x scripts/package_checker.sh
+        source scripts/package_checker.sh
+        
+        # 生成对比报告
+        generate_package_report "$MERGED_LUCI" "基础环境"
+        
+        step_complete "PACKAGE_REPORT" "success"
+
     - name: 安装依赖
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "INSTALL_DEPS" "安装构建依赖"
         cd ${{ env.OPENWRT_PATH }}
         
@@ -302,7 +163,6 @@ jobs:
 
     - name: 构建基础环境
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "BUILD_BASE" "构建基础环境"
         cd ${{ env.OPENWRT_PATH }}
         
@@ -328,28 +188,14 @@ jobs:
     needs: Build-Bases
     runs-on: ubuntu-22.04
     steps:
-    - name: 初始化日志系统
-      run: |
-        cat > /tmp/logger.sh << 'EOF'
-        #!/bin/bash
-        declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
-        CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
-        LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
-        REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
-        echo "=== Prebuild Log Started at $(date) ===" > "$LOG_FILE"
-        echo '{"build_id":"prebuild-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
-        log() { local level="$1" message="$2" step="${3:-$(caller | awk '{print $2}')}"; local timestamp=$(date '+%Y-%m-%d %H:%M:%S'); if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then case $level in DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;; INFO) echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;; WARN) echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;; ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;; esac; echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"; fi; }
-        step_start() { local step_name="$1" description="$2"; log "INFO" "▶ 开始执行: $description" "$step_name"; }
-        step_complete() { local step_name="$1" status="$2"; if [ "$status" = "success" ]; then log "INFO" "✅ 步骤完成: $step_name" "$step_name"; elif [ "$status" = "failed" ]; then log "ERROR" "❌ 步骤失败: $step_name" "$step_name"; fi; }
-        export -f log step_start step_complete
-        EOF
-        chmod +x /tmp/logger.sh
-        echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
-        source /tmp/logger.sh
-        step_start "INIT" "初始化预编译构建日志"
-
     - name: 检出代码
       uses: actions/checkout@v4
+
+    - name: 初始化日志系统
+      run: |
+        chmod +x scripts/logger.sh
+        scripts/logger.sh "prebuild" "prebuild-$(date +%s)"
+        step_start "INIT" "初始化预编译构建日志"
 
     - name: 创建目录
       run: |
@@ -365,109 +211,25 @@ jobs:
     - name: 生成"超级配置"并检查
       id: generate_super_config
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "GEN_SUPER_CONFIG" "生成包含所有变体软件包的超级配置"
         cd "$OPENWRT_PATH"
         
-        check_luci_packages() {
-          local config_file="$1"
-          local step_name="$2"
-          echo ""
-          echo "=================================================================================="
-          echo -e "\033[1;44;37m 🔍 检查 $step_name 配置中的 Luci 软件包 \033[0m"
-          echo "=================================================================================="
-          echo -e "\033[1;36m配置文件: $config_file\033[0m"
-          echo ""
-          local luci_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" "$config_file" | sort || true)
-          if [ -n "$luci_packages" ]; then
-            echo -e "\033[1;32m发现以下 Luci 软件包:\033[0m"
-            echo "$luci_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-              echo -e "  \033[0;32m✓ $pkg\033[0m"
-              log "INFO" "  - $pkg"
-            done
-          else
-            echo -e "\033[1;33m(无 Luci 软件包)\033[0m"
-            log "INFO" "  (无 Luci 软件包)"
-          fi
-          echo "=================================================================================="
-          echo ""
-        }
+        # 加载软件包检查脚本
+        chmod +x scripts/package_checker.sh
+        source scripts/package_checker.sh
         
-        check_defconfig_packages() {
-          local before_packages="$1"
-          local step_name="$2"
-          echo ""
-          echo "=================================================================================="
-          echo -e "\033[1;44;37m 🔧 运行 defconfig 并检查 $step_name \033[0m"
-          echo "=================================================================================="
-          log "INFO" "运行 defconfig..."
-          make defconfig > /dev/null 2>&1
-          echo -e "\033[1;36mDefconfig 完成，正在分析软件包变化...\033[0m"
-          echo ""
-          local after_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
-          echo -e "\033[1;32mDefconfig后的最终 Luci 软件包列表:\033[0m"
-          if [ -n "$after_packages" ]; then
-            echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-              echo -e "  \033[0;32m✓ $pkg\033[0m"
-              log "INFO" "  - $pkg"
-            done
-          else
-            echo -e "\033[1;33m(无 Luci 软件包)\033[0m"
-            log "INFO" "  (无 Luci 软件包)"
-          fi
-          echo ""
-          echo -e "\033[1;34m------------------- 软件包变化分析 -------------------\033[0m"
-          local found_new=false
-          echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            if ! echo "$before_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
-              if [ "$found_new" = false ]; then
-                echo -e "\033[1;32m🔍 发现新增的 Luci 软件包:\033[0m"
-                found_new=true
-              fi
-              echo -e "  \033[0;32m✅ $pkg\033[0m"
-              log "INFO" "  ✅ $pkg"
-            fi
-          done
-          if [ "$found_new" = false ]; then
-            echo -e "\033[1;37mℹ️  无新增的 Luci 软件包\033[0m"
-            log "INFO" "ℹ️  无新增的Luci软件包"
-          fi
-          echo ""
-          local found_missing=false
-          echo "$before_packages" | while read pkg_line; do
-            local pkg=$(echo "$pkg_line" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//')
-            if ! echo "$after_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
-              if [ "$found_missing" = false ]; then
-                echo -e "\033[1;31m⚠️  发现缺失的 Luci 软件包:\033[0m"
-                found_missing=true
-              fi
-              echo -e "  \033[0;31m❌ $pkg\033[0m"
-              log "WARN" "  ❌ $pkg"
-            fi
-          done
-          if [ "$found_missing" = false ]; then
-            echo -e "\033[1;37mℹ️  无缺失的 Luci 软件包\033[0m"
-            log "INFO" "ℹ️  无缺失的Luci软件包"
-          else
-            echo -e "\n\033[1;31m注意：缺失的软件包可能是因为依赖不满足或已被移除\033[0m"
-          fi
-          echo "=================================================================================="
-          echo ""
-        }
-        
-        export -f check_luci_packages check_defconfig_packages
-        
+        # 创建基础配置
         echo "CONFIG_TARGET_ipq60xx=y" > .config
         echo "CONFIG_TARGET_ipq60xx_DEVICE_generic=y" >> .config
         echo "CONFIG_TARGET_DEVICE_ipq60xx_generic=y" >> .config
         
-        # 直接调用函数
+        # 检查基础配置
         check_luci_packages ".config" "基础配置"
         
+        # 合并所有变体配置
         for variant in Pro Max Ultra; do
           log "INFO" "合并 $variant 配置"
           if [ -f "${{ env.CONFIG_BASE_DIR }}/${variant}.config" ]; then
-            # 直接调用函数
             check_luci_packages "${{ env.CONFIG_BASE_DIR }}/${variant}.config" "$variant 配置"
             cat "${{ env.CONFIG_BASE_DIR }}/${variant}.config" >> .config
           else
@@ -475,15 +237,45 @@ jobs:
           fi
         done
         
-        # 直接调用函数
+        # 检查超级配置
         check_luci_packages ".config" "超级配置合并后"
         
-        # 先获取包列表，再调用检查函数
-        MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
-        check_defconfig_packages "$MERGED_LUCI" "超级配置"
+        # 保存合并后的软件包列表
+        SUPER_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
+        echo "SUPER_LUCI<<EOF" >> $GITHUB_ENV
+        echo "$SUPER_LUCI" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
         
         log "INFO" "超级配置生成完成"
         step_complete "GEN_SUPER_CONFIG" "success"
+
+    - name: 运行defconfig
+      run: |
+        step_start "DEFCONFIG" "运行defconfig"
+        cd "$OPENWRT_PATH"
+        
+        # 加载软件包检查脚本
+        chmod +x scripts/package_checker.sh
+        source scripts/package_checker.sh
+        
+        # 运行defconfig
+        run_defconfig
+        
+        step_complete "DEFCONFIG" "success"
+
+    - name: 生成软件包对比报告
+      run: |
+        step_start "PACKAGE_REPORT" "生成软件包对比报告"
+        cd "$OPENWRT_PATH"
+        
+        # 加载软件包检查脚本
+        chmod +x scripts/package_checker.sh
+        source scripts/package_checker.sh
+        
+        # 生成对比报告
+        generate_package_report "$SUPER_LUCI" "超级配置"
+        
+        step_complete "PACKAGE_REPORT" "success"
 
     - name: 缓存预编译软件包
       uses: actions/cache@v4
@@ -498,7 +290,6 @@ jobs:
       id: prebuild_parallel
       continue-on-error: true
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "PREBUILD_PKGS_PARALLEL" "预编译所有第三方软件包（并行模式）"
         cd "$OPENWRT_PATH"
         
@@ -527,7 +318,6 @@ jobs:
       id: prebuild_serial
       if: steps.prebuild_parallel.outcome == 'failure'
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "PREBUILD_PKGS_SERIAL" "预编译所有第三方软件包（单线程详细模式）"
         cd "$OPENWRT_PATH"
         
@@ -583,28 +373,14 @@ jobs:
         variant: ['Pro', 'Max', 'Ultra']
     
     steps:
-    - name: 初始化日志系统
-      run: |
-        cat > /tmp/logger.sh << 'EOF'
-        #!/bin/bash
-        declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
-        CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
-        LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
-        REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
-        echo "=== Variant Log Started at $(date) ===" > "$LOG_FILE"
-        echo '{"build_id":"variant-${{ matrix.repo }}-${{ matrix.variant }}-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
-        log() { local level="$1" message="$2" step="${3:-$(caller | awk '{print $2}')}"; local timestamp=$(date '+%Y-%m-%d %H:%M:%S'); if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then case $level in DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;; INFO) echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;; WARN) echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;; ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;; esac; echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"; fi; }
-        step_start() { local step_name="$1" description="$2"; log "INFO" "▶ 开始执行: $description" "$step_name"; }
-        step_complete() { local step_name="$1" status="$2"; if [ "$status" = "success" ]; then log "INFO" "✅ 步骤完成: $step_name" "$step_name"; elif [ "$status" = "failed" ]; then log "ERROR" "❌ 步骤失败: $step_name" "$step_name"; fi; }
-        export -f log step_start step_complete
-        EOF
-        chmod +x /tmp/logger.sh
-        echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
-        source /tmp/logger.sh
-        step_start "INIT" "初始化变体组装日志 (${{ matrix.repo }}-${{ matrix.variant }})"
-
     - name: 检出代码
       uses: actions/checkout@v4
+
+    - name: 初始化日志系统
+      run: |
+        chmod +x scripts/logger.sh
+        scripts/logger.sh "variant" "variant-${{ matrix.repo }}-${{ matrix.variant }}-$(date +%s)"
+        step_start "INIT" "初始化变体组装日志 (${{ matrix.repo }}-${{ matrix.variant }})"
 
     - name: 创建目录
       run: |
@@ -625,123 +401,67 @@ jobs:
 
     - name: 准备变体配置并检查
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "PREP_VARIANT" "准备变体配置 (${{ matrix.variant }})"
         cd "$OPENWRT_PATH"
         
-        check_luci_packages() {
-          local config_file="$1"
-          local step_name="$2"
-          echo ""
-          echo "=================================================================================="
-          echo -e "\033[1;44;37m 🔍 检查 $step_name 配置中的 Luci 软件包 \033[0m"
-          echo "=================================================================================="
-          echo -e "\033[1;36m配置文件: $config_file\033[0m"
-          echo ""
-          local luci_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" "$config_file" | sort || true)
-          if [ -n "$luci_packages" ]; then
-            echo -e "\033[1;32m发现以下 Luci 软件包:\033[0m"
-            echo "$luci_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-              echo -e "  \033[0;32m✓ $pkg\033[0m"
-              log "INFO" "  - $pkg"
-            done
-          else
-            echo -e "\033[1;33m(无 Luci 软件包)\033[0m"
-            log "INFO" "  (无 Luci 软件包)"
-          fi
-          echo "=================================================================================="
-          echo ""
-        }
+        # 加载软件包检查脚本
+        chmod +x scripts/package_checker.sh
+        source scripts/package_checker.sh
         
-        check_defconfig_packages() {
-          local before_packages="$1"
-          local step_name="$2"
-          echo ""
-          echo "=================================================================================="
-          echo -e "\033[1;44;37m 🔧 运行 defconfig 并检查 $step_name \033[0m"
-          echo "=================================================================================="
-          log "INFO" "运行 defconfig..."
-          make defconfig > /dev/null 2>&1
-          echo -e "\033[1;36mDefconfig 完成，正在分析软件包变化...\033[0m"
-          echo ""
-          local after_packages=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
-          echo -e "\033[1;32mDefconfig后的最终 Luci 软件包列表:\033[0m"
-          if [ -n "$after_packages" ]; then
-            echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-              echo -e "  \033[0;32m✓ $pkg\033[0m"
-              log "INFO" "  - $pkg"
-            done
-          else
-            echo -e "\033[1;33m(无 Luci 软件包)\033[0m"
-            log "INFO" "  (无 Luci 软件包)"
-          fi
-          echo ""
-          echo -e "\033[1;34m------------------- 软件包变化分析 -------------------\033[0m"
-          local found_new=false
-          echo "$after_packages" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//' | while read pkg; do
-            if ! echo "$before_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
-              if [ "$found_new" = false ]; then
-                echo -e "\033[1;32m🔍 发现新增的 Luci 软件包:\033[0m"
-                found_new=true
-              fi
-              echo -e "  \033[0;32m✅ $pkg\033[0m"
-              log "INFO" "  ✅ $pkg"
-            fi
-          done
-          if [ "$found_new" = false ]; then
-            echo -e "\033[1;37mℹ️  无新增的 Luci 软件包\033[0m"
-            log "INFO" "ℹ️  无新增的Luci软件包"
-          fi
-          echo ""
-          local found_missing=false
-          echo "$before_packages" | while read pkg_line; do
-            local pkg=$(echo "$pkg_line" | sed 's/^CONFIG_PACKAGE_//' | sed 's/=y//')
-            if ! echo "$after_packages" | grep -Fq "CONFIG_PACKAGE_${pkg}=y"; then
-              if [ "$found_missing" = false ]; then
-                echo -e "\033[1;31m⚠️  发现缺失的 Luci 软件包:\033[0m"
-                found_missing=true
-              fi
-              echo -e "  \033[0;31m❌ $pkg\033[0m"
-              log "WARN" "  ❌ $pkg"
-            fi
-          done
-          if [ "$found_missing" = false ]; then
-            echo -e "\033[1;37mℹ️  无缺失的 Luci 软件包\033[0m"
-            log "INFO" "ℹ️  无缺失的Luci软件包"
-          else
-            echo -e "\n\033[1;31m注意：缺失的软件包可能是因为依赖不满足或已被移除\033[0m"
-          fi
-          echo "=================================================================================="
-          echo ""
-        }
-        
-        export -f check_luci_packages check_defconfig_packages
-        
-        find_config_file() { local base_name="$1"; local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"; for ext in ".config" ".config.txt"; do if [ -f "${config_dir}/${base_name}${ext}" ]; then echo "${config_dir}/${base_name}${ext}"; return 0; fi; done; return 1; }
-        
+        # 查找配置文件
         CONFIG_BASE=$(find_config_file "base_ipq60xx")
         CONFIG_VARIANT=$(find_config_file "${{ matrix.variant }}")
         
-        # 直接调用函数
+        # 检查配置文件
         check_luci_packages "$CONFIG_BASE" "基础配置"
         check_luci_packages "$CONFIG_VARIANT" "${{ matrix.variant }} 配置"
         
+        # 合并配置文件
         cat "$CONFIG_BASE" "$CONFIG_VARIANT" > .config.tmp && mv .config.tmp .config
         
-        # 直接调用函数
+        # 检查合并后的配置
         check_luci_packages ".config" "变体合并后配置"
         
-        # 先获取包列表，再调用检查函数
-        MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
-        check_defconfig_packages "$MERGED_LUCI" "变体 ${{ matrix.variant }}"
+        # 保存合并后的软件包列表
+        VARIANT_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
+        echo "VARIANT_LUCI<<EOF" >> $GITHUB_ENV
+        echo "$VARIANT_LUCI" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
         
         step_complete "PREP_VARIANT" "success"
+
+    - name: 运行defconfig
+      run: |
+        step_start "DEFCONFIG" "运行defconfig"
+        cd "$OPENWRT_PATH"
+        
+        # 加载软件包检查脚本
+        chmod +x scripts/package_checker.sh
+        source scripts/package_checker.sh
+        
+        # 运行defconfig
+        run_defconfig
+        
+        step_complete "DEFCONFIG" "success"
+
+    - name: 生成软件包对比报告
+      run: |
+        step_start "PACKAGE_REPORT" "生成软件包对比报告"
+        cd "$OPENWRT_PATH"
+        
+        # 加载软件包检查脚本
+        chmod +x scripts/package_checker.sh
+        source scripts/package_checker.sh
+        
+        # 生成对比报告
+        generate_package_report "$VARIANT_LUCI" "变体 ${{ matrix.variant }}"
+        
+        step_complete "PACKAGE_REPORT" "success"
 
     - name: 组装固件（并行模式）
       id: assemble_parallel
       continue-on-error: true
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "ASSEMBLE_FIRMWARE_PARALLEL" "组装最终固件（并行模式）"
         cd "$OPENWRT_PATH"
         
@@ -762,7 +482,6 @@ jobs:
       id: assemble_serial
       if: steps.assemble_parallel.outcome == 'failure'
       run: |
-        source "$LOGGER_SCRIPT"
         step_start "ASSEMBLE_FIRMWARE_SERIAL" "组装最终固件（单线程详细模式）"
         cd "$OPENWRT_PATH"
         
