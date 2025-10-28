@@ -10,8 +10,9 @@ init_environment() {
     set -euo pipefail
     trap 'log "ERROR" "命令执行失败: $BASH_COMMAND ($LINENO)"' ERR
     
-    # 尝试使用缓存的环境
-    if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
+    # 检查是否使用缓存的环境
+    # 通过检查环境变量而不是直接使用GitHub Actions变量
+    if [ "${USE_CACHE_ENV:-false}" = "true" ]; then
         log "INFO" "使用缓存的环境，跳过初始化"
         step_complete "ENV_INIT" "success"
         return 0
