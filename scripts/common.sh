@@ -85,6 +85,17 @@ ERROR_PATTERNS=(
 # 记录的错误，避免重复
 RECORDED_ERRORS=""
 
+# 简化的错误记录函数，避免递归调用
+simple_log_error() {
+    local error_msg="\$1"
+    local package="\$2"
+    
+    echo -e "\n\033[1;41;37m🔥 构建错误 🔥\033[0m"
+    echo -e "\033[1;31m错误信息: \$error_msg\033[0m"
+    echo -e "\033[1;31m相关包: \$package\033[0m"
+    echo -e "\033[1;41;37m================\033[0m\n"
+}
+
 tail -f "\$LOG_FILE" | while read line; do
     for pattern in "\${ERROR_PATTERNS[@]}"; do
         if echo "\$line" | grep -q "\$pattern"; then
@@ -109,8 +120,8 @@ tail -f "\$LOG_FILE" | while read line; do
             # 添加到已记录错误列表
             RECORDED_ERRORS="\${RECORDED_ERRORS}\${ERROR_KEY}\n"
             
-            # 调用错误记录函数
-            log_build_error "\$line" "\$PACKAGE"
+            # 调用简化的错误记录函数
+            simple_log_error "\$line" "\$PACKAGE"
             break  # 只记录第一个匹配的错误模式
         fi
     done
@@ -135,6 +146,16 @@ wait_and_kill_monitor() {
 execute_custom_script() {
     local script_path="$1"
     local script_name="$2"
+    
+    # 确保日志系统已加载
+    if [ -z "$(type -t log)" ]; then
+        # 如果日志系统未加载，使用简单的日志函数
+        log() {
+            local level="$1"
+            local message="$2"
+            echo "[$level] $message"
+        }
+    fi
     
     if [ -f "$script_path" ]; then
         log "INFO" "执行${script_name}脚本: $script_path"
