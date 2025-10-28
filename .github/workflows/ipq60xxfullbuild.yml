@@ -228,12 +228,12 @@ jobs:
           source scripts/reporter.sh
           check_disk_space
 
-      # 上传构建日志和报告
+      # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
         if: always()
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          name: ${{ env.SOURCE_REPO }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
           path: |
             ${{ github.workspace }}/build.log
             ${{ github.workspace }}/build_report.json
@@ -243,12 +243,12 @@ jobs:
             ${{ github.workspace }}/error_*.log
           retention-days: 30
 
-      # 上传基础环境到Artifact
+      # 上传基础环境到Artifact - 添加唯一ID避免冲突
       - name: 上传基础环境到Artifact
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-base-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          name: ${{ env.SOURCE_REPO }}-base-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
           path: |
             ${{ env.OPENWRT_PATH }}/bin
             ${{ env.OPENWRT_PATH }}/.config
@@ -377,6 +377,7 @@ jobs:
 
       # 缓存DL软件包
       - name: 缓存DL软件包
+      - name: 缓存DL软件包
         id: cache_dl
         uses: actions/cache@main
         with:
@@ -478,12 +479,12 @@ jobs:
           source scripts/reporter.sh
           check_disk_space
 
-      # 上传构建日志和报告
+      # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
         if: always()
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
           path: |
             ${{ github.workspace }}/build.log
             ${{ github.workspace }}/build_report.json
@@ -493,12 +494,12 @@ jobs:
             ${{ github.workspace }}/error_*.log
           retention-days: 30
 
-      # 上传Ultra变体配置到Artifact
+      # 上传Ultra变体配置到Artifact - 添加唯一ID避免冲突
       - name: 上传Ultra变体配置到Artifact
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
           path: |
             ${{ env.OPENWRT_PATH }}/bin
             ${{ env.OPENWRT_PATH }}/.config
@@ -728,12 +729,12 @@ jobs:
           source scripts/reporter.sh
           check_disk_space
 
-      # 上传构建日志和报告
+      # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
         if: always()
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
           path: |
             ${{ github.workspace }}/build.log
             ${{ github.workspace }}/build_report.json
@@ -743,12 +744,12 @@ jobs:
             ${{ github.workspace }}/error_*.log
           retention-days: 30
 
-      # 上传Max变体配置到Artifact
+      # 上传Max变体配置到Artifact - 添加唯一ID避免冲突
       - name: 上传Max变体配置到Artifact
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
           path: |
             ${{ env.OPENWRT_PATH }}/bin
             ${{ env.OPENWRT_PATH }}/.config
@@ -978,12 +979,12 @@ jobs:
           source scripts/reporter.sh
           check_disk_space
 
-      # 上传构建日志和报告
+      # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
         if: always()
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
           path: |
             ${{ github.workspace }}/build.log
             ${{ github.workspace }}/build_report.json
@@ -993,12 +994,12 @@ jobs:
             ${{ github.workspace }}/error_*.log
           retention-days: 30
 
-      # 上传Pro变体配置到Artifact
+      # 上传Pro变体配置到Artifact - 添加唯一ID避免冲突
       - name: 上传Pro变体配置到Artifact
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
           path: |
             ${{ env.OPENWRT_PATH }}/bin
             ${{ env.OPENWRT_PATH }}/.config
