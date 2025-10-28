@@ -24,16 +24,76 @@ env:
   BUILD_LOG_LEVEL: INFO
   BUILD_LOG_FILE: build.log
   REPORT_FILE: build_report.json
+  FILE_DATE: ${{ github.run_number }}-${{ github.sha }}
 
 jobs:
-    - name: 生成变量并检查配置 (调试版 v2)
+  # ==================== 阶段一：构建基础环境 ====================
+  Build-Bases:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        repo_config: ['openwrt', 'immwrt', 'libwrt']
+        include:
+          - repo_config: openwrt
+            repo_url: https://github.com/openwrt/openwrt.git
+            repo_branch: master
+          - repo_config: immwrt
+            repo_url: https://github.com/immortalwrt/immortalwrt.git
+            repo_branch: master
+          - repo_config: libwrt
+            repo_url: https://github.com/LibreWrt/LibreWrt.git
+            repo_branch: master
+    
+    steps:
+    - name: 初始化日志系统
+      run: |
+        cat > /tmp/logger.sh << 'EOF'
+        #!/bin/bash
+        declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
+        CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
+        LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
+        REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
+        echo "=== Base Log Started at $(date) ===" > "$LOG_FILE"
+        echo '{"build_id":"base-${{ matrix.repo_config }}-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
+        log() { local level="$1" message="$2" step="${3:-$(caller | awk '{print $2}')}"; local timestamp=$(date '+%Y-%m-%d %H:%M:%S'); if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then case $level in DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;; INFO) echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;; WARN) echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;; ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;; esac; echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"; fi; }
+        step_start() { local step_name="$1" description="$2"; log "INFO" "▶ 开始执行: $description" "$step_name"; }
+        step_complete() { local step_name="$1" status="$2"; if [ "$status" = "success" ]; then log "INFO" "✅ 步骤完成: $step_name" "$step_name"; elif [ "$status" = "failed" ]; then log "ERROR" "❌ 步骤失败: $step_name" "$step_name"; fi; }
+        export -f log step_start step_complete
+        EOF
+        chmod +x /tmp/logger.sh
+        echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
+        source /tmp/logger.sh
+        step_start "INIT" "初始化基础构建日志 (${{ matrix.repo_config }})"
+
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 克隆仓库
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "CLONE_REPO" "克隆 ${{ matrix.repo_config }} 仓库"
+        
+        # 创建目录
+        sudo mkdir -p ${{ env.OPENWRT_PATH }}
+        sudo chown $USER:$USER ${{ env.OPENWRT_PATH }}
+        
+        # 克隆仓库
+        git clone ${{ matrix.repo_url }} ${{ env.OPENWRT_PATH }}
+        cd ${{ env.OPENWRT_PATH }}
+        git checkout ${{ matrix.repo_branch }}
+        
+        step_complete "CLONE_REPO" "success"
+
+    - name: 生成变量并检查配置
       id: generate_vars
       run: |
-        # 开启调试模式，打印所有执行的命令
-        set -x
-        
         source "$LOGGER_SCRIPT"
         step_start "GEN_VARS" "生成构建变量并检查配置"
+        
+        # 设置REPO_SHORT变量
+        REPO_SHORT="${{ matrix.repo_config }}"
+        echo "REPO_SHORT=$REPO_SHORT" >> $GITHUB_ENV
         
         # 打印关键环境变量和路径
         echo "DEBUG: GITHUB_WORKSPACE = $GITHUB_WORKSPACE"
@@ -195,9 +255,6 @@ jobs:
         fi
         echo "DEBUG: 找到分支配置文件: $CONFIG_BRANCH"
         
-        # 关闭调试模式，避免输出过多
-        set +x
-        
         # 直接调用函数，不捕获输出
         check_luci_packages "$CONFIG_BASE" "基础配置"
         check_luci_packages "$CONFIG_BRANCH" "分支配置"
@@ -214,13 +271,7 @@ jobs:
         check_defconfig_packages "$MERGED_LUCI" "基础环境"
         
         # 为每个仓库设置输出变量
-        if [ "${{ matrix.repo_config }}" = "openwrt" ]; then
-          echo "repo_short_openwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
-        elif [ "${{ matrix.repo_config }}" = "immwrt" ]; then
-          echo "repo_short_immwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
-        elif [ "${{ matrix.repo_config }}" = "libwrt" ]; then
-          echo "repo_short_libwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
-        fi
+        echo "repo_short_${REPO_SHORT}=${REPO_SHORT}" >> $GITHUB_OUTPUT
         
         # 提取设备信息，增加健壮性
         DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_BOARD=" | awk -F '"' '{print $2}' || echo "未知")
@@ -229,6 +280,48 @@ jobs:
         fi
         log "INFO" "设备信息: $DEVICE_INFO"
         step_complete "GEN_VARS" "success"
+
+    - name: 安装依赖
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "INSTALL_DEPS" "安装构建依赖"
+        cd ${{ env.OPENWRT_PATH }}
+        
+        # 更新包列表并安装依赖
+        sudo apt-get update
+        sudo apt-get install -y build-essential clang flex bison g++ gawk \
+          gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
+          python3-distutils python3-setuptools python3-yaml rsync unzip \
+          zlib1g-dev file swig
+        
+        # 安装OpenWrt特定的依赖
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        step_complete "INSTALL_DEPS" "success"
+
+    - name: 构建基础环境
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "BUILD_BASE" "构建基础环境"
+        cd ${{ env.OPENWRT_PATH }}
+        
+        # 构建工具链
+        if make -j$(nproc) toolchain/install > /dev/null 2>&1; then
+          log "INFO" "工具链构建成功"
+        else
+          log "ERROR" "工具链构建失败"
+          exit 1
+        fi
+        
+        step_complete "BUILD_BASE" "success"
+
+    - name: 上传基础环境
+      uses: actions/upload-artifact@v4
+      with:
+        name: base-env-${{ matrix.repo_config }}
+        path: ${{ env.OPENWRT_PATH }}
+        retention-days: 7
 
   # ==================== 阶段二：集中预编译通用软件包 ====================
   Prebuild-Packages:
@@ -257,6 +350,11 @@ jobs:
 
     - name: 检出代码
       uses: actions/checkout@v4
+
+    - name: 创建目录
+      run: |
+        sudo mkdir -p ${{ env.OPENWRT_PATH }}
+        sudo chown $USER:$USER ${{ env.OPENWRT_PATH }}
 
     - name: 下载基础环境
       uses: actions/download-artifact@v4
@@ -363,13 +461,13 @@ jobs:
         echo "CONFIG_TARGET_ipq60xx_DEVICE_generic=y" >> .config
         echo "CONFIG_TARGET_DEVICE_ipq60xx_generic=y" >> .config
         
-        # 修复：直接调用函数
+        # 直接调用函数
         check_luci_packages ".config" "基础配置"
         
         for variant in Pro Max Ultra; do
           log "INFO" "合并 $variant 配置"
           if [ -f "${{ env.CONFIG_BASE_DIR }}/${variant}.config" ]; then
-            # 修复：直接调用函数
+            # 直接调用函数
             check_luci_packages "${{ env.CONFIG_BASE_DIR }}/${variant}.config" "$variant 配置"
             cat "${{ env.CONFIG_BASE_DIR }}/${variant}.config" >> .config
           else
@@ -377,10 +475,10 @@ jobs:
           fi
         done
         
-        # 修复：直接调用函数
+        # 直接调用函数
         check_luci_packages ".config" "超级配置合并后"
         
-        # 修复：先获取包列表，再调用检查函数
+        # 先获取包列表，再调用检查函数
         MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
         check_defconfig_packages "$MERGED_LUCI" "超级配置"
         
@@ -508,6 +606,11 @@ jobs:
     - name: 检出代码
       uses: actions/checkout@v4
 
+    - name: 创建目录
+      run: |
+        sudo mkdir -p ${{ env.OPENWRT_PATH }}
+        sudo chown $USER:$USER ${{ env.OPENWRT_PATH }}
+
     - name: 下载基础环境
       uses: actions/download-artifact@v4
       with:
@@ -619,16 +722,16 @@ jobs:
         CONFIG_BASE=$(find_config_file "base_ipq60xx")
         CONFIG_VARIANT=$(find_config_file "${{ matrix.variant }}")
         
-        # 修复：直接调用函数
+        # 直接调用函数
         check_luci_packages "$CONFIG_BASE" "基础配置"
         check_luci_packages "$CONFIG_VARIANT" "${{ matrix.variant }} 配置"
         
         cat "$CONFIG_BASE" "$CONFIG_VARIANT" > .config.tmp && mv .config.tmp .config
         
-        # 修复：直接调用函数
+        # 直接调用函数
         check_luci_packages ".config" "变体合并后配置"
         
-        # 修复：先获取包列表，再调用检查函数
+        # 先获取包列表，再调用检查函数
         MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
         check_defconfig_packages "$MERGED_LUCI" "变体 ${{ matrix.variant }}"
         
