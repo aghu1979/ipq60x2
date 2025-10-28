@@ -1,19 +1,27 @@
 #!/bin/bash
 
 # 初始化日志系统
-LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
-REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
-
-# 创建日志文件
-echo "=== Log Started at $(date) ===" > "$LOG_FILE"
-echo '{"build_id":"'$1'","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
+init_logger() {
+    local build_id="$1"
+    
+    # 设置日志文件路径
+    LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
+    REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
+    
+    # 创建日志文件
+    echo "=== Log Started at $(date) ===" > "$LOG_FILE"
+    echo '{"build_id":"'$build_id'","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
+    
+    # 导出环境变量
+    export LOG_FILE REPORT_FILE
+}
 
 # 简单的日志函数
 log() {
     local level="$1"
     local message="$2"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE"
+    echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE" 2>/dev/null || echo "[$timestamp] [$level] $message"
 }
 
 step_start() {
@@ -35,5 +43,7 @@ step_complete() {
     fi
 }
 
-# 导出函数
-export -f log step_start step_complete
+# 如果脚本被直接调用，执行初始化
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    init_logger "$1"
+fi
