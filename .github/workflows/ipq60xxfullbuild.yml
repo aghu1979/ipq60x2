@@ -57,6 +57,7 @@ jobs:
 
     - name: 克隆仓库
       run: |
+        source scripts/logger.sh
         step_start "CLONE_REPO" "克隆 ${{ matrix.repo_config }} 仓库"
         
         # 创建目录
@@ -73,6 +74,7 @@ jobs:
     - name: 生成变量并检查配置
       id: generate_vars
       run: |
+        source scripts/logger.sh
         step_start "GEN_VARS" "生成构建变量并检查配置"
         
         # 设置REPO_SHORT变量
@@ -114,6 +116,7 @@ jobs:
 
     - name: 运行defconfig
       run: |
+        source scripts/logger.sh
         step_start "DEFCONFIG" "运行defconfig"
         cd ${{ env.OPENWRT_PATH }}
         
@@ -127,6 +130,7 @@ jobs:
 
     - name: 生成软件包对比报告
       run: |
+        source scripts/logger.sh
         step_start "PACKAGE_REPORT" "生成软件包对比报告"
         cd ${{ env.OPENWRT_PATH }}
         
@@ -143,6 +147,7 @@ jobs:
 
     - name: 安装依赖
       run: |
+        source scripts/logger.sh
         step_start "INSTALL_DEPS" "安装构建依赖"
         cd ${{ env.OPENWRT_PATH }}
         
@@ -161,6 +166,7 @@ jobs:
 
     - name: 构建基础环境
       run: |
+        source scripts/logger.sh
         step_start "BUILD_BASE" "构建基础环境"
         cd ${{ env.OPENWRT_PATH }}
         
@@ -197,6 +203,7 @@ jobs:
 
     - name: 创建目录
       run: |
+        source scripts/logger.sh
         sudo mkdir -p ${{ env.OPENWRT_PATH }}
         sudo chown $USER:$USER ${{ env.OPENWRT_PATH }}
 
@@ -209,6 +216,7 @@ jobs:
     - name: 生成"超级配置"并检查
       id: generate_super_config
       run: |
+        source scripts/logger.sh
         step_start "GEN_SUPER_CONFIG" "生成包含所有变体软件包的超级配置"
         cd "$OPENWRT_PATH"
         
@@ -245,6 +253,7 @@ jobs:
 
     - name: 运行defconfig
       run: |
+        source scripts/logger.sh
         step_start "DEFCONFIG" "运行defconfig"
         cd "$OPENWRT_PATH"
         
@@ -258,6 +267,7 @@ jobs:
 
     - name: 生成软件包对比报告
       run: |
+        source scripts/logger.sh
         step_start "PACKAGE_REPORT" "生成软件包对比报告"
         cd "$OPENWRT_PATH"
         
@@ -285,6 +295,7 @@ jobs:
       id: prebuild_parallel
       continue-on-error: true
       run: |
+        source scripts/logger.sh
         step_start "PREBUILD_PKGS_PARALLEL" "预编译所有第三方软件包（并行模式）"
         cd "$OPENWRT_PATH"
         
@@ -313,6 +324,7 @@ jobs:
       id: prebuild_serial
       if: steps.prebuild_parallel.outcome == 'failure'
       run: |
+        source scripts/logger.sh
         step_start "PREBUILD_PKGS_SERIAL" "预编译所有第三方软件包（单线程详细模式）"
         cd "$OPENWRT_PATH"
         
@@ -379,6 +391,7 @@ jobs:
 
     - name: 创建目录
       run: |
+        source scripts/logger.sh
         sudo mkdir -p ${{ env.OPENWRT_PATH }}
         sudo chown $USER:$USER ${{ env.OPENWRT_PATH }}
 
@@ -396,6 +409,7 @@ jobs:
 
     - name: 准备变体配置并检查
       run: |
+        source scripts/logger.sh
         step_start "PREP_VARIANT" "准备变体配置 (${{ matrix.variant }})"
         cd "$OPENWRT_PATH"
         
@@ -423,6 +437,7 @@ jobs:
 
     - name: 运行defconfig
       run: |
+        source scripts/logger.sh
         step_start "DEFCONFIG" "运行defconfig"
         cd "$OPENWRT_PATH"
         
@@ -436,6 +451,7 @@ jobs:
 
     - name: 生成软件包对比报告
       run: |
+        source scripts/logger.sh
         step_start "PACKAGE_REPORT" "生成软件包对比报告"
         cd "$OPENWRT_PATH"
         
@@ -454,6 +470,7 @@ jobs:
       id: assemble_parallel
       continue-on-error: true
       run: |
+        source scripts/logger.sh
         step_start "ASSEMBLE_FIRMWARE_PARALLEL" "组装最终固件（并行模式）"
         cd "$OPENWRT_PATH"
         
@@ -474,6 +491,7 @@ jobs:
       id: assemble_serial
       if: steps.assemble_parallel.outcome == 'failure'
       run: |
+        source scripts/logger.sh
         step_start "ASSEMBLE_FIRMWARE_SERIAL" "组装最终固件（单线程详细模式）"
         cd "$OPENWRT_PATH"
         
