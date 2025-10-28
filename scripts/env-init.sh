@@ -19,8 +19,8 @@ init_environment() {
     fi
     
     log "INFO" "更新系统包..."
-    # 使用更可靠的源和超时设置
-    if sudo -E apt-get -y update --timeout=60; then
+    # 使用更可靠的源，移除不支持的--timeout参数
+    if sudo -E apt-get -y update; then
         log "INFO" "系统包更新成功"
     else
         log "ERROR" "系统包更新失败"
@@ -28,8 +28,8 @@ init_environment() {
     fi
     
     log "INFO" "安装基础依赖..."
-    # 先安装基础依赖
-    if sudo -E apt-get -y install --no-install-recommends --timeout=300 \
+    # 先安装基础依赖，移除不支持的--timeout参数
+    if sudo -E apt-get -y install --no-install-recommends \
         build-essential \
         ccache \
         ecj \
@@ -67,9 +67,9 @@ init_environment() {
     
     # 尝试安装可选依赖，失败不影响整体流程
     log "INFO" "安装可选依赖..."
-    if sudo -E apt-get -y install --no-install-recommends --timeout=300 \
+    if sudo -E apt-get -y install --no-install-recommends \
         $(curl -fsSL is.gd/depends_ubuntu_2204 2>/dev/null | grep -v texlive-lang-greek) || \
-       sudo -E apt-get -y install --no-install-recommends --timeout=300 \
+       sudo -E apt-get -y install --no-install-recommends \
         quilt \
         xterm; then
         log "INFO" "可选依赖安装成功"
