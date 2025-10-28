@@ -163,11 +163,22 @@ jobs:
           source scripts/cache-manager.sh
           check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
 
-      # 刷新缓存
+      # 刷新缓存 - 简化，只刷新必要的时间戳
       - name: 刷新缓存
         run: |
-          source scripts/cache-manager.sh
-          refresh_cache
+          source "$LOGGER_SCRIPT"
+          step_start "REFRESH_CACHE" "刷新缓存时间戳"
+          
+          if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+              log "INFO" "刷新staging_dir时间戳..."
+              # 只刷新stamp目录，不递归所有文件
+              find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec touch {} \; 2>/dev/null || true
+              log "INFO" "缓存刷新完成"
+          else
+              log "WARN" "未找到staging_dir，跳过缓存刷新"
+          fi
+          
+          step_complete "REFRESH_CACHE" "success"
 
       # 添加第三方软件源
       - name: 添加第三方软件源
@@ -201,11 +212,28 @@ jobs:
           source scripts/builder.sh
           download_packages
 
-      # 清理构建环境
+      # 清理构建环境 - 简化，只在必要时清理
       - name: 清理构建环境
         run: |
-          source scripts/builder.sh
-          clean_environment
+          source "$LOGGER_SCRIPT"
+          step_start "CLEAN_ENV" "清理构建环境"
+          
+          cd "$OPENWRT_PATH"
+          
+          # 检查磁盘空间，如果充足则跳过清理
+          AVAILABLE_SPACE=$(df $GITHUB_WORKSPACE | tail -1 | awk '{print $4}')
+          if [ "$AVAILABLE_SPACE" -gt 20971520 ]; then  # 20GB
+            log "INFO" "磁盘空间充足（$(($AVAILABLE_SPACE/1024/1024))GB），跳过清理"
+          else
+            log "INFO" "磁盘空间不足，执行清理..."
+            # 只清理build目录，保留缓存
+            if [ -d "build" ]; then
+                rm -rf build/* 2>/dev/null || true
+            fi
+            log "INFO" "构建环境清理完成"
+          fi
+          
+          step_complete "CLEAN_ENV" "success"
 
       # 编译基础环境
       - name: 编译基础环境
@@ -221,12 +249,18 @@ jobs:
           source scripts/reporter.sh
           generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
 
-      # 检查空间使用情况
+      # 检查空间使用情况 - 简化
       - name: 检查空间使用情况
         if: (!cancelled())
         run: |
-          source scripts/reporter.sh
-          check_disk_space
+          source "$LOGGER_SCRIPT"
+          log "INFO" "=== 磁盘空间使用情况 ==="
+          df -hT $GITHUB_WORKSPACE | tail -1
+          
+          if [ -d "$OPENWRT_PATH/bin" ]; then
+            bin_size=$(du -sh "$OPENWRT_PATH/bin" 2>/dev/null | cut -f1)
+            log "INFO" "bin目录大小: $bin_size"
+          fi
 
       # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
@@ -393,11 +427,22 @@ jobs:
           source scripts/cache-manager.sh
           check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
 
-      # 刷新缓存
+      # 刷新缓存 - 简化，只刷新必要的时间戳
       - name: 刷新缓存
         run: |
-          source scripts/cache-manager.sh
-          refresh_cache
+          source "$LOGGER_SCRIPT"
+          step_start "REFRESH_CACHE" "刷新缓存时间戳"
+          
+          if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+              log "INFO" "刷新staging_dir时间戳..."
+              # 只刷新stamp目录，不递归所有文件
+              find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec touch {} \; 2>/dev/null || true
+              log "INFO" "缓存刷新完成"
+          else
+              log "WARN" "未找到staging_dir，跳过缓存刷新"
+          fi
+          
+          step_complete "REFRESH_CACHE" "success"
 
       # 添加第三方软件源
       - name: 添加第三方软件源
@@ -451,11 +496,28 @@ jobs:
           source scripts/builder.sh
           download_packages
 
-      # 清理构建环境
+      # 清理构建环境 - 简化，只在必要时清理
       - name: 清理构建环境
         run: |
-          source scripts/builder.sh
-          clean_environment
+          source "$LOGGER_SCRIPT"
+          step_start "CLEAN_ENV" "清理构建环境"
+          
+          cd "$OPENWRT_PATH"
+          
+          # 检查磁盘空间，如果充足则跳过清理
+          AVAILABLE_SPACE=$(df $GITHUB_WORKSPACE | tail -1 | awk '{print $4}')
+          if [ "$AVAILABLE_SPACE" -gt 20971520 ]; then  # 20GB
+            log "INFO" "磁盘空间充足（$(($AVAILABLE_SPACE/1024/1024))GB），跳过清理"
+          else
+            log "INFO" "磁盘空间不足，执行清理..."
+            # 只清理build目录，保留缓存
+            if [ -d "build" ]; then
+                rm -rf build/* 2>/dev/null || true
+            fi
+            log "INFO" "构建环境清理完成"
+          fi
+          
+          step_complete "CLEAN_ENV" "success"
 
       # 编译Ultra变体配置
       - name: 编译Ultra变体配置
@@ -471,12 +533,18 @@ jobs:
           source scripts/reporter.sh
           generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
 
-      # 检查空间使用情况
+      # 检查空间使用情况 - 简化
       - name: 检查空间使用情况
         if: (!cancelled())
         run: |
-          source scripts/reporter.sh
-          check_disk_space
+          source "$LOGGER_SCRIPT"
+          log "INFO" "=== 磁盘空间使用情况 ==="
+          df -hT $GITHUB_WORKSPACE | tail -1
+          
+          if [ -d "$OPENWRT_PATH/bin" ]; then
+            bin_size=$(du -sh "$OPENWRT_PATH/bin" 2>/dev/null | cut -f1)
+            log "INFO" "bin目录大小: $bin_size"
+          fi
 
       # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
@@ -643,11 +711,22 @@ jobs:
           source scripts/cache-manager.sh
           check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
 
-      # 刷新缓存
+      # 刷新缓存 - 简化，只刷新必要的时间戳
       - name: 刷新缓存
         run: |
-          source scripts/cache-manager.sh
-          refresh_cache
+          source "$LOGGER_SCRIPT"
+          step_start "REFRESH_CACHE" "刷新缓存时间戳"
+          
+          if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+              log "INFO" "刷新staging_dir时间戳..."
+              # 只刷新stamp目录，不递归所有文件
+              find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec touch {} \; 2>/dev/null || true
+              log "INFO" "缓存刷新完成"
+          else
+              log "WARN" "未找到staging_dir，跳过缓存刷新"
+          fi
+          
+          step_complete "REFRESH_CACHE" "success"
 
       # 添加第三方软件源
       - name: 添加第三方软件源
@@ -701,11 +780,28 @@ jobs:
           source scripts/builder.sh
           download_packages
 
-      # 清理构建环境
+      # 清理构建环境 - 简化，只在必要时清理
       - name: 清理构建环境
         run: |
-          source scripts/builder.sh
-          clean_environment
+          source "$LOGGER_SCRIPT"
+          step_start "CLEAN_ENV" "清理构建环境"
+          
+          cd "$OPENWRT_PATH"
+          
+          # 检查磁盘空间，如果充足则跳过清理
+          AVAILABLE_SPACE=$(df $GITHUB_WORKSPACE | tail -1 | awk '{print $4}')
+          if [ "$AVAILABLE_SPACE" -gt 20971520 ]; then  # 20GB
+            log "INFO" "磁盘空间充足（$(($AVAILABLE_SPACE/1024/1024))GB），跳过清理"
+          else
+            log "INFO" "磁盘空间不足，执行清理..."
+            # 只清理build目录，保留缓存
+            if [ -d "build" ]; then
+                rm -rf build/* 2>/dev/null || true
+            fi
+            log "INFO" "构建环境清理完成"
+          fi
+          
+          step_complete "CLEAN_ENV" "success"
 
       # 编译Max变体配置
       - name: 编译Max变体配置
@@ -721,12 +817,18 @@ jobs:
           source scripts/reporter.sh
           generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
 
-      # 检查空间使用情况
+      # 检查空间使用情况 - 简化
       - name: 检查空间使用情况
         if: (!cancelled())
         run: |
-          source scripts/reporter.sh
-          check_disk_space
+          source "$LOGGER_SCRIPT"
+          log "INFO" "=== 磁盘空间使用情况 ==="
+          df -hT $GITHUB_WORKSPACE | tail -1
+          
+          if [ -d "$OPENWRT_PATH/bin" ]; then
+            bin_size=$(du -sh "$OPENWRT_PATH/bin" 2>/dev/null | cut -f1)
+            log "INFO" "bin目录大小: $bin_size"
+          fi
 
       # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
@@ -893,11 +995,22 @@ jobs:
           source scripts/cache-manager.sh
           check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
 
-      # 刷新缓存
+      # 刷新缓存 - 简化，只刷新必要的时间戳
       - name: 刷新缓存
         run: |
-          source scripts/cache-manager.sh
-          refresh_cache
+          source "$LOGGER_SCRIPT"
+          step_start "REFRESH_CACHE" "刷新缓存时间戳"
+          
+          if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+              log "INFO" "刷新staging_dir时间戳..."
+              # 只刷新stamp目录，不递归所有文件
+              find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec touch {} \; 2>/dev/null || true
+              log "INFO" "缓存刷新完成"
+          else
+              log "WARN" "未找到staging_dir，跳过缓存刷新"
+          fi
+          
+          step_complete "REFRESH_CACHE" "success"
 
       # 添加第三方软件源
       - name: 添加第三方软件源
@@ -951,11 +1064,28 @@ jobs:
           source scripts/builder.sh
           download_packages
 
-      # 清理构建环境
+      # 清理构建环境 - 简化，只在必要时清理
       - name: 清理构建环境
         run: |
-          source scripts/builder.sh
-          clean_environment
+          source "$LOGGER_SCRIPT"
+          step_start "CLEAN_ENV" "清理构建环境"
+          
+          cd "$OPENWRT_PATH"
+          
+          # 检查磁盘空间，如果充足则跳过清理
+          AVAILABLE_SPACE=$(df $GITHUB_WORKSPACE | tail -1 | awk '{print $4}')
+          if [ "$AVAILABLE_SPACE" -gt 20971520 ]; then  # 20GB
+            log "INFO" "磁盘空间充足（$(($AVAILABLE_SPACE/1024/1024))GB），跳过清理"
+          else
+            log "INFO" "磁盘空间不足，执行清理..."
+            # 只清理build目录，保留缓存
+            if [ -d "build" ]; then
+                rm -rf build/* 2>/dev/null || true
+            fi
+            log "INFO" "构建环境清理完成"
+          fi
+          
+          step_complete "CLEAN_ENV" "success"
 
       # 编译Pro变体配置
       - name: 编译Pro变体配置
@@ -971,12 +1101,18 @@ jobs:
           source scripts/reporter.sh
           generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
 
-      # 检查空间使用情况
+      # 检查空间使用情况 - 简化
       - name: 检查空间使用情况
         if: (!cancelled())
         run: |
-          source scripts/reporter.sh
-          check_disk_space
+          source "$LOGGER_SCRIPT"
+          log "INFO" "=== 磁盘空间使用情况 ==="
+          df -hT $GITHUB_WORKSPACE | tail -1
+          
+          if [ -d "$OPENWRT_PATH/bin" ]; then
+            bin_size=$(du -sh "$OPENWRT_PATH/bin" 2>/dev/null | cut -f1)
+            log "INFO" "bin目录大小: $bin_size"
+          fi
 
       # 上传构建日志和报告 - 添加唯一ID避免冲突
       - name: 上传构建日志和报告
