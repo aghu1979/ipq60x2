@@ -36,9 +36,9 @@ jobs:
         repo_config: ['openwrt', 'immwrt', 'libwrt']
     
     outputs:
-      repo_short_openwrt: ${{ steps.generate_vars_openwrt.outputs.repo_short }}
-      repo_short_immwrt: ${{ steps.generate_vars_immwrt.outputs.repo_short }}
-      repo_short_libwrt: ${{ steps.generate_vars_libwrt.outputs.repo_short }}
+      repo_short_openwrt: ${{ steps.generate_vars.outputs.repo_short_openwrt }}
+      repo_short_immwrt: ${{ steps.generate_vars.outputs.repo_short_immwrt }}
+      repo_short_libwrt: ${{ steps.generate_vars.outputs.repo_short_libwrt }}
 
     steps:
     - name: 初始化日志系统
@@ -87,7 +87,7 @@ jobs:
         step_complete "CLONE" "success"
 
     - name: 生成变量
-      id: generate_vars_${{ matrix.repo_config }}
+      id: generate_vars
       run: |
         source "$LOGGER_SCRIPT"
         step_start "GEN_VARS" "生成构建变量"
@@ -96,14 +96,23 @@ jobs:
         CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
         cp "$CONFIG_BASE" "$OPENWRT_PATH/.config"
         cd "$OPENWRT_PATH" && make defconfig > /dev/null 2>&1
-        echo "repo_short=${REPO_SHORT}" >> $GITHUB_OUTPUT
+        
+        # 为每个仓库设置输出变量
+        if [ "${{ matrix.repo_config }}" = "openwrt" ]; then
+          echo "repo_short_openwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
+        elif [ "${{ matrix.repo_config }}" = "immwrt" ]; then
+          echo "repo_short_immwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
+        elif [ "${{ matrix.repo_config }}" = "libwrt" ]; then
+          echo "repo_short_libwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
+        fi
+        
         log "INFO" "设备信息: $(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')"
         step_complete "GEN_VARS" "success"
 
     - name: 缓存工具链和Feeds
       uses: actions/cache@v4
       with:
-        key: ${{ env.CACHE_VERSION }}-base-${{ steps.generate_vars_${{ matrix.repo_config }}.outputs.repo_short }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default') }}
+        key: ${{ env.CACHE_VERSION }}-base-${{ matrix.repo_config }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default') }}
         path: |
           ${{ env.OPENWRT_PATH }}/staging_dir
           ${{ env.OPENWRT_PATH }}/dl
@@ -131,7 +140,7 @@ jobs:
     - name: 上传基础环境
       uses: actions/upload-artifact@v4
       with:
-        name: base-env-${{ steps.generate_vars_${{ matrix.repo_config }}.outputs.repo_short }}
+        name: base-env-${{ matrix.repo_config }}
         path: ${{ env.OPENWRT_PATH }}
         retention-days: 7
 
@@ -166,10 +175,10 @@ jobs:
     - name: 下载基础环境
       uses: actions/download-artifact@v4
       with:
-        name: base-env-${{ needs.Build-Bases.outputs.repo_short_openwrt }}
+        name: base-env-openwrt
         path: ${{ env.OPENWRT_PATH }}
 
-    - name: 生成“超级配置”
+    - name: 生成"超级配置"
       id: generate_super_config
       run: |
         source "$LOGGER_SCRIPT"
@@ -257,6 +266,9 @@ jobs:
         echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
         source /tmp/logger.sh
         step_start "INIT" "初始化变体组装日志 (${{ matrix.repo }}-${{ matrix.variant }})"
+
+    - name: 检出代码
+      uses: actions/checkout@v4
 
     - name: 下载基础环境
       uses: actions/download-artifact@v4
