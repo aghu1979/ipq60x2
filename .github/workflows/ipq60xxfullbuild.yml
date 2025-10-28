@@ -21,7 +21,6 @@ env:
   CONFIG_BASE_DIR: configs
   DIY_SCRIPT_DIR: scripts
   CACHE_VERSION: v3
-  # 修复：重命名环境变量，避免与OpenWrt内部变量冲突
   BUILD_LOG_LEVEL: INFO
   BUILD_LOG_FILE: build.log
   REPORT_FILE: build_report.json
@@ -46,7 +45,6 @@ jobs:
       run: |
         cat > /tmp/logger.sh << 'EOF'
         #!/bin/bash
-        # 修复：使用重命名后的环境变量
         declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
         CURRENT_LEVEL=${LOG_LEVELS[$BUILD_LOG_LEVEL]}
         LOG_FILE="$GITHUB_WORKSPACE/$BUILD_LOG_FILE"
@@ -120,10 +118,9 @@ jobs:
           fi
           echo "=================================================================================="
           echo ""
-          
-          echo "$luci_packages"
         }
         
+        # 封装defconfig后检查函数
         check_defconfig_packages() {
           local before_packages="$1"
           local step_name="$2"
@@ -194,26 +191,32 @@ jobs:
           
           echo "=================================================================================="
           echo ""
-          
-          echo "$after_packages"
         }
         
         export -f check_luci_packages check_defconfig_packages
         
         find_config_file() { local base_name="$1"; local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"; for ext in ".config" ".config.txt"; do if [ -f "${config_dir}/${base_name}${ext}" ]; then echo "${config_dir}/${base_name}${ext}"; return 0; fi; done; return 1; }
         
+        # 查找配置文件
         CONFIG_BASE=$(find_config_file "base_ipq60xx")
         CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
         
-        BASE_LUCI=$(check_luci_packages "$CONFIG_BASE" "基础配置")
-        BRANCH_LUCI=$(check_luci_packages "$CONFIG_BRANCH" "分支配置")
+        # 修复：直接调用函数，不捕获输出，让报告显示在控制台
+        check_luci_packages "$CONFIG_BASE" "基础配置"
+        check_luci_packages "$CONFIG_BRANCH" "分支配置"
         
+        # 合并配置文件
         log "INFO" "合并基础配置和分支配置..."
         cat "$CONFIG_BASE" "$CONFIG_BRANCH" > .config
         
-        MERGED_LUCI=$(check_luci_packages ".config" "合并后配置")
-        FINAL_LUCI=$(check_defconfig_packages "$MERGED_LUCI" "基础环境")
+        # 修复：直接调用函数，不捕获输出
+        check_luci_packages ".config" "合并后配置"
         
+        # 修复：先获取合并后的包列表，再调用检查函数
+        MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
+        check_defconfig_packages "$MERGED_LUCI" "基础环境"
+        
+        # 为每个仓库设置输出变量
         if [ "${{ matrix.repo_config }}" = "openwrt" ]; then
           echo "repo_short_openwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
         elif [ "${{ matrix.repo_config }}" = "immwrt" ]; then
@@ -222,6 +225,7 @@ jobs:
           echo "repo_short_libwrt=${REPO_SHORT}" >> $GITHUB_OUTPUT
         fi
         
+        # 提取设备信息，增加健壮性
         DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_BOARD=" | awk -F '"' '{print $2}' || echo "未知")
         if [ "$DEVICE_INFO" = "未知" ]; then
           DEVICE_INFO=$(cat .config | grep "^CONFIG_TARGET_ARCH_PACKAGES=" | awk -F '"' '{print $2}' || echo "未知")
@@ -395,7 +399,6 @@ jobs:
           fi
           echo "=================================================================================="
           echo ""
-          echo "$luci_packages"
         }
         
         check_defconfig_packages() {
@@ -458,7 +461,6 @@ jobs:
           fi
           echo "=================================================================================="
           echo ""
-          echo "$after_packages"
         }
         
         export -f check_luci_packages check_defconfig_packages
@@ -467,20 +469,26 @@ jobs:
         echo "CONFIG_TARGET_ipq60xx_DEVICE_generic=y" >> .config
         echo "CONFIG_TARGET_DEVICE_ipq60xx_generic=y" >> .config
         
-        BASE_LUCI=$(check_luci_packages ".config" "基础配置")
+        # 修复：直接调用函数
+        check_luci_packages ".config" "基础配置"
         
         for variant in Pro Max Ultra; do
           log "INFO" "合并 $variant 配置"
           if [ -f "${{ env.CONFIG_BASE_DIR }}/${variant}.config" ]; then
-            VARIANT_LUCI=$(check_luci_packages "${{ env.CONFIG_BASE_DIR }}/${variant}.config" "$variant 配置")
+            # 修复：直接调用函数
+            check_luci_packages "${{ env.CONFIG_BASE_DIR }}/${variant}.config" "$variant 配置"
             cat "${{ env.CONFIG_BASE_DIR }}/${variant}.config" >> .config
           else
             log "WARN" "配置文件不存在: ${{ env.CONFIG_BASE_DIR }}/${variant}.config"
           fi
         done
         
-        MERGED_LUCI=$(check_luci_packages ".config" "超级配置合并后")
-        FINAL_LUCI=$(check_defconfig_packages "$MERGED_LUCI" "超级配置")
+        # 修复：直接调用函数
+        check_luci_packages ".config" "超级配置合并后"
+        
+        # 修复：先获取包列表，再调用检查函数
+        MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
+        check_defconfig_packages "$MERGED_LUCI" "超级配置"
         
         log "INFO" "超级配置生成完成"
         step_complete "GEN_SUPER_CONFIG" "success"
@@ -646,7 +654,6 @@ jobs:
           fi
           echo "=================================================================================="
           echo ""
-          echo "$luci_packages"
         }
         
         check_defconfig_packages() {
@@ -709,7 +716,6 @@ jobs:
           fi
           echo "=================================================================================="
           echo ""
-          echo "$after_packages"
         }
         
         export -f check_luci_packages check_defconfig_packages
@@ -719,13 +725,18 @@ jobs:
         CONFIG_BASE=$(find_config_file "base_ipq60xx")
         CONFIG_VARIANT=$(find_config_file "${{ matrix.variant }}")
         
-        BASE_LUCI=$(check_luci_packages "$CONFIG_BASE" "基础配置")
-        VARIANT_LUCI=$(check_luci_packages "$CONFIG_VARIANT" "${{ matrix.variant }} 配置")
+        # 修复：直接调用函数
+        check_luci_packages "$CONFIG_BASE" "基础配置"
+        check_luci_packages "$CONFIG_VARIANT" "${{ matrix.variant }} 配置"
         
         cat "$CONFIG_BASE" "$CONFIG_VARIANT" > .config.tmp && mv .config.tmp .config
         
-        MERGED_LUCI=$(check_luci_packages ".config" "变体合并后配置")
-        FINAL_LUCI=$(check_defconfig_packages "$MERGED_LUCI" "变体 ${{ matrix.variant }}")
+        # 修复：直接调用函数
+        check_luci_packages ".config" "变体合并后配置"
+        
+        # 修复：先获取包列表，再调用检查函数
+        MERGED_LUCI=$(grep -E "^CONFIG_PACKAGE_luci-.+=y" .config | sort || true)
+        check_defconfig_packages "$MERGED_LUCI" "变体 ${{ matrix.variant }}"
         
         step_complete "PREP_VARIANT" "success"
 
