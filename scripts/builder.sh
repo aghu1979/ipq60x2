@@ -78,9 +78,6 @@ compile_firmware() {
     log "INFO" "开始编译${build_type}..."
     log "INFO" "使用 $(nproc) 个线程编译"
     
-    # 创建错误监控脚本
-    MONITOR_SCRIPT=$(create_error_monitor "/tmp/build.log")
-    
     # 定义编译阶段
     stages=("工具链和内核" "系统包" "所有包")
     commands=("toolchain/kernel-headers compile" "package/system/opkg/host/compile" "")
@@ -93,28 +90,20 @@ compile_firmware() {
         if [ -n "${commands[$i]}" ]; then
             log "INFO" "编译${stages[$i]}..."
             
-            # 启动错误监控（后台）
-            $MONITOR_SCRIPT &
-            MONITOR_PID=$!
-            
-            if make -j$(nproc) ${commands[$i]} 2>&1 | tee /tmp/build.log; then
+            # 使用更简单的错误处理方式
+            if make -j$(nproc) ${commands[$i]} 2>&1 | tee /tmp/build_${i}.log; then
                 log "INFO" "${stages[$i]}编译成功"
             else
-                wait_and_kill_monitor $MONITOR_PID
                 log "WARN" "${stages[$i]}并行编译失败，尝试单线程编译"
                 
-                # 单线程编译时也监控错误
-                $MONITOR_SCRIPT &
-                MONITOR_PID=$!
-                
-                if make -j1 V=s ${commands[$i]} 2>&1 | tee /tmp/build.log; then
+                # 单线程编译
+                if make -j1 V=s ${commands[$i]} 2>&1 | tee /tmp/build_${i}_single.log; then
                     log "INFO" "${stages[$i]}单线程编译成功"
                 else
-                    wait_and_kill_monitor $MONITOR_PID
                     log "ERROR" "${stages[$i]}编译彻底失败"
                     
                     # 分析最后几行日志，提取关键错误
-                    LAST_ERRORS=$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
+                    LAST_ERRORS=$(tail -20 /tmp/build_${i}_single.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
                     if [ -n "$LAST_ERRORS" ]; then
                         echo "$LAST_ERRORS" | while read error_line; do
                             log_build_error "$error_line" "编译失败"
@@ -123,33 +112,23 @@ compile_firmware() {
                     exit 1
                 fi
             fi
-            
-            wait_and_kill_monitor $MONITOR_PID
         else
             log "INFO" "编译所有包..."
             
-            # 启动错误监控（后台）
-            $MONITOR_SCRIPT &
-            MONITOR_PID=$!
-            
-            if make -j$(nproc) 2>&1 | tee /tmp/build.log; then
+            # 使用更简单的错误处理方式
+            if make -j$(nproc) 2>&1 | tee /tmp/build_final.log; then
                 log "INFO" "所有包编译成功"
             else
-                wait_and_kill_monitor $MONITOR_PID
                 log "WARN" "并行编译失败，尝试单线程编译"
                 
-                # 单线程编译时也监控错误
-                $MONITOR_SCRIPT &
-                MONITOR_PID=$!
-                
-                if make -j1 V=s 2>&1 | tee /tmp/build.log; then
+                # 单线程编译
+                if make -j1 V=s 2>&1 | tee /tmp/build_final_single.log; then
                     log "INFO" "单线程编译成功"
                 else
-                    wait_and_kill_monitor $MONITOR_PID
                     log "ERROR" "编译彻底失败"
                     
                     # 分析最后几行日志，提取关键错误
-                    LAST_ERRORS=$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
+                    LAST_ERRORS=$(tail -20 /tmp/build_final_single.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
                     if [ -n "$LAST_ERRORS" ]; then
                         echo "$LAST_ERRORS" | while read error_line; do
                             log_build_error "$error_line" "编译失败"
@@ -158,8 +137,6 @@ compile_firmware() {
                     exit 1
                 fi
             fi
-            
-            wait_and_kill_monitor $MONITOR_PID
         fi
     done
     
@@ -185,32 +162,20 @@ compile_packages() {
     log "INFO" "软件包列表: $packages"
     log "INFO" "使用 $(nproc) 个线程编译"
     
-    # 创建错误监控脚本
-    MONITOR_SCRIPT=$(create_error_monitor "/tmp/build.log")
-    
-    # 启动错误监控（后台）
-    $MONITOR_SCRIPT &
-    MONITOR_PID=$!
-    
-    # 编译指定软件包
-    if make -j$(nproc) $packages 2>&1 | tee /tmp/build.log; then
+    # 使用更简单的错误处理方式
+    if make -j$(nproc) $packages 2>&1 | tee /tmp/build_packages.log; then
         log "INFO" "${build_type}软件包编译成功"
     else
-        wait_and_kill_monitor $MONITOR_PID
         log "WARN" "${build_type}软件包并行编译失败，尝试单线程编译"
         
-        # 单线程编译时也监控错误
-        $MONITOR_SCRIPT &
-        MONITOR_PID=$!
-        
-        if make -j1 V=s $packages 2>&1 | tee /tmp/build.log; then
+        # 单线程编译
+        if make -j1 V=s $packages 2>&1 | tee /tmp/build_packages_single.log; then
             log "INFO" "${build_type}软件包单线程编译成功"
         else
-            wait_and_kill_monitor $MONITOR_PID
             log "ERROR" "${build_type}软件包编译彻底失败"
             
             # 分析最后几行日志，提取关键错误
-            LAST_ERRORS=$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
+            LAST_ERRORS=$(tail -20 /tmp/build_packages_single.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
             if [ -n "$LAST_ERRORS" ]; then
                 echo "$LAST_ERRORS" | while read error_line; do
                     log_build_error "$error_line" "编译失败"
@@ -219,8 +184,6 @@ compile_packages() {
             exit 1
         fi
     fi
-    
-    wait_and_kill_monitor $MONITOR_PID
     
     echo ""
     echo "status=success" >> $GITHUB_OUTPUT
