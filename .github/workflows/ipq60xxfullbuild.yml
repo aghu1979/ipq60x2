@@ -233,7 +233,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
+          name: ${{ env.SOURCE_REPO }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ github.workspace }}/build.log
             ${{ github.workspace }}/build_report.json
@@ -248,7 +248,7 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-base-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
+          name: ${{ env.SOURCE_REPO }}-base-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.OPENWRT_PATH }}/bin
             ${{ env.OPENWRT_PATH }}/.config
@@ -483,7 +483,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ github.workspace }}/build.log
             ${{ github.workspace }}/build_report.json
@@ -498,7 +498,7 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.OPENWRT_PATH }}/bin
             ${{ env.OPENWRT_PATH }}/.config
@@ -733,7 +733,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ github.workspace }}/build.log
             ${{ github.workspace }}/build_report.json
@@ -748,7 +748,7 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.OPENWRT_PATH }}/bin
             ${{ env.OPENWRT_PATH }}/.config
@@ -983,7 +983,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-logs-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ github.workspace }}/build.log
             ${{ github.workspace }}/build_report.json
@@ -998,7 +998,7 @@ jobs:
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@main
         with:
-          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_number }}
+          name: ${{ env.SOURCE_REPO }}-${{ env.VARIANT_CONFIG }}-${{ env.CHIP_FAMILY }}-${{ env.REPO_SHORT }}-${{ env.FILE_DATE }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.OPENWRT_PATH }}/bin
             ${{ env.OPENWRT_PATH }}/.config
