@@ -78,8 +78,8 @@ jobs:
             **/*.gradle
             **/gradle-wrapper.properties
 
-      # 缓存环境 - 修复权限问题，排除Android目录
-      - name: 缓存环境
+      # 缓存系统环境 - 保存已安装的系统工具
+      - name: 缓存系统环境
         id: cache_env
         uses: actions/cache@v4
         with:
@@ -102,8 +102,8 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境 - 使用官方actions后的自定义初始化
-      - name: 初始化环境
+      # 初始化系统环境 - 安装OpenWrt编译所需的系统工具
+      - name: 初始化系统环境
         run: |
           # 设置环境变量，指示是否使用缓存
           if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
@@ -115,32 +115,32 @@ jobs:
           source scripts/env-init.sh
           init_environment
 
-      # 读取仓库配置
-      - name: 读取仓库配置
+      # 读取仓库配置信息
+      - name: 读取仓库配置信息
         run: |
           source scripts/repo-config.sh
           read_repo_config "$REPO_CONFIG"
 
-      # 克隆源代码
-      - name: 克隆源代码
+      # 克隆OpenWrt源代码
+      - name: 克隆OpenWrt源代码
         run: |
           source scripts/source-clone.sh
           clone_source "$REPO_URL" "$REPO_BRANCH"
 
-      # 生成变量
-      - name: 生成变量
+      # 生成构建变量
+      - name: 生成构建变量
         run: |
           source scripts/vars-generator.sh
           generate_variables "$CHIP_FAMILY" "$REPO_SHORT" "$REPO_URL"
 
-      # 设置缓存
-      - name: 设置缓存
+      # 设置缓存键
+      - name: 设置缓存键
         run: |
           source scripts/cache-manager.sh
           setup_caches "$SOURCE_REPO" "$REPO_BRANCH" "$DEVICE_TARGET" "$DEVICE_SUBTARGET" "$FEEDS_HASH"
 
-      # 缓存工具链
-      - name: 缓存工具链
+      # 缓存编译工具链 - 保存交叉编译工具链
+      - name: 缓存编译工具链
         id: cache_toolchain
         uses: actions/cache@v4
         with:
@@ -154,8 +154,8 @@ jobs:
             ${{ env.OPENWRT_PATH }}/.ccache
             ${{ env.OPENWRT_PATH }}/staging_dir
 
-      # 缓存Feeds
-      - name: 缓存Feeds
+      # 缓存软件源索引 - 保存feeds配置和软件包索引
+      - name: 缓存软件源索引
         id: cache_feeds
         uses: actions/cache@v4
         with:
@@ -169,8 +169,8 @@ jobs:
             ${{ env.OPENWRT_PATH }}/dl
             ${{ env.OPENWRT_PATH }}/package/feeds
 
-      # 缓存DL软件包
-      - name: 缓存DL软件包
+      # 缓存下载的软件包 - 保存已下载的源码包
+      - name: 缓存下载的软件包
         id: cache_dl
         uses: actions/cache@v4
         with:
@@ -181,25 +181,25 @@ jobs:
           path: |
             ${{ env.OPENWRT_PATH }}/dl
 
-      # 检查缓存状态
-      - name: 检查缓存状态
+      # 检查缓存命中状态
+      - name: 检查缓存命中状态
         run: |
           source scripts/cache-manager.sh
           check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
 
-      # 刷新缓存 - 简化，只刷新必要的时间戳
-      - name: 刷新缓存
+      # 更新缓存时间戳 - 确保缓存有效性
+      - name: 更新缓存时间戳
         run: |
           source "$LOGGER_SCRIPT"
-          step_start "REFRESH_CACHE" "刷新缓存时间戳"
+          step_start "REFRESH_CACHE" "更新缓存时间戳"
           
           if [ -d "$OPENWRT_PATH/staging_dir" ]; then
-              log "INFO" "刷新staging_dir时间戳..."
-              # 只刷新stamp目录，不递归所有文件
+              log "INFO" "更新staging_dir时间戳..."
+              # 只更新stamp目录的时间戳，避免递归所有文件
               find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec touch {} \; 2>/dev/null || true
-              log "INFO" "缓存刷新完成"
+              log "INFO" "缓存时间戳更新完成"
           else
-              log "WARN" "未找到staging_dir，跳过缓存刷新"
+              log "WARN" "未找到staging_dir，跳过更新"
           fi
           
           step_complete "REFRESH_CACHE" "success"
@@ -211,36 +211,36 @@ jobs:
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$REPO_SCRIPT" "软件源"
 
-      # 安装Feeds
-      - name: 安装Feeds
+      # 安装软件源到构建系统
+      - name: 安装软件源到构建系统
         run: |
           source scripts/feeds-installer.sh
           install_feeds "${{ steps.cache_feeds.outputs.cache-hit }}"
 
-      # 加载自定义配置
-      - name: 加载自定义配置
+      # 应用自定义配置脚本
+      - name: 应用自定义配置脚本
         run: |
           source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$DIY_SCRIPT" "自定义"
 
-      # 合并配置文件
-      - name: 合并配置文件
+      # 合并基础配置文件
+      - name: 合并基础配置文件
         run: |
           source scripts/config-merger.sh
           merge_configs "$CONFIG_BASE" "$CONFIG_BRANCH"
 
-      # 下载软件包
-      - name: 下载软件包
+      # 下载所有软件包源码
+      - name: 下载所有软件包源码
         run: |
           source scripts/builder.sh
           download_packages
 
-      # 清理构建环境 - 简化，只在必要时清理
-      - name: 清理构建环境
+      # 清理临时文件 - 为编译做准备
+      - name: 清理临时文件
         run: |
           source "$LOGGER_SCRIPT"
-          step_start "CLEAN_ENV" "清理构建环境"
+          step_start "CLEAN_ENV" "清理临时文件"
           
           cd "$OPENWRT_PATH"
           
@@ -254,17 +254,17 @@ jobs:
             if [ -d "build" ]; then
                 rm -rf build/* 2>/dev/null || true
             fi
-            log "INFO" "构建环境清理完成"
+            log "INFO" "临时文件清理完成"
           fi
           
           step_complete "CLEAN_ENV" "success"
 
-      # 编译基础环境
-      - name: 编译基础环境
+      # 编译基础固件
+      - name: 编译基础固件
         id: compile
         run: |
           source scripts/builder.sh
-          compile_firmware "基础环境"
+          compile_firmware "基础固件"
 
       # 生成构建报告
       - name: 生成构建报告
@@ -273,8 +273,8 @@ jobs:
           source scripts/reporter.sh
           generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
 
-      # 检查空间使用情况 - 简化
-      - name: 检查空间使用情况
+      # 检查磁盘空间使用情况
+      - name: 检查磁盘空间使用情况
         if: (!cancelled())
         run: |
           source "$LOGGER_SCRIPT"
@@ -286,7 +286,7 @@ jobs:
             log "INFO" "bin目录大小: $bin_size"
           fi
 
-      # 上传构建日志和报告 - 添加唯一ID避免冲突
+      # 上传构建日志和报告
       - name: 上传构建日志和报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -301,8 +301,8 @@ jobs:
             ${{ github.workspace }}/error_*.log
           retention-days: 30
 
-      # 上传基础环境到Artifact - 添加唯一ID避免冲突
-      - name: 上传基础环境到Artifact
+      # 上传编译完成的固件
+      - name: 上传编译完成的固件
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@v4
         with:
@@ -366,8 +366,8 @@ jobs:
             **/*.gradle
             **/gradle-wrapper.properties
 
-      # 缓存环境 - 修复权限问题，排除Android目录
-      - name: 缓存环境
+      # 缓存系统环境 - 保存已安装的系统工具
+      - name: 缓存系统环境
         id: cache_env
         uses: actions/cache@v4
         with:
@@ -390,8 +390,8 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境 - 使用官方actions后的自定义初始化
-      - name: 初始化环境
+      # 初始化系统环境 - 安装OpenWrt编译所需的系统工具
+      - name: 初始化系统环境
         run: |
           # 设置环境变量，指示是否使用缓存
           if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
@@ -403,32 +403,32 @@ jobs:
           source scripts/env-init.sh
           init_environment
 
-      # 读取仓库配置
-      - name: 读取仓库配置
+      # 读取仓库配置信息
+      - name: 读取仓库配置信息
         run: |
           source scripts/repo-config.sh
           read_repo_config "$REPO_CONFIG"
 
-      # 克隆源代码
-      - name: 克隆源代码
+      # 克隆OpenWrt源代码
+      - name: 克隆OpenWrt源代码
         run: |
           source scripts/source-clone.sh
           clone_source "$REPO_URL" "$REPO_BRANCH"
 
-      # 生成变量
-      - name: 生成变量
+      # 生成构建变量
+      - name: 生成构建变量
         run: |
           source scripts/vars-generator.sh
           generate_variables "$CHIP_FAMILY" "$REPO_SHORT" "$REPO_URL"
 
-      # 设置缓存
-      - name: 设置缓存
+      # 设置缓存键
+      - name: 设置缓存键
         run: |
           source scripts/cache-manager.sh
           setup_caches "$SOURCE_REPO" "$REPO_BRANCH" "$DEVICE_TARGET" "$DEVICE_SUBTARGET" "$FEEDS_HASH"
 
-      # 缓存工具链
-      - name: 缓存工具链
+      # 缓存编译工具链 - 保存交叉编译工具链
+      - name: 缓存编译工具链
         id: cache_toolchain
         uses: actions/cache@v4
         with:
@@ -442,8 +442,8 @@ jobs:
             ${{ env.OPENWRT_PATH }}/.ccache
             ${{ env.OPENWRT_PATH }}/staging_dir
 
-      # 缓存Feeds
-      - name: 缓存Feeds
+      # 缓存软件源索引 - 保存feeds配置和软件包索引
+      - name: 缓存软件源索引
         id: cache_feeds
         uses: actions/cache@v4
         with:
@@ -457,8 +457,8 @@ jobs:
             ${{ env.OPENWRT_PATH }}/dl
             ${{ env.OPENWRT_PATH }}/package/feeds
 
-      # 缓存DL软件包
-      - name: 缓存DL软件包
+      # 缓存下载的软件包 - 保存已下载的源码包
+      - name: 缓存下载的软件包
         id: cache_dl
         uses: actions/cache@v4
         with:
@@ -469,25 +469,25 @@ jobs:
           path: |
             ${{ env.OPENWRT_PATH }}/dl
 
-      # 检查缓存状态
-      - name: 检查缓存状态
+      # 检查缓存命中状态
+      - name: 检查缓存命中状态
         run: |
           source scripts/cache-manager.sh
           check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
 
-      # 刷新缓存 - 简化，只刷新必要的时间戳
-      - name: 刷新缓存
+      # 更新缓存时间戳 - 确保缓存有效性
+      - name: 更新缓存时间戳
         run: |
           source "$LOGGER_SCRIPT"
-          step_start "REFRESH_CACHE" "刷新缓存时间戳"
+          step_start "REFRESH_CACHE" "更新缓存时间戳"
           
           if [ -d "$OPENWRT_PATH/staging_dir" ]; then
-              log "INFO" "刷新staging_dir时间戳..."
-              # 只刷新stamp目录，不递归所有文件
+              log "INFO" "更新staging_dir时间戳..."
+              # 只更新stamp目录的时间戳，避免递归所有文件
               find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec touch {} \; 2>/dev/null || true
-              log "INFO" "缓存刷新完成"
+              log "INFO" "缓存时间戳更新完成"
           else
-              log "WARN" "未找到staging_dir，跳过缓存刷新"
+              log "WARN" "未找到staging_dir，跳过更新"
           fi
           
           step_complete "REFRESH_CACHE" "success"
@@ -499,14 +499,14 @@ jobs:
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$REPO_SCRIPT" "软件源"
 
-      # 安装Feeds
-      - name: 安装Feeds
+      # 安装软件源到构建系统
+      - name: 安装软件源到构建系统
         run: |
           source scripts/feeds-installer.sh
           install_feeds "${{ steps.cache_feeds.outputs.cache-hit }}"
 
-      # 加载自定义配置
-      - name: 加载自定义配置
+      # 应用自定义配置脚本
+      - name: 应用自定义配置脚本
         run: |
           source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
@@ -538,17 +538,17 @@ jobs:
           # 合并基础配置和变体配置
           merge_variant_config "$CONFIG_BASE" "$CONFIG_VARIANT" "$VARIANT_CONFIG"
 
-      # 下载软件包
-      - name: 下载软件包
+      # 下载所有软件包源码
+      - name: 下载所有软件包源码
         run: |
           source scripts/builder.sh
           download_packages
 
-      # 清理构建环境 - 简化，只在必要时清理
-      - name: 清理构建环境
+      # 清理临时文件 - 为编译做准备
+      - name: 清理临时文件
         run: |
           source "$LOGGER_SCRIPT"
-          step_start "CLEAN_ENV" "清理构建环境"
+          step_start "CLEAN_ENV" "清理临时文件"
           
           cd "$OPENWRT_PATH"
           
@@ -562,31 +562,31 @@ jobs:
             if [ -d "build" ]; then
                 rm -rf build/* 2>/dev/null || true
             fi
-            log "INFO" "构建环境清理完成"
+            log "INFO" "临时文件清理完成"
           fi
           
           step_complete "CLEAN_ENV" "success"
 
-      # 编译Ultra变体配置
-      - name: 编译Ultra变体配置
+      # 编译Ultra变体固件
+      - name: 编译Ultra变体固件
         id: compile
         run: |
           source scripts/builder.sh
           compile_firmware "${VARIANT_CONFIG}变体"
 
       # 生成构建报告
-      - name: 生成构建报告
+      - name:   注释：生成构建报告
         if: always()
         run: |
           source scripts/reporter.sh
           generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
 
-      # 检查空间使用情况 - 简化
-      - name: 检查空间使用情况
+      # 检查磁盘空间使用情况
+      - name: 检查磁盘空间使用情况
         if: (!cancelled())
         run: |
           source "$LOGGER_SCRIPT"
-          log "INFO" "=== 硬盘空间使用情况 ==="
+          log "INFO" "=== 磁盘空间使用情况 ==="
           df -hT $GITHUB_WORKSPACE | tail -1
           
           if [ -d "$OPENWRT_PATH/bin" ]; then
@@ -594,7 +594,7 @@ jobs:
             log "INFO" "bin目录大小: $bin_size"
           fi
 
-      # 上传构建日志和报告 - 添加唯一ID避免冲突
+      # 上传构建日志和报告
       - name: 上传构建日志和报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -609,8 +609,8 @@ jobs:
             ${{ github.workspace }}/error_*.log
           retention-days: 30
 
-      # 上传Ultra变体配置到Artifact - 添加唯一ID避免冲突
-      - name: 上传Ultra变体配置到Artifact
+      # 上传编译完成的固件
+      - name: 上传编译完成的固件
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@v4
         with:
@@ -674,8 +674,8 @@ jobs:
             **/*.gradle
             **/gradle-wrapper.properties
 
-      # 缓存环境 - 修复权限问题，排除Android目录
-      - name: 缓存环境
+      # 缓存系统环境 - 保存已安装的系统工具
+      - name: 缓存系统环境
         id: cache_env
         uses: actions/cache@v4
         with:
@@ -698,8 +698,8 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境 - 使用官方actions后的自定义初始化
-      - name: 初始化环境
+      # 初始化系统环境 - 安装OpenWrt编译所需的系统工具
+      - name: 初始化系统环境
         run: |
           # 设置环境变量，指示是否使用缓存
           if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
@@ -711,32 +711,32 @@ jobs:
           source scripts/env-init.sh
           init_environment
 
-      # 读取仓库配置
-      - name: 读取仓库配置
+      # 读取仓库配置信息
+      - name: 读取仓库配置信息
         run: |
           source scripts/repo-config.sh
           read_repo_config "$REPO_CONFIG"
 
-      # 克隆源代码
-      - name: 克隆源代码
+      # 克隆OpenWrt源代码
+      - name: 克隆OpenWrt源代码
         run: |
           source scripts/source-clone.sh
           clone_source "$REPO_URL" "$REPO_BRANCH"
 
-      # 生成变量
-      - name: 生成变量
+      # 生成构建变量
+      - name: 生成构建变量
         run: |
           source scripts/vars-generator.sh
           generate_variables "$CHIP_FAMILY" "$REPO_SHORT" "$REPO_URL"
 
-      # 设置缓存
-      - name: 设置缓存
+      # 设置缓存键
+      - name: 设置缓存键
         run: |
           source scripts/cache-manager.sh
           setup_caches "$SOURCE_REPO" "$REPO_BRANCH" "$DEVICE_TARGET" "$DEVICE_SUBTARGET" "$FEEDS_HASH"
 
-      # 缓存工具链
-      - name: 缓存工具链
+      # 缓存编译工具链 - 保存交叉编译工具链
+      - name: 缓存编译工具链
         id: cache_toolchain
         uses: actions/cache@v4
         with:
@@ -750,8 +750,8 @@ jobs:
             ${{ env.OPENWRT_PATH }}/.ccache
             ${{ env.OPENWRT_PATH }}/staging_dir
 
-      # 缓存Feeds
-      - name: 缓存Feeds
+      # 缓存软件源索引 - 保存feeds配置和软件包索引
+      - name: 缓存软件源索引
         id: cache_feeds
         uses: actions/cache@v4
         with:
@@ -765,8 +765,8 @@ jobs:
             ${{ env.OPENWRT_PATH }}/dl
             ${{ env.OPENWRT_PATH }}/package/feeds
 
-      # 缓存DL软件包
-      - name: 缓存DL软件包
+      # 缓存下载的软件包 - 保存已下载的源码包
+      - name: 缓存下载的软件包
         id: cache_dl
         uses: actions/cache@v4
         with:
@@ -777,25 +777,25 @@ jobs:
           path: |
             ${{ env.OPENWRT_PATH }}/dl
 
-      # 检查缓存状态
-      - name: 检查缓存状态
+      # 检查缓存命中状态
+      - name: 检查缓存命中状态
         run: |
           source scripts/cache-manager.sh
           check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
 
-      # 刷新缓存 - 简化，只刷新必要的时间戳
-      - name: 刷新缓存
+      # 更新缓存时间戳 - 确保缓存有效性
+      - name: 更新缓存时间戳
         run: |
           source "$LOGGER_SCRIPT"
-          step_start "REFRESH_CACHE" "刷新缓存时间戳"
+          step_start "REFRESH_CACHE" "更新缓存时间戳"
           
           if [ -d "$OPENWRT_PATH/staging_dir" ]; then
-              log "INFO" "刷新staging_dir时间戳..."
-              # 只刷新stamp目录，不递归所有文件
+              log "INFO" "更新staging_dir时间戳..."
+              # 只更新stamp目录的时间戳，避免递归所有文件
               find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec touch {} \; 2>/dev/null || true
-              log "INFO" "缓存刷新完成"
+              log "INFO" "缓存时间戳更新完成"
           else
-              log "WARN" "未找到staging_dir，跳过缓存刷新"
+              log "WARN" "未找到staging_dir，跳过更新"
           fi
           
           step_complete "REFRESH_CACHE" "success"
@@ -807,14 +807,14 @@ jobs:
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$REPO_SCRIPT" "软件源"
 
-      # 安装Feeds
-      - name: 安装Feeds
+      # 安装软件源到构建系统
+      - name: 安装软件源到构建系统
         run: |
           source scripts/feeds-installer.sh
           install_feeds "${{ steps.cache_feeds.outputs.cache-hit }}"
 
-      # 加载自定义配置
-      - name: 加载自定义配置
+      # 应用自定义配置脚本
+      - name: 应用自定义配置脚本
         run: |
           source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
@@ -846,17 +846,17 @@ jobs:
           # 合并基础配置和变体配置
           merge_variant_config "$CONFIG_BASE" "$CONFIG_VARIANT" "$VARIANT_CONFIG"
 
-      # 下载软件包
-      - name: 下载软件包
+      # 下载所有软件包源码
+      - name: 下载所有软件包源码
         run: |
           source scripts/builder.sh
           download_packages
 
-      # 清理构建环境 - 简化，只在必要时清理
-      - name: 清理构建环境
+      # 清理临时文件 - 为编译做准备
+      - name: 清理临时文件
         run: |
           source "$LOGGER_SCRIPT"
-          step_start "CLEAN_ENV" "清理构建环境"
+          step_start "CLEAN_ENV" "清理临时文件"
           
           cd "$OPENWRT_PATH"
           
@@ -870,13 +870,13 @@ jobs:
             if [ -d "build" ]; then
                 rm -rf build/* 2>/dev/null || true
             fi
-            log "INFO" "构建环境清理完成"
+            log "INFO" "临时文件清理完成"
           fi
           
           step_complete "CLEAN_ENV" "success"
 
-      # 编译Max变体配置
-      - name: 编译Max变体配置
+      # 编译Max变体固件
+      - name: 编译Max变体固件
         id: compile
         run: |
           source scripts/builder.sh
@@ -889,8 +889,8 @@ jobs:
           source scripts/reporter.sh
           generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
 
-      # 检查空间使用情况 - 简化
-      - name: 检查空间使用情况
+      # 检查磁盘空间使用情况
+      - name: 检查磁盘空间使用情况
         if: (!cancelled())
         run: |
           source "$LOGGER_SCRIPT"
@@ -902,7 +902,7 @@ jobs:
             log "INFO" "bin目录大小: $bin_size"
           fi
 
-      # 上传构建日志和报告 - 添加唯一ID避免冲突
+      # 上传构建日志和报告
       - name: 上传构建日志和报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -917,8 +917,8 @@ jobs:
             ${{ github.workspace }}/error_*.log
           retention-days: 30
 
-      # 上传Max变体配置到Artifact - 添加唯一ID避免冲突
-      - name: 上传Max变体配置到Artifact
+      # 上传编译完成的固件
+      - name: 上传编译完成的固件
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@v4
         with:
@@ -982,8 +982,8 @@ jobs:
             **/*.gradle
             **/gradle-wrapper.properties
 
-      # 缓存环境 - 修复权限问题，排除Android目录
-      - name: 缓存环境
+      # 缓存系统环境 - 保存已安装的系统工具
+      - name: 缓存系统环境
         id: cache_env
         uses: actions/cache@v4
         with:
@@ -1006,8 +1006,8 @@ jobs:
           source scripts/logger.sh
           init_logger "$BUILD_ID"
 
-      # 初始化环境 - 使用官方actions后的自定义初始化
-      - name: 初始化环境
+      # 初始化系统环境 - 安装OpenWrt编译所需的系统工具
+      - name: 初始化系统环境
         run: |
           # 设置环境变量，指示是否使用缓存
           if [ "${{ steps.cache_env.outputs.cache-hit }}" == "true" ]; then
@@ -1019,32 +1019,32 @@ jobs:
           source scripts/env-init.sh
           init_environment
 
-      # 读取仓库配置
-      - name: 读取仓库配置
+      #读取仓库配置信息
+      - name: 读取仓库配置信息
         run: |
           source scripts/repo-config.sh
           read_repo_config "$REPO_CONFIG"
 
-      # 克隆源代码
-      - name: 克隆源代码
+      # 克隆OpenWrt源代码
+      - name: 克隆OpenWrt源代码
         run: |
           source scripts/source-clone.sh
           clone_source "$REPO_URL" "$REPO_BRANCH"
 
-      # 生成变量
-      - name: 生成变量
+      # 生成构建变量
+      - name: 生成构建变量
         run: |
           source scripts/vars-generator.sh
           generate_variables "$CHIP_FAMILY" "$REPO_SHORT" "$REPO_URL"
 
-      # 设置缓存
-      - name: 设置缓存
+      # 设置缓存键
+      - name: 设置缓存键
         run: |
           source scripts/cache-manager.sh
           setup_caches "$SOURCE_REPO" "$REPO_BRANCH" "$DEVICE_TARGET" "$DEVICE_SUBTARGET" "$FEEDS_HASH"
 
-      # 缓存工具链
-      - name: 缓存工具链
+      # 缓存编译工具链 - 保存交叉编译工具链
+      - name: 缓存编译工具链
         id: cache_toolchain
         uses: actions/cache@v4
         with:
@@ -1058,8 +1058,8 @@ jobs:
             ${{ env.OPENWRT_PATH }}/.ccache
             ${{ env.OPENWRT_PATH }}/staging_dir
 
-      # 缓存Feeds
-      - name: 缓存Feeds
+      # 缓存软件源索引 - 保存feeds配置和软件包索引
+      - name: 缓存软件源索引
         id: cache_feeds
         uses: actions/cache@v4
         with:
@@ -1073,8 +1073,8 @@ jobs:
             ${{ env.OPENWRT_PATH }}/dl
             ${{ env.OPENWRT_PATH }}/package/feeds
 
-      # 缓存DL软件包
-      - name: 缓存DL软件包
+      # 缓存下载的软件包 - 保存已下载的源码包
+      - name: 缓存下载的软件包
         id: cache_dl
         uses: actions/cache@v4
         with:
@@ -1085,25 +1085,25 @@ jobs:
           path: |
             ${{ env.OPENWRT_PATH }}/dl
 
-      # 检查缓存状态
-      - name: 检查缓存状态
+      # 检查缓存命中状态
+      - name: 检查缓存命中状态
         run: |
           source scripts/cache-manager.sh
           check_cache_status "${{ steps.cache_toolchain.outputs.cache-hit }}" "${{ steps.cache_feeds.outputs.cache-hit }}" "${{ steps.cache_dl.outputs.cache-hit }}"
 
-      # 刷新缓存 - 简化，只刷新必要的时间戳
-      - name: 刷新缓存
+      # 更新缓存时间戳 - 确保缓存有效性
+      - name: 更新缓存时间戳
         run: |
           source "$LOGGER_SCRIPT"
-          step_start "REFRESH_CACHE" "刷新缓存时间戳"
+          step_start "REFRESH_CACHE" "更新缓存时间戳"
           
           if [ -d "$OPENWRT_PATH/staging_dir" ]; then
-              log "INFO" "刷新staging_dir时间戳..."
-              # 只刷新stamp目录，不递归所有文件
+              log "INFO" "更新staging_dir时间戳..."
+              # 只更新stamp目录的时间戳，避免递归所有文件
               find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" -exec touch {} \; 2>/dev/null || true
-              log "INFO" "缓存刷新完成"
+              log "INFO" "缓存时间戳更新完成"
           else
-              log "WARN" "未找到staging_dir，跳过缓存刷新"
+              log "WARN" "未找到staging_dir，跳过更新"
           fi
           
           step_complete "REFRESH_CACHE" "success"
@@ -1115,14 +1115,14 @@ jobs:
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
           execute_custom_script "$REPO_SCRIPT" "软件源"
 
-      # 安装Feeds
-      - name: 安装Feeds
+      # 安装软件源到构建系统
+      - name: 安装软件源到构建系统
         run: |
           source scripts/feeds-installer.sh
           install_feeds "${{ steps.cache_feeds.outputs.cache-hit }}"
 
-      # 加载自定义配置
-      - name: 加载自定义配置
+      # 应用自定义配置脚本
+      - name: 应用自定义配置脚本
         run: |
           source "$LOGGER_SCRIPT"
           source "${GITHUB_WORKSPACE}/scripts/common.sh"
@@ -1154,17 +1154,17 @@ jobs:
           # 合并基础配置和变体配置
           merge_variant_config "$CONFIG_BASE" "$CONFIG_VARIANT" "$VARIANT_CONFIG"
 
-      # 下载软件包
-      - name: 下载软件包
+      # 下载所有软件包源码
+      - name: 下载所有软件包源码
         run: |
           source scripts/builder.sh
           download_packages
 
-      # 清理构建环境 - 简化，只在必要时清理
-      - name: 清理构建环境
+      # 清理临时文件 - 为编译做准备
+      - name: 清理临时文件
         run: |
           source "$LOGGER_SCRIPT"
-          step_start "CLEAN_ENV" "清理构建环境"
+          step_start "CLEAN_ENV" "清理临时文件"
           
           cd "$OPENWRT_PATH"
           
@@ -1176,15 +1176,15 @@ jobs:
             log "INFO" "磁盘空间不足，执行清理..."
             # 只清理build目录，保留缓存
             if [ -d "build" ]; then
-                rm -rf build/* 2>/dev/null || true
+                rm -ref build/* 2>/dev/null || true
             fi
-            log "INFO" "构建环境清理完成"
+            log "INFO" "临时文件清理完成"
           fi
           
           step_complete "CLEAN_ENV" "success"
 
-      # 编译Pro变体配置
-      - name: 编译Pro变体配置
+      # 编译Pro变体固件
+      - name: 编译Pro变体固件
         id: compile
         run: |
           source scripts/builder.sh
@@ -1197,8 +1197,8 @@ jobs:
           source scripts/reporter.sh
           generate_report "${{ steps.compile.outputs.status }}" "$BUILD_ID"
 
-      # 检查空间使用情况 - 简化
-      - name: 检查空间使用情况
+      # 检查磁盘空间使用情况
+      - name: 检查磁盘空间使用情况
         if: (!cancelled())
         run: |
           source "$LOGGER_SCRIPT"
@@ -1210,7 +1210,7 @@ jobs:
             log "INFO" "bin目录大小: $bin_size"
           fi
 
-      # 上传构建日志和报告 - 添加唯一ID避免冲突
+      # 上传构建日志和报告
       - name: 上传构建日志和报告
         if: always()
         uses: actions/upload-artifact@v4
@@ -1225,8 +1225,8 @@ jobs:
             ${{ github.workspace }}/error_*.log
           retention-days: 30
 
-      # 上传Pro变体配置到Artifact - 添加唯一ID避免冲突
-      - name: 上传Pro变体配置到Artifact
+      # 上传编译完成的固件
+      - name: 上传编译完成的固件
         if: steps.compile.outputs.status == 'success'
         uses: actions/upload-artifact@v4
         with:
