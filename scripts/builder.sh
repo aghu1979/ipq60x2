@@ -90,50 +90,58 @@ compile_firmware() {
         if [ -n "${commands[$i]}" ]; then
             log "INFO" "编译${stages[$i]}..."
             
-            # 使用更简单的错误处理方式
+            # 先尝试并行编译
             if make -j$(nproc) ${commands[$i]} 2>&1 | tee /tmp/build_${i}.log; then
                 log "INFO" "${stages[$i]}编译成功"
             else
                 log "WARN" "${stages[$i]}并行编译失败，尝试单线程编译"
                 
-                # 单线程编译
+                # 单线程编译，获取详细错误信息
                 if make -j1 V=s ${commands[$i]} 2>&1 | tee /tmp/build_${i}_single.log; then
                     log "INFO" "${stages[$i]}单线程编译成功"
                 else
                     log "ERROR" "${stages[$i]}编译彻底失败"
                     
                     # 分析最后几行日志，提取关键错误
-                    LAST_ERRORS=$(tail -20 /tmp/build_${i}_single.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
+                    LAST_ERRORS=$(tail -50 /tmp/build_${i}_single.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -10)
                     if [ -n "$LAST_ERRORS" ]; then
                         echo "$LAST_ERRORS" | while read error_line; do
                             log_build_error "$error_line" "编译失败"
                         done
                     fi
+                    
+                    # 保存详细错误日志
+                    cp /tmp/build_${i}_single.log "$GITHUB_WORKSPACE/error_${i}.log"
+                    
                     exit 1
                 fi
             fi
         else
             log "INFO" "编译所有包..."
             
-            # 使用更简单的错误处理方式
+            # 先尝试并行编译
             if make -j$(nproc) 2>&1 | tee /tmp/build_final.log; then
                 log "INFO" "所有包编译成功"
             else
                 log "WARN" "并行编译失败，尝试单线程编译"
                 
-                # 单线程编译
+                # 单线程编译，获取详细错误信息
                 if make -j1 V=s 2>&1 | tee /tmp/build_final_single.log; then
                     log "INFO" "单线程编译成功"
                 else
                     log "ERROR" "编译彻底失败"
                     
                     # 分析最后几行日志，提取关键错误
-                    LAST_ERRORS=$(tail -20 /tmp/build_final_single.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
+                    LAST_ERRORS=$(tail -50 /tmp/build_final_single.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -10)
                     if [ -n "$LAST_ERRORS" ]; then
                         echo "$LAST_ERRORS" | while read error_line; do
                             log_build_error "$error_line" "编译失败"
                         done
                     fi
+                    
+                    # 保存详细错误日志
+                    cp /tmp/build_final_single.log "$GITHUB_WORKSPACE/error_final.log"
+                    
                     exit 1
                 fi
             fi
@@ -162,25 +170,29 @@ compile_packages() {
     log "INFO" "软件包列表: $packages"
     log "INFO" "使用 $(nproc) 个线程编译"
     
-    # 使用更简单的错误处理方式
+    # 先尝试并行编译
     if make -j$(nproc) $packages 2>&1 | tee /tmp/build_packages.log; then
         log "INFO" "${build_type}软件包编译成功"
     else
         log "WARN" "${build_type}软件包并行编译失败，尝试单线程编译"
         
-        # 单线程编译
+        # 单线程编译，获取详细错误信息
         if make -j1 V=s $packages 2>&1 | tee /tmp/build_packages_single.log; then
             log "INFO" "${build_type}软件包单线程编译成功"
         else
             log "ERROR" "${build_type}软件包编译彻底失败"
             
             # 分析最后几行日志，提取关键错误
-            LAST_ERRORS=$(tail -20 /tmp/build_packages_single.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
+            LAST_ERRORS=$(tail -50 /tmp/build_packages_single.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -10)
             if [ -n "$LAST_ERRORS" ]; then
                 echo "$LAST_ERRORS" | while read error_line; do
                     log_build_error "$error_line" "编译失败"
                 done
             fi
+            
+            # 保存详细错误日志
+            cp /tmp/build_packages_single.log "$GITHUB_WORKSPACE/error_packages.log"
+            
             exit 1
         fi
     fi
