@@ -171,5 +171,64 @@ compile_firmware() {
     step_complete "COMPILE" "success"
 }
 
+# 编译特定软件包
+compile_packages() {
+    local packages="$1"
+    local build_type="$2"
+    
+    source "$LOGGER_SCRIPT"
+    source "${GITHUB_WORKSPACE}/scripts/common.sh"
+    step_start "COMPILE_PKGS" "编译${build_type}软件包"
+    
+    cd "$OPENWRT_PATH"
+    log "INFO" "开始编译${build_type}软件包..."
+    log "INFO" "软件包列表: $packages"
+    log "INFO" "使用 $(nproc) 个线程编译"
+    
+    # 创建错误监控脚本
+    MONITOR_SCRIPT=$(create_error_monitor "/tmp/build.log")
+    
+    # 启动错误监控（后台）
+    $MONITOR_SCRIPT &
+    MONITOR_PID=$!
+    
+    # 编译指定软件包
+    if make -j$(nproc) $packages 2>&1 | tee /tmp/build.log; then
+        log "INFO" "${build_type}软件包编译成功"
+    else
+        wait_and_kill_monitor $MONITOR_PID
+        log "WARN" "${build_type}软件包并行编译失败，尝试单线程编译"
+        
+        # 单线程编译时也监控错误
+        $MONITOR_SCRIPT &
+        MONITOR_PID=$!
+        
+        if make -j1 V=s $packages 2>&1 | tee /tmp/build.log; then
+            log "INFO" "${build_type}软件包单线程编译成功"
+        else
+            wait_and_kill_monitor $MONITOR_PID
+            log "ERROR" "${build_type}软件包编译彻底失败"
+            
+            # 分析最后几行日志，提取关键错误
+            LAST_ERRORS=$(tail -20 /tmp/build.log | grep -E "(failed|Error|ERROR|undefined|multiple)" | tail -3)
+            if [ -n "$LAST_ERRORS" ]; then
+                echo "$LAST_ERRORS" | while read error_line; do
+                    log_build_error "$error_line" "编译失败"
+                done
+            fi
+            exit 1
+        fi
+    fi
+    
+    wait_and_kill_monitor $MONITOR_PID
+    
+    echo ""
+    echo "status=success" >> $GITHUB_OUTPUT
+    echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+    echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+    
+    step_complete "COMPILE_PKGS" "success"
+}
+
 # 导出函数
-export -f download_packages clean_environment compile_firmware
+export -f download_packages clean_environment compile_firmware compile_packages
