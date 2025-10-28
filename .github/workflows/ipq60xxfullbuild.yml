@@ -1,49 +1,48 @@
-name: IPQ60XX-Full-Build
+name: IPQ60XX-Triple-Stage-Build
 
 on:
   workflow_dispatch:
     inputs:
       repo_config:
-        description: '选择要构建的仓库'
-        required: true
-        default: 'immwrt'
+        description: '选择要构建的仓库 (留空则构建所有)'
+        required: false
+        default: 'all'
         type: choice
         options:
-          - immwrt
+          - all
           - openwrt
+          - immwrt
           - libwrt
   workflow_call:
-    inputs:
-      repo_config:
-        required: true
-        type: string
 
 env:
   TZ: Asia/Shanghai
   OPENWRT_PATH: /mnt/openwrt
   CONFIG_BASE_DIR: configs
   DIY_SCRIPT_DIR: scripts
-  CACHE_VERSION: v2
+  CACHE_VERSION: v3
   LOG_LEVEL: INFO
   LOG_FILE: build.log
   REPORT_FILE: build_report.json
 
 jobs:
-  # ==================== 阶段一：构建基础环境 ====================
-  Build-Base:
+  # ==================== 阶段一：并行构建基础环境 ====================
+  Build-Bases:
+    if: github.event.inputs.repo_config == 'all' || github.event.inputs.repo_config == ''
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        repo_config: ['openwrt', 'immwrt', 'libwrt']
+    
     outputs:
-      SOURCE_REPO: ${{ steps.generate_vars.outputs.source_repo }}
-      DEVICE_TARGET: ${{ steps.generate_vars.outputs.device_target }}
-      DEVICE_SUBTARGET: ${{ steps.generate_vars.outputs.device_subtarget }}
-      CHIP_FAMILY: ${{ steps.generate_vars.outputs.chip_family }}
-      REPO_SHORT: ${{ steps.generate_vars.outputs.repo_short }}
-      BUILD_ID_BASE: ${{ steps.generate_vars.outputs.build_id }}
+      repo_short_openwrt: ${{ steps.generate_vars_openwrt.outputs.repo_short }}
+      repo_short_immwrt: ${{ steps.generate_vars_immwrt.outputs.repo_short }}
+      repo_short_libwrt: ${{ steps.generate_vars_libwrt.outputs.repo_short }}
+
     steps:
-    - name: 初始化企业级日志系统
-      id: init_logging
+    - name: 初始化日志系统
       run: |
-        # ... (此脚本内容与原版完全相同，为简洁起见在此省略) ...
         cat > /tmp/logger.sh << 'EOF'
         #!/bin/bash
         declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
@@ -51,194 +50,7 @@ jobs:
         LOG_FILE="$GITHUB_WORKSPACE/$LOG_FILE"
         REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
         echo "=== Build Log Started at $(date) ===" > "$LOG_FILE"
-        echo '{"build_id":"base-'$(date +%s)'","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[],"build_errors":[]}' > "$REPORT_FILE"
-        log() { local level="$1" message="$2" step="${3:-$(caller | awk '{print $2}')}"; local timestamp=$(date '+%Y-%m-%d %H:%M:%S'); if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then case $level in DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;; INFO) echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;; WARN) echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;; ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;; esac; echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"; fi; }
-        log_build_error() { local error_msg="$1" package="$2"; local timestamp=$(date -Iseconds); echo -e "\n\033[1;41;37m🔥 构建错误 🔥\033[0m\n\033[1;31m错误信息: $error_msg\033[0m\n\033[1;31m相关包: $package\033[0m\n\033[1;41;37m================\033[0m\n"; log "ERROR" "构建失败: $error_msg (包: $package)"; echo "::error ::构建失败: $error_msg (包: $package)"; }
-        step_start() { local step_name="$1" description="$2"; local timestamp=$(date -Iseconds); log "INFO" "▶ 开始执行: $description" "$step_name"; }
-        step_complete() { local step_name="$1" status="$2"; local timestamp=$(date -Iseconds); if [ "$status" = "success" ]; then log "INFO" "✅ 步骤完成: $step_name" "$step_name"; elif [ "$status" = "failed" ]; then log "ERROR" "❌ 步骤失败: $step_name" "$step_name"; fi; }
-        show_progress() { local current="$1" total="$2" description="$3"; local percent=$((current * 100 / total)); local filled=$((percent / 2)); local empty=$((50 - filled)); printf "\r\033[0;36m[%3d%%] [" "$percent"; printf "%*s" $filled | tr ' ' '█'; printf "%*s" $empty | tr ' ' '░'; printf "] %s\033[0m" "$description"; }
-        export -f log log_build_error step_start step_complete show_progress
-        EOF
-        chmod +x /tmp/logger.sh
-        echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
-        source /tmp/logger.sh
-        step_start "INIT" "初始化企业级日志系统"
-        log "INFO" "构建ID: base-$(date +%s)"
-        step_complete "INIT" "success"
-
-    - name: 初始化环境
-      id: init_env
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "ENV_INIT" "初始化构建环境"
-        set -euo pipefail
-        trap 'log "ERROR" "命令执行失败: $BASH_COMMAND ($LINENO)"' ERR
-        
-        # 优化：合并 apt-get 命令
-        log "INFO" "更新系统包并安装依赖..."
-        sudo -E apt-get -y update
-        # 建议：将依赖列表放入仓库的 scripts/depends.txt 文件中，更安全可控
-        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
-        
-        # 优化：更安全的 GitHub CLI 安装方式
-        log "INFO" "安装GitHub CLI..."
-        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-        && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-        && sudo apt update && sudo apt install gh -y
-
-        log "INFO" "配置时区..."
-        sudo timedatectl set-timezone "$TZ" || log "WARN" "时区设置失败"
-        log "INFO" "CPU核心数: $(nproc), 内存: $(free -h | grep '^Mem:' | awk '{print $2}')"
-        step_complete "ENV_INIT" "success"
-
-    - name: 检出代码
-      uses: actions/checkout@main
-
-    - name: 读取仓库配置
-      id: read_repo_config
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "READ_CONFIG" "读取仓库配置"
-        REPO_CONFIG="${{ github.event.inputs.repo_config || inputs.repo_config }}"
-        REPO_CONFIG_FILE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/repos.json"
-        if [ ! -f "$REPO_CONFIG_FILE" ]; then log "ERROR" "仓库配置文件不存在: $REPO_CONFIG_FILE"; exit 1; fi
-        REPO_INFO=$(jq -r --arg repo "$REPO_CONFIG" '.[$repo]' "$REPO_CONFIG_FILE")
-        if [ "$REPO_INFO" = "null" ]; then log "ERROR" "未找到仓库配置: $REPO_CONFIG"; exit 1; fi
-        echo "REPO_URL=$(echo "$REPO_INFO" | jq -r '.url')" >> $GITHUB_ENV
-        echo "REPO_BRANCH=$(echo "$REPO_INFO" | jq -r '.branch')" >> $GITHUB_ENV
-        echo "REPO_SHORT=$(echo "$REPO_INFO" | jq -r '.short')" >> $GITHUB_ENV
-        log "INFO" "选定仓库: $REPO_CONFIG ($REPO_URL)"
-        step_complete "READ_CONFIG" "success"
-
-    - name: 克隆源代码
-      id: clone_source
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "CLONE_SOURCE" "克隆源代码"
-        sudo mkdir -p "$OPENWRT_PATH" && sudo chown -R $(id -u):$(id -g) "$OPENWRT_PATH"
-        if ! git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" "$OPENWRT_PATH"; then log "ERROR" "源代码克隆失败"; exit 1; fi
-        log "INFO" "源码克隆成功"
-        step_complete "CLONE_SOURCE" "success"
-
-    - name: 生成变量
-      id: generate_vars
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "GEN_VARS" "生成构建变量"
-        # ... (此脚本内容与原版基本相同，但增加了输出到 GITHUB_OUTPUT) ...
-        find_config_file() { local base_name="$1"; local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"; for ext in ".config" ".config.txt"; do if [ -f "${config_dir}/${base_name}${ext}" ]; then echo "${config_dir}/${base_name}${ext}"; return 0; fi; done; local found_file=$(find "$config_dir" -iname "${base_name}.config*" -type f | head -n 1); if [ -n "$found_file" ]; then echo "$found_file"; return 0; fi; return 1; }
-        CONFIG_BASE=$(find_config_file "base_ipq60xx") # 假设芯片系列固定为ipq60xx
-        if [ $? -ne 0 ]; then log "ERROR" "基础配置文件不存在: base_ipq60xx"; exit 1; fi
-        CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
-        if [ $? -ne 0 ]; then log "ERROR" "分支配置文件不存在: base_${REPO_SHORT}"; exit 1; fi
-        log "INFO" "基础配置: $CONFIG_BASE"
-        log "INFO" "分支配置: $CONFIG_BRANCH"
-        
-        cp "$CONFIG_BASE" "$OPENWRT_PATH/.config"
-        cd "$OPENWRT_PATH"
-        if ! make defconfig > /dev/null 2>&1; then log "ERROR" "运行defconfig失败"; exit 1; fi
-        
-        SOURCE_REPO="$(echo "$REPO_URL" | awk -F '/' '{print $(NF)}')"
-        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-        CHIP_FAMILY="ipq60xx" # 从配置中提取或硬编码
-        
-        # 输出给 Job 2 使用
-        echo "source_repo=${SOURCE_REPO}" >> $GITHUB_OUTPUT
-        echo "device_target=${DEVICE_TARGET}" >> $GITHUB_OUTPUT
-        echo "device_subtarget=${DEVICE_SUBTARGET}" >> $GITHUB_OUTPUT
-        echo "chip_family=${CHIP_FAMILY}" >> $GITHUB_OUTPUT
-        echo "repo_short=${REPO_SHORT}" >> $GITHUB_OUTPUT
-        echo "build_id=base-$(date +%s)" >> $GITHUB_OUTPUT
-        
-        log "INFO" "设备信息: $DEVICE_TARGET/$DEVICE_SUBTARGET"
-        step_complete "GEN_VARS" "success"
-
-    - name: 缓存工具链
-      uses: actions/cache@main
-      with:
-        key: ${{ env.CACHE_VERSION }}-toolchain-${{ steps.generate_vars.outputs.source_repo }}-${{ env.REPO_BRANCH }}-${{ steps.generate_vars.outputs.device_target }}-${{ steps.generate_vars.outputs.device_subtarget }}
-        path: |
-          ${{ env.OPENWRT_PATH }}/.ccache
-          ${{ env.OPENWRT_PATH }}/staging_dir
-
-    - name: 缓存Feeds和DL
-      uses: actions/cache@main
-      with:
-        key: ${{ env.CACHE_VERSION }}-feeds-dl-${{ steps.generate_vars.outputs.source_repo }}-${{ env.REPO_BRANCH }}
-        path: |
-          ${{ env.OPENWRT_PATH }}/feeds
-          ${{ env.OPENWRT_PATH }}/dl
-          ${{ env.OPENWRT_PATH }}/package/feeds
-
-    - name: 安装Feeds和加载自定义配置
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "PREP_BUILD" "准备构建环境"
-        cd "$OPENWRT_PATH"
-        if [ "${{ steps.cache.outputs.cache-hit }}" != "true" ]; then ./scripts/feeds update -a; fi
-        ./scripts/feeds install -a
-        if [ -f "${{ env.DIY_SCRIPT_DIR }}/diy.sh" ]; then chmod +x "${{ env.DIY_SCRIPT_DIR }}/diy.sh" && "${{ env.DIY_SCRIPT_DIR }}/diy.sh"; fi
-        if [ -f "${{ env.DIY_SCRIPT_DIR }}/repo.sh" ]; then chmod +x "${{ env.DIY_SCRIPT_DIR }}/repo.sh" && "${{ env.DIY_SCRIPT_DIR }}/repo.sh"; fi
-        step_complete "PREP_BUILD" "success"
-
-    - name: 编译基础环境
-      id: compile_base
-      run: |
-        source "$LOGGER_SCRIPT"
-        step_start "COMPILE_BASE" "编译基础环境"
-        cd "$OPENWRT_PATH"
-        log "INFO" "开始编译工具链和系统包..."
-        if make -j$(nproc) toolchain/kernel-headers compile; then
-          log "INFO" "基础环境编译成功"
-          echo "status=success" >> $GITHUB_OUTPUT
-        else
-          log "ERROR" "基础环境编译失败"
-          echo "status=failed" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        step_complete "COMPILE_BASE" "success"
-
-    - name: 上传基础环境到Artifact
-      if: steps.compile_base.outputs.status == 'success'
-      uses: actions/upload-artifact@v4
-      with:
-        name: base-env-${{ steps.generate_vars.outputs.source_repo }}-${{ steps.generate_vars.outputs.repo_short }}
-        path: ${{ env.OPENWRT_PATH }}
-        retention-days: 7
-
-  # ==================== 阶段二：并行编译变体固件 ====================
-  Build-Variants:
-    needs: Build-Base
-    if: needs.Build-Base.result == 'success'
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        variant_config: [Pro, Max, Ultra]
-    
-    env:
-      # 从 Job 1 的 outputs 中获取变量
-      SOURCE_REPO: ${{ needs.Build-Base.outputs.SOURCE_REPO }}
-      DEVICE_TARGET: ${{ needs.Build-Base.outputs.DEVICE_TARGET }}
-      DEVICE_SUBTARGET: ${{ needs.Build-Base.outputs.DEVICE_SUBTARGET }}
-      CHIP_FAMILY: ${{ needs.Build-Base.outputs.CHIP_FAMILY }}
-      REPO_SHORT: ${{ needs.Build-Base.outputs.REPO_SHORT }}
-      BUILD_ID: ${{ needs.Build-Base.outputs.BUILD_ID_BASE }}-${{ matrix.variant_config }}
-      OPENWRT_PATH: /mnt/openwrt
-
-    steps:
-    - name: 初始化日志系统
-      run: |
-        # ... (复用日志脚本) ...
-        cat > /tmp/logger.sh << 'EOF'
-        #!/bin/bash
-        declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
-        CURRENT_LEVEL=${LOG_LEVELS[$LOG_LEVEL]}
-        LOG_FILE="$GITHUB_WORKSPACE/$LOG_FILE"
-        REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
-        echo "=== Variant Build Log Started at $(date) ===" > "$LOG_FILE"
-        echo '{"build_id":"'$BUILD_ID'","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[],"build_errors":[]}' > "$REPORT_FILE"
+        echo '{"build_id":"base-'${{ matrix.repo_config }}'-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
         log() { local level="$1" message="$2" step="${3:-$(caller | awk '{print $2}')}"; local timestamp=$(date '+%Y-%m-%d %H:%M:%S'); if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then case $level in DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;; INFO) echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;; WARN) echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;; ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;; esac; echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"; fi; }
         step_start() { local step_name="$1" description="$2"; log "INFO" "▶ 开始执行: $description" "$step_name"; }
         step_complete() { local step_name="$1" status="$2"; if [ "$status" = "success" ]; then log "INFO" "✅ 步骤完成: $step_name" "$step_name"; elif [ "$status" = "failed" ]; then log "ERROR" "❌ 步骤失败: $step_name" "$step_name"; fi; }
@@ -247,63 +59,241 @@ jobs:
         chmod +x /tmp/logger.sh
         echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
         source /tmp/logger.sh
-        step_start "INIT" "初始化变体构建日志"
-        log "INFO" "构建ID: $BUILD_ID"
-        step_complete "INIT" "success"
+        step_start "INIT" "初始化基础环境构建日志"
 
-    - name: 下载基础环境
-      id: download_base
-      uses: actions/download-artifact@v4
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 读取仓库配置
+      id: read_repo_config
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "READ_CONFIG" "读取仓库配置 (${{ matrix.repo_config }})"
+        REPO_CONFIG_FILE="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}/repos.json"
+        REPO_INFO=$(jq -r --arg repo "${{ matrix.repo_config }}" '.[$repo]' "$REPO_CONFIG_FILE")
+        if [ "$REPO_INFO" = "null" ]; then log "ERROR" "未找到仓库配置: ${{ matrix.repo_config }}"; exit 1; fi
+        echo "REPO_URL=$(echo "$REPO_INFO" | jq -r '.url')" >> $GITHUB_ENV
+        echo "REPO_BRANCH=$(echo "$REPO_INFO" | jq -r '.branch')" >> $GITHUB_ENV
+        echo "REPO_SHORT=$(echo "$REPO_INFO" | jq -r '.short')" >> $GITHUB_ENV
+        log "INFO" "仓库: ${{ matrix.repo_config }} ($REPO_URL)"
+        step_complete "READ_CONFIG" "success"
+
+    - name: 克隆源代码
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "CLONE" "克隆源代码"
+        sudo mkdir -p "$OPENWRT_PATH" && sudo chown -R $(id -u):$(id -g) "$OPENWRT_PATH"
+        git clone --depth 1 -b "$REPO_BRANCH" --single-branch "$REPO_URL" "$OPENWRT_PATH"
+        step_complete "CLONE" "success"
+
+    - name: 生成变量
+      id: generate_vars_${{ matrix.repo_config }}
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "GEN_VARS" "生成构建变量"
+        find_config_file() { local base_name="$1"; local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"; for ext in ".config" ".config.txt"; do if [ -f "${config_dir}/${base_name}${ext}" ]; then echo "${config_dir}/${base_name}${ext}"; return 0; fi; done; return 1; }
+        CONFIG_BASE=$(find_config_file "base_ipq60xx")
+        CONFIG_BRANCH=$(find_config_file "base_${REPO_SHORT}")
+        cp "$CONFIG_BASE" "$OPENWRT_PATH/.config"
+        cd "$OPENWRT_PATH" && make defconfig > /dev/null 2>&1
+        echo "repo_short=${REPO_SHORT}" >> $GITHUB_OUTPUT
+        log "INFO" "设备信息: $(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')"
+        step_complete "GEN_VARS" "success"
+
+    - name: 缓存工具链和Feeds
+      uses: actions/cache@v4
       with:
-        name: base-env-${{ env.SOURCE_REPO }}-${{ env.REPO_SHORT }}
-        path: ${{ env.OPENWRT_PATH }}
+        key: ${{ env.CACHE_VERSION }}-base-${{ steps.generate_vars_${{ matrix.repo_config }}.outputs.repo_short }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default') }}
+        path: |
+          ${{ env.OPENWRT_PATH }}/staging_dir
+          ${{ env.OPENWRT_PATH }}/dl
+          ${{ env.OPENWRT_PATH }}/feeds
+          ${{ env.OPENWRT_PATH }}/build_dir
 
-    - name: 准备变体配置
-      id: prepare_variant_config
+    - name: 准备构建环境
       run: |
         source "$LOGGER_SCRIPT"
-        step_start "PREP_VARIANT_CONFIG" "准备变体配置"
+        step_start "PREP_ENV" "准备构建环境"
         cd "$OPENWRT_PATH"
-        
-        # 查找并合并变体配置
-        VARIANT_CONFIG_FILE="${{ env.CONFIG_BASE_DIR }}/${{ matrix.variant_config }}.config"
-        if [ ! -f "$VARIANT_CONFIG_FILE" ]; then
-          log "ERROR" "变体配置文件不存在: $VARIANT_CONFIG_FILE"
-          exit 1
-        fi
-        
-        log "INFO" "合并基础配置与变体配置: $VARIANT_CONFIG_FILE"
-        cat .config "$VARIANT_CONFIG_FILE" > .config.tmp && mv .config.tmp .config
-        
-        log "INFO" "运行 defconfig..."
-        make defconfig
-        
-        log "INFO" "变体配置准备完成"
-        step_complete "PREP_VARIANT_CONFIG" "success"
+        if [ ! -d "feeds" ]; then ./scripts/feeds update -a; fi
+        ./scripts/feeds install -a
+        if [ -f "${{ env.DIY_SCRIPT_DIR }}/diy.sh" ]; then chmod +x "${{ env.DIY_SCRIPT_DIR }}/diy.sh" && "${{ env.DIY_SCRIPT_DIR }}/diy.sh"; fi
+        step_complete "PREP_ENV" "success"
 
-    - name: 编译变体固件
-      id: compile_variant
+    - name: 编译基础环境
       run: |
         source "$LOGGER_SCRIPT"
-        step_start "COMPILE_VARIANT" "编译变体固件 (${{ matrix.variant_config }})"
+        step_start "COMPILE_BASE" "编译基础环境"
         cd "$OPENWRT_PATH"
-        
-        log "INFO" "开始编译固件，这将只编译差异部分和生成镜像..."
-        if make -j$(nproc); then
-          log "INFO" "变体 ${{ matrix.variant_config }} 编译成功"
-          echo "status=success" >> $GITHUB_OUTPUT
-        else
-          log "ERROR" "变体 ${{ matrix.variant_config }} 编译失败"
-          echo "status=failed" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        step_complete "COMPILE_VARIANT" "success"
+        make -j$(nproc) toolchain/kernel-headers compile
+        step_complete "COMPILE_BASE" "success"
 
-    - name: 上传固件Artifact
-      if: steps.compile_variant.outputs.status == 'success'
+    - name: 上传基础环境
       uses: actions/upload-artifact@v4
       with:
-        name: firmware-${{ env.SOURCE_REPO }}-${{ matrix.variant_config }}-${{ env.FILE_DATE }}
+        name: base-env-${{ steps.generate_vars_${{ matrix.repo_config }}.outputs.repo_short }}
+        path: ${{ env.OPENWRT_PATH }}
+        retention-days: 7
+
+  # ==================== 阶段二：集中预编译通用软件包 ====================
+  Prebuild-Packages:
+    needs: Build-Bases
+    runs-on: ubuntu-22.04
+    steps:
+    - name: 初始化日志系统
+      run: |
+        cat > /tmp/logger.sh << 'EOF'
+        #!/bin/bash
+        declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
+        CURRENT_LEVEL=${LOG_LEVELS[$LOG_LEVEL]}
+        LOG_FILE="$GITHUB_WORKSPACE/$LOG_FILE"
+        REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
+        echo "=== Prebuild Log Started at $(date) ===" > "$LOG_FILE"
+        echo '{"build_id":"prebuild-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
+        log() { local level="$1" message="$2" step="${3:-$(caller | awk '{print $2}')}"; local timestamp=$(date '+%Y-%m-%d %H:%M:%S'); if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then case $level in DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;; INFO) echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;; WARN) echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;; ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;; esac; echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"; fi; }
+        step_start() { local step_name="$1" description="$2"; log "INFO" "▶ 开始执行: $description" "$step_name"; }
+        step_complete() { local step_name="$1" status="$2"; if [ "$status" = "success" ]; then log "INFO" "✅ 步骤完成: $step_name" "$step_name"; elif [ "$status" = "failed" ]; then log "ERROR" "❌ 步骤失败: $step_name" "$step_name"; fi; }
+        export -f log step_start step_complete
+        EOF
+        chmod +x /tmp/logger.sh
+        echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
+        source /tmp/logger.sh
+        step_start "INIT" "初始化预编译构建日志"
+
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 下载基础环境
+      uses: actions/download-artifact@v4
+      with:
+        name: base-env-${{ needs.Build-Bases.outputs.repo_short_openwrt }}
+        path: ${{ env.OPENWRT_PATH }}
+
+    - name: 生成“超级配置”
+      id: generate_super_config
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "GEN_SUPER_CONFIG" "生成包含所有变体软件包的超级配置"
+        cd "$OPENWRT_PATH"
+        echo "CONFIG_TARGET_ipq60xx=y" > .config
+        echo "CONFIG_TARGET_ipq60xx_DEVICE_generic=y" >> .config
+        echo "CONFIG_TARGET_DEVICE_ipq60xx_generic=y" >> .config
+        
+        for variant in Pro Max Ultra; do
+          log "INFO" "合并 $variant 配置"
+          if [ -f "${{ env.CONFIG_BASE_DIR }}/${variant}.config" ]; then
+            cat "${{ env.CONFIG_BASE_DIR }}/${variant}.config" >> .config
+          else
+            log "WARN" "配置文件不存在: ${{ env.CONFIG_BASE_DIR }}/${variant}.config"
+          fi
+        done
+        
+        log "INFO" "运行 defconfig 解析依赖..."
+        make defconfig
+        log "INFO" "超级配置生成完成"
+        step_complete "GEN_SUPER_CONFIG" "success"
+
+    - name: 缓存预编译软件包
+      uses: actions/cache@v4
+      with:
+        key: ${{ env.CACHE_VERSION }}-prebuilt-packages-ipq60xx-${{ hashFiles('configs/Pro.config', 'configs/Max.config', 'configs/Ultra.config') }}
+        path: |
+          ${{ env.OPENWRT_PATH }}/staging_dir
+          ${{ env.OPENWRT_PATH }}/build_dir
+          ${{ env.OPENWRT_PATH }}/dl
+
+    - name: 预编译所有第三方软件包
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "PREBUILD_PKGS" "预编译所有第三方软件包"
+        cd "$OPENWRT_PATH"
+        
+        # 提取所有 luci-开头的包
+        PACKAGES=$(grep "^CONFIG_PACKAGE_luci-.*=y" .config | sed 's/CONFIG_PACKAGE_//' | sed 's/=y//' | tr '\n' ' ')
+        if [ -z "$PACKAGES" ]; then
+          log "WARN" "未找到需要预编译的 Luci 软件包，跳过编译。"
+        else
+          log "INFO" "即将预编译的软件包: $PACKAGES"
+          make -j$(nproc) $PACKAGES/compile
+        fi
+        
+        step_complete "PREBUILD_PKGS" "success"
+
+    - name: 上传预编译软件包
+      uses: actions/upload-artifact@v4
+      with:
+        name: prebuilt-packages-ipq60xx
+        path: ${{ env.OPENWRT_PATH }}/staging_dir
+        retention-days: 7
+
+  # ==================== 阶段三：并行组装变体固件 ====================
+  Assemble-Variants:
+    needs: [Build-Bases, Prebuild-Packages]
+    if: success() && needs.Prebuild-Packages.result == 'success'
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: ['openwrt', 'immwrt', 'libwrt']
+        variant: ['Pro', 'Max', 'Ultra']
+    
+    steps:
+    - name: 初始化日志系统
+      run: |
+        cat > /tmp/logger.sh << 'EOF'
+        #!/bin/bash
+        declare -A LOG_LEVELS=([DEBUG]=0 [INFO]=1 [WARN]=2 [ERROR]=3)
+        CURRENT_LEVEL=${LOG_LEVELS[$LOG_LEVEL]}
+        LOG_FILE="$GITHUB_WORKSPACE/$LOG_FILE"
+        REPORT_FILE="$GITHUB_WORKSPACE/$REPORT_FILE"
+        echo "=== Variant Log Started at $(date) ===" > "$LOG_FILE"
+        echo '{"build_id":"variant-${{ matrix.repo }}-${{ matrix.variant }}-$(date +%s)","start_time":"'$(date -Iseconds)'","steps":[],"errors":[],"warnings":[]}' > "$REPORT_FILE"
+        log() { local level="$1" message="$2" step="${3:-$(caller | awk '{print $2}')}"; local timestamp=$(date '+%Y-%m-%d %H:%M:%S'); if [ ${LOG_LEVELS[$level]} -ge $CURRENT_LEVEL ]; then case $level in DEBUG) echo -e "\033[0;37m[$timestamp] [DEBUG] $message\033[0m" ;; INFO) echo -e "\033[0;34m[$timestamp] [INFO] $message\033[0m" ;; WARN) echo -e "\033[0;33m[$timestamp] [WARN] $message\033[0m" ;; ERROR) echo -e "\033[1;41;37m[$timestamp] [ERROR] $message\033[0m" ;; esac; echo "[$timestamp] [$level] [Step: $step] $message" >> "$LOG_FILE"; fi; }
+        step_start() { local step_name="$1" description="$2"; log "INFO" "▶ 开始执行: $description" "$step_name"; }
+        step_complete() { local step_name="$1" status="$2"; if [ "$status" = "success" ]; then log "INFO" "✅ 步骤完成: $step_name" "$step_name"; elif [ "$status" = "failed" ]; then log "ERROR" "❌ 步骤失败: $step_name" "$step_name"; fi; }
+        export -f log step_start step_complete
+        EOF
+        chmod +x /tmp/logger.sh
+        echo "LOGGER_SCRIPT=/tmp/logger.sh" >> $GITHUB_ENV
+        source /tmp/logger.sh
+        step_start "INIT" "初始化变体组装日志 (${{ matrix.repo }}-${{ matrix.variant }})"
+
+    - name: 下载基础环境
+      uses: actions/download-artifact@v4
+      with:
+        name: base-env-${{ matrix.repo }}
+        path: ${{ env.OPENWRT_PATH }}
+
+    - name: 下载预编译软件包
+      uses: actions/download-artifact@v4
+      with:
+        name: prebuilt-packages-ipq60xx
+        path: ${{ env.OPENWRT_PATH }}/staging_dir # 覆盖staging_dir
+
+    - name: 准备变体配置
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "PREP_VARIANT" "准备变体配置 (${{ matrix.variant }})"
+        cd "$OPENWRT_PATH"
+        find_config_file() { local base_name="$1"; local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"; for ext in ".config" ".config.txt"; do if [ -f "${config_dir}/${base_name}${ext}" ]; then echo "${config_dir}/${base_name}${ext}"; return 0; fi; done; return 1; }
+        CONFIG_BASE=$(find_config_file "base_ipq60xx")
+        CONFIG_VARIANT=$(find_config_file "${{ matrix.variant }}")
+        cat "$CONFIG_BASE" "$CONFIG_VARIANT" > .config.tmp && mv .config.tmp .config
+        make defconfig
+        step_complete "PREP_VARIANT" "success"
+
+    - name: 组装固件
+      run: |
+        source "$LOGGER_SCRIPT"
+        step_start "ASSEMBLE_FIRMWARE" "组装最终固件"
+        cd "$OPENWRT_PATH"
+        make -j$(nproc) # 此步骤会非常快
+        step_complete "ASSEMBLE_FIRMWARE" "success"
+
+    - name: 上传固件产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware-${{ matrix.repo }}-${{ matrix.variant }}-${{ env.FILE_DATE }}
         path: ${{ env.OPENWRT_PATH }}/bin/targets/
         retention-days: 30
 
@@ -311,7 +301,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: logs-${{ env.SOURCE_REPO }}-${{ matrix.variant_config }}-${{ env.FILE_DATE }}
+        name: logs-${{ matrix.repo }}-${{ matrix.variant }}-${{ env.FILE_DATE }}
         path: |
           ${{ github.workspace }}/$LOG_FILE
           ${{ github.workspace }}/$REPORT_FILE
