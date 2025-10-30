@@ -2,11 +2,13 @@
 # Luci软件包报告脚本
 # 功能：生成和显示Luci软件包报告
 
-set -euo pipefail
+# 注意：不使用 set -euo pipefail，以处理管道中的错误
+set -eo pipefail
 
 # 导入公共函数
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/common.sh"
+# 不导入 common.sh 中的 set -euo pipefail
+# source "${SCRIPT_DIR}/common.sh"
 
 # 使用说明
 usage() {
@@ -43,7 +45,10 @@ log_error() {
 ensure_output_dir() {
     local output_dir=$(dirname "$OUTPUT_FILE")
     if [[ ! -d "$output_dir" ]]; then
-        mkdir -p "$output_dir" || error_exit "无法创建输出目录: $output_dir"
+        mkdir -p "$output_dir" || {
+            log_error "无法创建输出目录: $output_dir"
+            return 1
+        }
     fi
 }
 
@@ -209,22 +214,25 @@ generate_comparison_report() {
     fi
     
     # 使用Python生成对比报告
-    python3 -c "
+    python3 << 'PYEOF'
 import os
 import sys
 
-before_file = '$before_file'
-after_file = '$after_file'
-output_file = '$output_file'
+before_file = os.environ.get('BEFORE_FILE')
+after_file = os.environ.get('AFTER_FILE')
+output_file = os.environ.get('OUTPUT_FILE')
 
 def extract_packages(filename):
     packages = []
     if os.path.exists(filename):
-        with open(filename, 'r') as f:
-            content = f.read()
-            for line in content.split('\n'):
-                if line.strip().startswith('  - '):
-                    packages.append(line.strip()[4:])
+        try:
+            with open(filename, 'r') as f:
+                content = f.read()
+                for line in content.split('\n'):
+                    if line.strip().startswith('  - '):
+                        packages.append(line.strip()[4:])
+        except Exception as e:
+            print(f"读取文件 {filename} 时出错: {e}")
     return sorted(packages)
 
 try:
@@ -278,7 +286,7 @@ except Exception as e:
     # 生成一个简单的错误报告
     with open(output_file, 'w') as f:
         f.write('# Luci软件包变化报告\n\n生成报告时出错\n')
-"
+PYEOF
 }
 
 # 主函数
@@ -291,7 +299,10 @@ main() {
     fi
     
     # 确保输出目录存在
-    ensure_output_dir
+    ensure_output_dir || {
+        log_error "无法创建输出目录，退出"
+        exit 1
+    }
     
     # 创建临时文件
     local temp_file=$(mktemp)
@@ -305,6 +316,11 @@ main() {
         local before_temp=$(mktemp)
         trap "rm -f $before_temp" EXIT
         extract_luci_packages "$BEFORE_CONFIG" "$before_temp"
+        
+        # 设置环境变量供Python使用
+        export BEFORE_FILE="$before_temp"
+        export AFTER_FILE="$temp_file"
+        export OUTPUT_FILE="$OUTPUT_FILE"
         
         # 生成对比报告
         generate_comparison_report "$before_temp" "$temp_file" "$OUTPUT_FILE"
