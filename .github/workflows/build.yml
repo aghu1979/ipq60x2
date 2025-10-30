@@ -21,11 +21,10 @@ env:
   SCRIPTS_DIR: scripts
   OUTPUT_DIR: output
   RELEASE_NAME: IPQ60xx-Firmware
-  # 芯片和平台配置（避免硬编码）
-  CHIP_FAMILY: qualcommax
+  # 芯片配置（避免硬编码）
   CHIP_SUBTARGET: ipq60xx
   # 缓存配置
-  CACHE_VERSION: v2
+  CACHE_VERSION: v3
 
 jobs:
   # 准备阶段：获取配置和设备信息
@@ -38,6 +37,7 @@ jobs:
       repos_info: ${{ steps.get_repos.outputs.repos }}
       config_hash: ${{ steps.calc_hash.outputs.hash }}
       cache_key_base: ${{ steps.calc_hash.outputs.cache_key_base }}
+      cache_key_chip: ${{ steps.calc_hash.outputs.cache_key_chip }}
     steps:
       - name: 检出主仓库
         uses: actions/checkout@v4
@@ -71,10 +71,15 @@ jobs:
         id: calc_hash
         run: |
           # 计算所有配置文件的组合哈希
-          HASH=$(find ${{ env.CONFIGS_DIR }} -type f -name "*.config" -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
-          echo "hash=$HASH" >> $GITHUB_OUTPUT
-          echo "cache_key_base=${{ env.CACHE_VERSION }}-${{ runner.os }}-${HASH}" >> $GITHUB_OUTPUT
-          echo "配置文件哈希: $HASH"
+          CONFIG_HASH=$(find ${{ env.CONFIGS_DIR }} -type f -name "*.config" -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
+          # 计算芯片基础配置哈希（用于跨分支缓存）
+          CHIP_HASH=$(sha256sum ${{ env.CONFIGS_DIR }}/base_${{ env.CHIP_SUBTARGET }}.config | cut -d' ' -f1)
+          
+          echo "hash=$CONFIG_HASH" >> $GITHUB_OUTPUT
+          echo "cache_key_base=${{ env.CACHE_VERSION }}-${{ runner.os }}-${CONFIG_HASH}" >> $GITHUB_OUTPUT
+          echo "cache_key_chip=${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ env.CHIP_SUBTARGET }}-${CHIP_HASH}" >> $GITHUB_OUTPUT
+          echo "配置文件哈希: $CONFIG_HASH"
+          echo "芯片配置哈希: $CHIP_HASH"
 
       - name: 提取设备名称
         id: extract_devices
@@ -85,7 +90,6 @@ jobs:
           
           # 从环境变量获取配置
           config_dir = os.environ.get('CONFIGS_DIR')
-          chip_family = os.environ.get('CHIP_FAMILY')
           chip_subtarget = os.environ.get('CHIP_SUBTARGET')
           
           # 构建配置文件路径
@@ -96,7 +100,7 @@ jobs:
               content = f.read()
           
           # 使用变量构建正则表达式
-          pattern = rf'CONFIG_TARGET_DEVICE_{chip_family}_{chip_subtarget}_DEVICE_(.+?)=y'
+          pattern = rf'CONFIG_TARGET_DEVICE_qualcommax_{chip_subtarget}_DEVICE_(.+?)=y'
           devices = re.findall(pattern, content)
           
           # 输出JSON格式
@@ -138,11 +142,18 @@ jobs:
             openwrt/staging_dir
             openwrt/build_dir
             openwrt/tmp
+          # 优先级1：精确匹配（配置哈希+分支+变体）
           key: ${{ needs.prepare.outputs.cache_key_base }}-ultra-${{ matrix.branch }}
           restore-keys: |
-            ${{ needs.prepare.outputs.cache_key_base }}-ultra-
-            ${{ needs.prepare.outputs.cache_key_base }}-
-            ${{ env.CACHE_VERSION }}-${{ runner.os }}-ultra-${{ matrix.branch }}-
+            # 优先级2：同分支不同变体
+            ${{ needs.prepare.outputs.cache_key_base }}-${{ matrix.branch }}-
+            # 优先级3：同芯片不同分支（Luci包通用性高）
+            ${{ needs.prepare.outputs.cache_key_chip }}-ultra-
+            # 优先级4：同芯片不同分支不同变体
+            ${{ needs.prepare.outputs.cache_key_chip }}-
+            # 优先级5：同芯片通用缓存
+            ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ env.CHIP_SUBTARGET }}-
+            # 优先级6：系统级缓存
             ${{ env.CACHE_VERSION }}-${{ runner.os }}-
 
       - name: 初始化编译环境
@@ -154,7 +165,6 @@ jobs:
           export CONFIG_BRANCH=${{ matrix.branch }}
           export CONFIG_VARIANT=Ultra
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
-          export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           
           # 创建输出目录
@@ -190,7 +200,6 @@ jobs:
           export CONFIG_BRANCH=${{ matrix.branch }}
           export CONFIG_VARIANT=Ultra
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
-          export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           
           # 确保输出目录存在
@@ -225,10 +234,9 @@ jobs:
           
           # 复制编译产物
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
-          export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           mkdir -p $OUTPUT_DIR
-          cp bin/targets/${CHIP_FAMILY}/${CHIP_SUBTARGET}/* $OUTPUT_DIR/ 2>/dev/null || true
+          cp bin/targets/qualcommax/${CHIP_SUBTARGET}/* $OUTPUT_DIR/ 2>/dev/null || true
           cp bin/packages/* $OUTPUT_DIR/packages/ 2>/dev/null || true
 
       - name: 上传编译产物
@@ -268,12 +276,20 @@ jobs:
             openwrt/staging_dir
             openwrt/build_dir
             openwrt/tmp
+          # 优先级1：精确匹配（配置哈希+分支+变体）
           key: ${{ needs.prepare.outputs.cache_key_base }}-${{ matrix.variant }}-${{ matrix.branch }}
           restore-keys: |
+            # 优先级2：同分支的Ultra缓存（优先使用已编译的Ultra）
             ${{ needs.prepare.outputs.cache_key_base }}-ultra-${{ matrix.branch }}
-            ${{ needs.prepare.outputs.cache_key_base }}-${{ matrix.variant }}-
-            ${{ needs.prepare.outputs.cache_key_base }}-
-            ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ matrix.variant }}-${{ matrix.branch }}-
+            # 优先级3：同分支不同变体
+            ${{ needs.prepare.outputs.cache_key_base }}-${{ matrix.branch }}-
+            # 优先级4：同芯片不同分支的Ultra缓存
+            ${{ needs.prepare.outputs.cache_key_chip }}-ultra-
+            # 优先级5：同芯片不同分支不同变体
+            ${{ needs.prepare.outputs.cache_key_chip }}-
+            # 优先级6：同芯片通用缓存
+            ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ env.CHIP_SUBTARGET }}-
+            # 优先级7：系统级缓存
             ${{ env.CACHE_VERSION }}-${{ runner.os }}-
 
       - name: 编译${{ matrix.variant }}变体
@@ -285,7 +301,6 @@ jobs:
           export CONFIG_BRANCH=${{ matrix.branch }}
           export CONFIG_VARIANT=${{ matrix.variant }}
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-${{ matrix.variant }}
-          export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           
           # 创建输出目录
@@ -336,7 +351,7 @@ jobs:
           
           # 复制编译产物
           mkdir -p $OUTPUT_DIR
-          cp bin/targets/${CHIP_FAMILY}/${CHIP_SUBTARGET}/* $OUTPUT_DIR/ 2>/dev/null || true
+          cp bin/targets/qualcommax/${CHIP_SUBTARGET}/* $OUTPUT_DIR/ 2>/dev/null || true
           cp bin/packages/* $OUTPUT_DIR/packages/ 2>/dev/null || true
 
       - name: 上传编译产物
