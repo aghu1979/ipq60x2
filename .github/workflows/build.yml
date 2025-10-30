@@ -63,7 +63,6 @@ jobs:
       - name: 获取仓库信息
         id: get_repos
         run: |
-          # 读取repos.json并输出
           echo "repos<<EOF" >> $GITHUB_OUTPUT
           cat ${{ env.CONFIGS_DIR }}/repos.json >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -71,15 +70,10 @@ jobs:
       - name: 计算配置文件哈希值
         id: calc_hash
         run: |
-          # 计算所有配置文件的组合哈希
           CONFIG_HASH=$(find ${{ env.CONFIGS_DIR }} -type f -name "*.config" -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
-          # 计算芯片基础配置哈希（用于跨分支缓存）
           CHIP_HASH=$(sha256sum ${{ env.CONFIGS_DIR }}/base_${{ env.CHIP_SUBTARGET }}.config | cut -d' ' -f1)
-          
-          # 缩短哈希值，只取前8位
           CONFIG_HASH_SHORT=${CONFIG_HASH:0:8}
           CHIP_HASH_SHORT=${CHIP_HASH:0:8}
-          
           echo "hash=$CONFIG_HASH" >> $GITHUB_OUTPUT
           echo "cache_key_base=${{ env.CACHE_VERSION }}-${{ runner.os }}-${CONFIG_HASH_SHORT}" >> $GITHUB_OUTPUT
           echo "cache_key_chip=${{ env.CACHE_VERSION }}-${{ env.CHIP_FAMILY }}-${{ env.CHIP_SUBTARGET }}-${CHIP_HASH_SHORT}" >> $GITHUB_OUTPUT
@@ -92,24 +86,14 @@ jobs:
           python3 << 'EOF'
           import re
           import os
-          
-          # 从环境变量获取配置
           config_dir = os.environ.get('CONFIGS_DIR')
           chip_family = os.environ.get('CHIP_FAMILY')
           chip_subtarget = os.environ.get('CHIP_SUBTARGET')
-          
-          # 构建配置文件路径
           base_config = f"{config_dir}/base_{chip_subtarget}.config"
-          
-          # 读取芯片基础配置
           with open(base_config, 'r') as f:
               content = f.read()
-          
-          # 使用变量构建正则表达式
           pattern = rf'CONFIG_TARGET_DEVICE_{chip_family}_{chip_subtarget}_DEVICE_(.+?)=y'
           devices = re.findall(pattern, content)
-          
-          # 输出JSON格式
           import json
           print(f"devices={json.dumps(devices)}")
           EOF
@@ -148,21 +132,15 @@ jobs:
             openwrt/staging_dir
             openwrt/build_dir
             openwrt/tmp
-          # 精确匹配（配置哈希+分支+变体）
           key: ${{ needs.prepare.outputs.cache_key_base }}-ultra-${{ matrix.branch }}
           restore-keys: |
-            # 优先级1：同分支不同变体
             ${{ needs.prepare.outputs.cache_key_base }}-${{ matrix.branch }}-
-            # 优先级2：同芯片不同分支（Luci包通用性高）
             ${{ needs.prepare.outputs.cache_key_chip }}-ultra-
-            # 优先级3：同芯片通用缓存
             ${{ env.CACHE_VERSION }}-${{ env.CHIP_FAMILY }}-${{ env.CHIP_SUBTARGET }}-
-            # 优先级4：系统级缓存
             ${{ env.CACHE_VERSION }}-${{ runner.os }}-
 
       - name: 初始化编译环境
         run: |
-          # 设置环境变量
           export CCACHE_DIR=$PWD/.ccache
           export CCACHE_COMPRESS=1
           export CCACHE_MAXSIZE=20G
@@ -171,32 +149,21 @@ jobs:
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
           export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
-          
-          # 创建输出目录
           mkdir -p $OUTPUT_DIR
           mkdir -p .ccache
-          
-          # 根据repos.json中的信息克隆对应的源码
           REPO_INFO=$(echo '${{ needs.prepare.outputs.repos_info }}' | jq -r ".${{ matrix.branch }}")
           REPO_URL=$(echo "$REPO_INFO" | jq -r '.url')
           REPO_BRANCH=$(echo "$REPO_INFO" | jq -r '.branch')
           REPO_SHORT=$(echo "$REPO_INFO" | jq -r '.short')
-          
           echo "克隆仓库: $REPO_URL"
           echo "使用分支: $REPO_BRANCH"
           echo "简称: $REPO_SHORT"
           echo "芯片家族: $CHIP_FAMILY"
           echo "芯片子型号: $CHIP_SUBTARGET"
-          
-          # 克隆源码仓库
           git clone $REPO_URL -b $REPO_BRANCH openwrt
           cd openwrt
-          
-          # 复制脚本文件到源码目录
           cp -r ../${{ env.SCRIPTS_DIR }} ./
           cp -r ../${{ env.CONFIGS_DIR }} ./
-          
-          # 执行初始化脚本
           chmod +x ${SCRIPTS_DIR}/*.sh
           ${SCRIPTS_DIR}/repo.sh
           ${SCRIPTS_DIR}/diy.sh
@@ -209,24 +176,14 @@ jobs:
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
           export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
-          
-          # 确保输出目录存在
           mkdir -p $OUTPUT_DIR
-          
-          # 清理旧配置
           rm -f .config
-          
-          # 合并配置
           ${SCRIPTS_DIR}/merge_config.sh \
             ${CONFIGS_DIR}/base_${CHIP_SUBTARGET}.config \
             ${CONFIGS_DIR}/base_${CONFIG_BRANCH}.config \
             ${CONFIGS_DIR}/${CONFIG_VARIANT}.config \
             .config
-          
-          # 保存defconfig前的配置
           cp .config .config.before_defconfig
-          
-          # 补全配置
           echo ""
           echo -e "\033[1;34m========== 运行 make defconfig 处理依赖关系 ==========\033[0m"
           echo ""
@@ -234,78 +191,9 @@ jobs:
           echo ""
           echo -e "\033[1;34m========== make defconfig 完成 ==========\033[0m"
           echo ""
-          
-          # 生成defconfig前的Luci包报告
           ${SCRIPTS_DIR}/luci_report.sh .config.before_defconfig $OUTPUT_DIR/luci_report_before.txt "defconfig前"
-          
-          # 生成defconfig后的Luci包报告
           ${SCRIPTS_DIR}/luci_report.sh .config $OUTPUT_DIR/luci_report_after.txt "defconfig后"
-          
-          # 生成对比报告
-          python3 << EOF
-import os
-
-# 读取defconfig前后的包列表
-before_file = "$OUTPUT_DIR/luci_report_before.txt"
-after_file = "$OUTPUT_DIR/luci_report_after.txt"
-
-# 提取包名
-def extract_packages(filename):
-    packages = []
-    if os.path.exists(filename):
-        with open(filename, 'r') as f:
-            content = f.read()
-            # 提取* 开头的行
-            for line in content.split('\n'):
-                if line.strip().startswith('  - '):
-                    packages.append(line.strip()[4:])
-    return sorted(packages)
-
-before_pkgs = extract_packages(before_file)
-after_pkgs = extract_packages(after_file)
-
-# 计算差异
-before_set = set(before_pkgs)
-after_set = set(after_pkgs)
-
-added = sorted(after_set - before_set)
-removed = sorted(before_set - after_set)
-
-# 生成对比报告
-report = f"""# Luci软件包变化报告 (make defconfig前后对比)
-
-## 统计信息
-- defconfig前: {len(before_pkgs)} 个包
-- defconfig后: {len(after_pkgs)} 个包
-- 新增: {len(added)} 个包
-- 移除: {len(removed)} 个包
-
-## 新增的软件包（由依赖自动引入）
-"""
-if added:
-    for pkg in added:
-        report += f"  + {pkg}\n"
-else:
-    report += "  无\n"
-
-report += "\n## 移除的软件包（因依赖问题被禁用）\n"
-if removed:
-    for pkg in removed:
-        report += f"  - {pkg}\n"
-else:
-    report += "  无\n"
-
-report += "\n## 完整的软件包列表（defconfig后）\n"
-for pkg in after_pkgs:
-    report += f"  * {pkg}\n"
-
-# 保存报告
-with open("$OUTPUT_DIR/luci_comparison_report.md", "w") as f:
-    f.write(report)
-
-# 输出报告
-print(report)
-EOF
+          ${SCRIPTS_DIR}/luci_report.sh .config $OUTPUT_DIR/luci_comparison_report.md "defconfig对比" .config.before_defconfig
 
       - name: 下载软件包
         run: |
@@ -317,8 +205,6 @@ EOF
         run: |
           cd openwrt
           make -j$(nproc) || make -j1 V=s
-          
-          # 复制编译产物
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
           export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
@@ -363,23 +249,16 @@ EOF
             openwrt/staging_dir
             openwrt/build_dir
             openwrt/tmp
-          # 精确匹配（配置哈希+分支+变体）
           key: ${{ needs.prepare.outputs.cache_key_base }}-${{ matrix.variant }}-${{ matrix.branch }}
           restore-keys: |
-            # 优先级1：同分支的Ultra缓存（优先使用已编译的Ultra）
             ${{ needs.prepare.outputs.cache_key_base }}-ultra-${{ matrix.branch }}
-            # 优先级2：同分支不同变体
             ${{ needs.prepare.outputs.cache_key_base }}-${{ matrix.branch }}-
-            # 优先级3：同芯片不同分支的Ultra缓存
             ${{ needs.prepare.outputs.cache_key_chip }}-ultra-
-            # 优先级4：同芯片通用缓存
             ${{ env.CACHE_VERSION }}-${{ env.CHIP_FAMILY }}-${{ env.CHIP_SUBTARGET }}-
-            # 优先级5：系统级缓存
             ${{ env.CACHE_VERSION }}-${{ runner.os }}-
 
       - name: 编译${{ matrix.variant }}变体
         run: |
-          # 设置环境变量
           export CCACHE_DIR=$PWD/.ccache
           export CCACHE_COMPRESS=1
           export CCACHE_MAXSIZE=20G
@@ -388,54 +267,33 @@ EOF
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-${{ matrix.variant }}
           export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
-          
-          # 创建输出目录
           mkdir -p $OUTPUT_DIR
           mkdir -p .ccache
-          
-          # 如果存在Ultra编译环境，直接使用
           if [ -d "openwrt" ]; then
             echo "使用现有编译环境"
           else
-            # 根据repos.json中的信息克隆对应的源码
             REPO_INFO=$(echo '${{ needs.prepare.outputs.repos_info }}' | jq -r ".${{ matrix.branch }}")
             REPO_URL=$(echo "$REPO_INFO" | jq -r '.url')
             REPO_BRANCH=$(echo "$REPO_INFO" | jq -r '.branch')
-            
             echo "克隆仓库: $REPO_URL"
             echo "使用分支: $REPO_BRANCH"
-            
-            # 克隆源码仓库
             git clone $REPO_URL -b $REPO_BRANCH openwrt
             cd openwrt
-            
-            # 复制脚本文件到源码目录
             cp -r ../${{ env.SCRIPTS_DIR }} ./
             cp -r ../${{ env.CONFIGS_DIR }} ./
-            
-            # 执行初始化脚本
             chmod +x ${SCRIPTS_DIR}/*.sh
             ${SCRIPTS_DIR}/repo.sh
             ${SCRIPTS_DIR}/diy.sh
             cd ..
           fi
-          
           cd openwrt
-          
-          # 合并配置
           ${SCRIPTS_DIR}/merge_config.sh \
             ${CONFIGS_DIR}/base_${CHIP_SUBTARGET}.config \
             ${CONFIGS_DIR}/base_${CONFIG_BRANCH}.config \
             ${CONFIGS_DIR}/${CONFIG_VARIANT}.config \
             .config
-          
-          # 补全配置
           make defconfig
-          
-          # 只编译差异部分
           make -j$(nproc) || make -j1 V=s
-          
-          # 复制编译产物
           mkdir -p $OUTPUT_DIR
           cp bin/targets/${CHIP_FAMILY}/${CHIP_SUBTARGET}/* $OUTPUT_DIR/ 2>/dev/null || true
           cp bin/packages/* $OUTPUT_DIR/packages/ 2>/dev/null || true
@@ -466,11 +324,8 @@ EOF
 
       - name: 设备重命名
         run: |
-          # 为每个设备重命名固件
           for device in $(echo '${{ needs.prepare.outputs.devices }}' | jq -r '.[]'); do
             echo "处理设备: $device"
-            
-            # 重命名各分支的固件
             for branch in immwrt libwrt openwrt; do
               for variant in Ultra Max Pro; do
                 src_dir="${{ env.OUTPUT_DIR }}/${variant}-${branch}"
