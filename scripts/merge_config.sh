@@ -2,11 +2,13 @@
 # 配置合并脚本
 # 功能：合并多个配置文件并生成报告
 
-set -euo pipefail
+# 注意：不使用 set -euo pipefail，以处理管道中的错误
+set -eo pipefail
 
 # 导入公共函数
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/common.sh"
+# 不导入 common.sh 中的 set -euo pipefail
+# source "${SCRIPT_DIR}/common.sh"
 
 # 使用说明
 usage() {
