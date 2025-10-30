@@ -61,21 +61,40 @@ clean_config() {
         return 1
     fi
     
+    # 检查文件是否为空
+    if [[ ! -s "$input" ]]; then
+        log_warn "配置文件为空: $input"
+        touch "$output"
+        return 0
+    fi
+    
+    # 创建输出文件
+    touch "$output" || {
+        log_error "无法创建输出文件: $output"
+        return 1
+    }
+    
     # 过滤掉注释行和空行，只保留有效的配置项
     # 使用更稳健的方式处理文件
-    if grep -q . "$input" 2>/dev/null; then
-        grep -E '^[^#].*=.*$' "$input" 2>/dev/null | \
-            sed 's/^[[:space:]]*//' | \
-            sed 's/[[:space:]]*$//' | \
-            grep -v '^$' | \
-            sort -u > "$output" 2>/dev/null || {
-            log_error "处理配置文件失败: $input"
-            return 1
+    local temp_file=$(mktemp)
+    
+    # 首先尝试提取有效的配置行
+    if grep -E '^[^#].*=.*$' "$input" > "$temp_file" 2>/dev/null; then
+        # 处理提取的行：去除首尾空格，过滤空行
+        sed -i 's/^[[:space:]]*//' "$temp_file"
+        sed -i 's/[[:space:]]*$//' "$temp_file"
+        grep -v '^$' "$temp_file" | sort -u > "$output" 2>/dev/null || {
+            log_warn "处理配置文件时出现问题: $input"
+            # 如果处理失败，至少保留原始的有效行
+            cp "$temp_file" "$output"
         }
     else
-        log_error "文件为空或无法读取: $input"
-        return 1
+        log_warn "未找到有效的配置行: $input"
+        touch "$output"
     fi
+    
+    # 清理临时文件
+    rm -f "$temp_file"
     
     # 检查输出文件
     if [[ ! -f "$output" ]]; then
@@ -84,7 +103,11 @@ clean_config() {
     fi
     
     local count=$(wc -l < "$output" 2>/dev/null || echo "0")
-    log_info "从 $(basename "$input") 提取了 $count 个有效配置项"
+    if [[ $count -gt 0 ]]; then
+        log_info "从 $(basename "$input") 提取了 $count 个有效配置项"
+    else
+        log_warn "从 $(basename "$input") 未提取到有效配置项"
+    fi
 }
 
 # 合并配置文件
@@ -119,17 +142,35 @@ merge_configs() {
     fi
     
     # 按顺序合并配置
-    cat "$clean_base" > "$temp_config"
-    log_info "已加载基础配置: $BASE_CONFIG"
+    if [[ -s "$clean_base" ]]; then
+        cat "$clean_base" > "$temp_config"
+        log_info "已加载基础配置: $BASE_CONFIG"
+    else
+        log_warn "基础配置为空: $BASE_CONFIG"
+        touch "$temp_config"
+    fi
     
-    cat "$clean_branch" >> "$temp_config"
-    log_info "已加载分支配置: $BRANCH_CONFIG"
+    if [[ -s "$clean_branch" ]]; then
+        cat "$clean_branch" >> "$temp_config"
+        log_info "已加载分支配置: $BRANCH_CONFIG"
+    else
+        log_warn "分支配置为空: $BRANCH_CONFIG"
+    fi
     
-    cat "$clean_variant" >> "$temp_config"
-    log_info "已加载变体配置: $VARIANT_CONFIG"
+    if [[ -s "$clean_variant" ]]; then
+        cat "$clean_variant" >> "$temp_config"
+        log_info "已加载变体配置: $VARIANT_CONFIG"
+    else
+        log_warn "变体配置为空: $VARIANT_CONFIG"
+    fi
     
     # 去重并排序
-    sort -u "$temp_config" > "$OUTPUT_CONFIG"
+    if [[ -s "$temp_config" ]]; then
+        sort -u "$temp_config" > "$OUTPUT_CONFIG"
+    else
+        log_warn "所有配置文件都为空，创建空配置"
+        touch "$OUTPUT_CONFIG"
+    fi
     
     # 验证输出文件
     if [[ ! -f "$OUTPUT_CONFIG" ]]; then
@@ -153,6 +194,13 @@ extract_luci_packages() {
     # 检查配置文件是否存在
     if [[ ! -f "$config_file" ]]; then
         log_warn "配置文件不存在: $config_file"
+        touch "$output_file"
+        return 0
+    fi
+    
+    # 检查配置文件是否为空
+    if [[ ! -s "$config_file" ]]; then
+        log_warn "配置文件为空: $config_file"
         touch "$output_file"
         return 0
     fi
