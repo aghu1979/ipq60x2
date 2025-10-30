@@ -38,13 +38,16 @@ log_error() {
 
 # 确保输出目录存在
 ensure_output_dir() {
-    local output_dir=$(dirname "$OUTPUT_FILE")
-    if [[ ! -d "$output_dir" ]]; then
-        mkdir -p "$output_dir" || {
-            log_error "无法创建输出目录: $output_dir"
-            return 1
-        }
+    local output_dir
+    output_dir=$(dirname "$OUTPUT_FILE")
+    
+    # 尝试创建目录
+    if ! mkdir -p "$output_dir" 2>/dev/null; then
+        log_error "无法创建输出目录: $output_dir"
+        return 1
     fi
+    
+    return 0
 }
 
 # 提取Luci软件包
@@ -55,47 +58,57 @@ extract_luci_packages() {
     # 检查配置文件是否存在
     if [[ ! -f "$config" ]]; then
         log_warn "配置文件不存在: $config"
-        touch "$output"
+        > "$output"
         return 0
     fi
     
     log_info "提取Luci软件包..."
     
+    # 检查配置文件是否为空
+    if [[ ! -s "$config" ]]; then
+        log_warn "配置文件为空: $config"
+        > "$output"
+        return 0
+    fi
+    
     # 使用更稳健的方式提取Luci包
     if grep -q "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null; then
         # 先检查是否有匹配的行
-        local pkg_count=$(grep -c "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null || echo "0")
+        local pkg_count
+        pkg_count=$(grep -c "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null || echo "0")
+        
         if [[ $pkg_count -gt 0 ]]; then
             # 提取并处理
             grep "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null | \
                 sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
-                sort > "$output_file" 2>/dev/null || {
+                sort > "$output" 2>/dev/null || {
                 log_warn "提取Luci软件包失败，使用备用方法"
                 # 备用方法
                 grep "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null | \
                     awk -F= '{print $1}' | \
                     sed 's/^CONFIG_PACKAGE_//' | \
                     sed 's/=y$//' | \
-                    sort > "$output_file" 2>/dev/null || {
+                    sort > "$output" 2>/dev/null || {
                         log_error "备用方法也失败"
-                        touch "$output_file"
+                        > "$output"
                     }
             }
             
             # 验证输出文件
-            if [[ -f "$output_file" ]]; then
-                local count=$(cat "$output_file" 2>/dev/null | wc -l || echo "0")
+            if [[ -f "$output" ]]; then
+                local count
+                count=$(cat "$output" 2>/dev/null | wc -l || echo "0")
                 log_info "提取到 $count 个Luci软件包"
             else
                 log_warn "输出文件创建失败"
             fi
         else
             log_warn "未找到Luci软件包配置"
-            touch "$output_file"
+            > "$output"
         fi
     else
         log_warn "未找到Luci软件包配置"
-        touch "$output"
+        > "$output"
     fi
 }
 
@@ -107,33 +120,33 @@ categorize_packages() {
     # 检查输入文件是否存在
     if [[ ! -f "$input_file" ]] || [[ ! -s "$input_file" ]]; then
         log_warn "输入文件为空或不存在: $input_file"
-        cat > "$output_file" << 'EOF'
-# Luci软件包分类报告
-
-## 统计信息
-- 总包数: 0
-
-## 分类统计
-- 核心组件: 0 个
-- 网络管理: 0 个
-- 系统工具: 0 个
-- 主题界面: 0 个
-- 协议支持: 0 个
-- 其他软件包: 0 个
-
-## 详细列表
-无软件包
-EOF
+        {
+            echo "# Luci软件包分类报告"
+            echo ""
+            echo "## 统计信息"
+            echo "- 总包数: 0"
+            echo ""
+            echo "## 分类统计"
+            echo "- 核心组件: 0 个"
+            echo "- 网络管理: 0 个"
+            echo "- 系统工具: 0 个"
+            echo "- 主题界面: 0 个"
+            echo "- 协议支持: 0 个"
+            echo "- 其他软件包: 0 个"
+            echo ""
+            echo "## 详细列表"
+            echo "无软件包"
+        } > "$output_file"
         return
     fi
     
     # 定义分类
     local -a categories=(
-        "核心组件:luci-base luci-compat luci-lib-"
-        "网络管理:luci-app-"
-        "系统工具:luci-i18n- luci-mod-"
-        "主题界面:luci-theme-"
-        "协议支持:luci-proto-"
+        ["核心组件"]="luci-base luci-compat luci-lib-"
+        ["网络管理"]="luci-app-"
+        ["系统工具"]="luci-i18n- luci-mod-"
+        ["主题界面"]="luci-theme-"
+        ["协议支持"]="luci-proto-"
     )
     
     # 创建报告文件
@@ -238,8 +251,8 @@ generate_comparison_report() {
         echo "## 统计信息"
         
         # 提取包列表
-        local before_pkgs=()
-        local after_pkgs=()
+        local -a before_pkgs=()
+        local -a after_pkgs=()
         
         # 读取defconfig前的包
         while IFS= read -r pkg; do
@@ -260,8 +273,8 @@ generate_comparison_report() {
         local after_count=${#after_pkgs[@]}
         
         # 计算差异
-        local added=()
-        local removed=()
+        local -a added=()
+        local -a removed=()
         
         # 找出新增的包
         for pkg in "${after_pkgs[@]}"; do
@@ -336,12 +349,16 @@ main() {
     fi
     
     # 确保输出目录存在
-    ensure_output_dir || {
+    if ! ensure_output_dir; then
         log_error "无法创建输出目录，但继续执行"
-    }
+    fi
     
     # 创建临时文件
-    local temp_file=$(mktemp)
+    local temp_file
+    temp_file=$(mktemp) || {
+        log_error "无法创建临时文件"
+        exit 1
+    }
     trap "rm -f $temp_file" EXIT
     
     # 提取Luci包
@@ -349,7 +366,11 @@ main() {
     
     # 如果是对比模式，生成对比报告
     if [[ "$STAGE" == "defconfig对比" ]] && [[ -n "$BEFORE_CONFIG" ]]; then
-        local before_temp=$(mktemp)
+        local before_temp
+        before_temp=$(mktemp) || {
+            log_error "无法创建临时文件"
+            exit 1
+        }
         trap "rm -f $before_temp" EXIT
         extract_luci_packages "$BEFORE_CONFIG" "$before_temp"
         
