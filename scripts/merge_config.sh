@@ -42,7 +42,8 @@ log_error() {
 check_config_files() {
     for config in "$BASE_CONFIG" "$BRANCH_CONFIG" "$VARIANT_CONFIG"; do
         if [[ ! -f "$config" ]]; then
-            error_exit "配置文件不存在: $config"
+            log_error "配置文件不存在: $config"
+            exit 1
         fi
     done
 }
@@ -52,11 +53,38 @@ clean_config() {
     local input="$1"
     local output="$2"
     
+    log_info "清理配置文件: $(basename "$input")"
+    
+    # 检查输入文件是否存在且可读
+    if [[ ! -f "$input" ]]; then
+        log_error "输入文件不存在: $input"
+        return 1
+    fi
+    
     # 过滤掉注释行和空行，只保留有效的配置项
-    grep -E '^[^#].*=.*$' "$input" | \
-        sed 's/^[[:space:]]*//' | \
-        sed 's/[[:space:]]*$//' | \
-        sort -u > "$output"
+    # 使用更稳健的方式处理文件
+    if grep -q . "$input" 2>/dev/null; then
+        grep -E '^[^#].*=.*$' "$input" 2>/dev/null | \
+            sed 's/^[[:space:]]*//' | \
+            sed 's/[[:space:]]*$//' | \
+            grep -v '^$' | \
+            sort -u > "$output" 2>/dev/null || {
+            log_error "处理配置文件失败: $input"
+            return 1
+        }
+    else
+        log_error "文件为空或无法读取: $input"
+        return 1
+    fi
+    
+    # 检查输出文件
+    if [[ ! -f "$output" ]]; then
+        log_error "生成输出文件失败: $output"
+        return 1
+    fi
+    
+    local count=$(wc -l < "$output" 2>/dev/null || echo "0")
+    log_info "从 $(basename "$input") 提取了 $count 个有效配置项"
 }
 
 # 合并配置文件
@@ -69,11 +97,26 @@ merge_configs() {
     local clean_branch=$(mktemp)
     local clean_variant=$(mktemp)
     
+    # 设置清理陷阱
+    trap "rm -f $temp_config $clean_base $clean_branch $clean_variant" EXIT
+    
     # 清理各个配置文件
     log_info "清理配置文件中的注释和空行..."
-    clean_config "$BASE_CONFIG" "$clean_base"
-    clean_config "$BRANCH_CONFIG" "$clean_branch"
-    clean_config "$VARIANT_CONFIG" "$clean_variant"
+    
+    if ! clean_config "$BASE_CONFIG" "$clean_base"; then
+        log_error "清理基础配置失败"
+        exit 1
+    fi
+    
+    if ! clean_config "$BRANCH_CONFIG" "$clean_branch"; then
+        log_error "清理分支配置失败"
+        exit 1
+    fi
+    
+    if ! clean_config "$VARIANT_CONFIG" "$clean_variant"; then
+        log_error "清理变体配置失败"
+        exit 1
+    fi
     
     # 按顺序合并配置
     cat "$clean_base" > "$temp_config"
@@ -88,10 +131,18 @@ merge_configs() {
     # 去重并排序
     sort -u "$temp_config" > "$OUTPUT_CONFIG"
     
+    # 验证输出文件
+    if [[ ! -f "$OUTPUT_CONFIG" ]]; then
+        log_error "生成合并配置失败"
+        exit 1
+    fi
+    
+    local final_count=$(wc -l < "$OUTPUT_CONFIG" 2>/dev/null || echo "0")
+    log_info "配置合并完成: $OUTPUT_CONFIG (共 $final_count 个配置项)"
+    
     # 清理临时文件
     rm -f "$temp_config" "$clean_base" "$clean_branch" "$clean_variant"
-    
-    log_info "配置合并完成: $OUTPUT_CONFIG"
+    trap - EXIT
 }
 
 # 提取Luci软件包
@@ -109,12 +160,15 @@ extract_luci_packages() {
     log_info "提取Luci软件包列表..."
     
     # 提取所有以=y结尾的luci配置
-    if grep -q "^CONFIG_PACKAGE_luci.*=y$" "$config_file"; then
-        grep "^CONFIG_PACKAGE_luci.*=y$" "$config_file" | \
+    if grep -q "^CONFIG_PACKAGE_luci.*=y$" "$config_file" 2>/dev/null; then
+        grep "^CONFIG_PACKAGE_luci.*=y$" "$config_file" 2>/dev/null | \
             sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
-            sort > "$output_file"
+            sort > "$output_file" 2>/dev/null || {
+            log_warn "提取Luci软件包失败"
+            touch "$output_file"
+        }
         
-        local count=$(wc -l < "$output_file")
+        local count=$(wc -l < "$output_file" 2>/dev/null || echo "0")
         log_info "找到 $count 个Luci软件包"
     else
         log_warn "未找到Luci软件包配置"
@@ -142,10 +196,10 @@ generate_diff_report() {
 EOF
     
     # 计算统计信息
-    local before_count=$(wc -l < "$before_file")
-    local after_count=$(wc -l < "$after_file")
-    local added_count=$(comm -13 "$before_file" "$after_file" 2>/dev/null | wc -l)
-    local removed_count=$(comm -23 "$before_file" "$after_file" 2>/dev/null | wc -l)
+    local before_count=$(wc -l < "$before_file" 2>/dev/null || echo "0")
+    local after_count=$(wc -l < "$after_file" 2>/dev/null || echo "0")
+    local added_count=$(comm -13 "$before_file" "$after_file" 2>/dev/null | wc -l || echo "0")
+    local removed_count=$(comm -23 "$before_file" "$after_file" 2>/dev/null | wc -l || echo "0")
     
     cat >> "$report_file" << EOF
 - 合并前Luci包数量: $before_count
@@ -246,8 +300,8 @@ validate_config() {
         )
         
         for config in "${key_configs[@]}"; do
-            if grep -q "^${config}=" "$config_file"; then
-                local value=$(grep "^${config}=" "$config_file" | cut -d'=' -f2)
+            if grep -q "^${config}=" "$config_file" 2>/dev/null; then
+                local value=$(grep "^${config}=" "$config_file" 2>/dev/null | cut -d'=' -f2)
                 log_info "找到关键配置: $config=$value"
             else
                 log_warn "缺少关键配置: $config"
