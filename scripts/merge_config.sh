@@ -7,7 +7,8 @@ set -euo pipefail
 REPO_NAME="$1"
 VARIANT_NAME="$2"
 
-CONFIGS_DIR="../configs"
+# 【修正】使用绝对路径
+CONFIGS_DIR="/workdir/configs"
 FINAL_CONFIG_PATH=".config"
 
 # 定义配置文件路径
