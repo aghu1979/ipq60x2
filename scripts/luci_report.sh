@@ -75,7 +75,7 @@ extract_luci_packages() {
     if grep -q "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null; then
         # 先检查是否有匹配的行
         local pkg_count
-        pkg_count=$(grep -c "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null || echo "0"
+        pkg_count=$(grep -c "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null || echo "0")
         
         if [[ $pkg_count -gt 0 ]]; then
             # 提取并处理
@@ -95,9 +95,9 @@ extract_luci_packages() {
             }
             
             # 验证输出文件
-            if [[ -f "$output_file" ]]; then
+            if [[ -f "$output" ]]; then
                 local count
-                count=$(cat "$output_file" 2>/dev/null | wc -l || echo "0"
+                count=$(cat "$output" 2>/dev/null | wc -l || echo "0")
                 log_info "提取到 $count 个Luci软件包"
             else
                 log_warn "输出文件创建失败"
@@ -154,7 +154,7 @@ categorize_packages() {
         
         # 统计总数
         local total_count
-        total_count=$(cat "$input_file" 2>/dev/null | wc -l || echo "0"
+        total_count=$(cat "$input_file" 2>/dev/null | wc -l || echo "0")
         echo "- 总包数: $total_count"
         echo ""
         echo "## 分类统计"
@@ -254,7 +254,7 @@ generate_comparison_report() {
         local -a after_pkgs=()
         
         # 读取defconfig前的包
-        while IFS= -r pkg; do
+        while IFS= read -r pkg; do
             if [[ -n "$pkg" ]]; then
                 before_pkgs+=("$pkg")
             fi
@@ -306,7 +306,7 @@ generate_comparison_report() {
         echo "- defconfig前: $before_count 个包"
         echo "- defconfig后: $after_count 个包"
         echo "- 新增: ${#added[@]} 个包"
-        echo "- 移除: ${#removed[@]} 个包"
+        echo "- 缺失: ${#removed[@]} 个包"
         echo ""
         echo "## 新增的软件包（由依赖自动引入）"
         
@@ -319,7 +319,7 @@ generate_comparison_report() {
         fi
         
         echo ""
-        echo "## 移除的软件包（因依赖问题被禁用）"
+        echo "## 缺失的软件包 (因依赖问题被自动禁用)"
         
         if [[ ${#removed[@]} -gt 0 ]]; then
             for pkg in "${removed[@]}"; do
@@ -370,7 +370,7 @@ main() {
             log_error "无法创建临时文件"
             exit 1
         }
-        trap "rm -f "$before_temp" EXIT
+        trap "rm -f \"$before_temp\" $temp_file" EXIT
         extract_luci_packages "$BEFORE_CONFIG" "$before_temp"
         
         # 生成对比报告
