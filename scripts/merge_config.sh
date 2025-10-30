@@ -61,7 +61,7 @@ clean_config() {
     # 检查文件是否为空
     if [[ ! -s "$input" ]]; then
         log_warn "配置文件为空: $input"
-        > "$output"
+        touch "$output"
         return 0
     fi
     
@@ -72,12 +72,12 @@ clean_config() {
     fi
     
     # 过滤掉注释行和空行，只保留有效的配置项
-    # 使用更稳健的方式处理文件
     local temp_file
     temp_file=$(mktemp) || {
         log_error "无法创建临时文件"
         exit 1
     }
+    trap "rm -f $temp_file" EXIT
     
     # 首先尝试提取有效的配置行
     if grep -E '^[^#].*=.*$' "$input" > "$temp_file" 2>/dev/null; then
@@ -91,7 +91,7 @@ clean_config() {
         }
     else
         log_warn "未找到有效的配置行: $input"
-        > "$output"
+        touch "$output"
     fi
     
     # 清理临时文件
@@ -104,7 +104,7 @@ clean_config() {
     fi
     
     local count
-    count=$(cat "$output" 2>/dev/null | wc -l || echo "0")
+    count=$(cat "$output" 2>/dev/null | wc -l || echo "0"
     if [[ $count -gt 0 ]]; then
         log_info "从 $(basename "$input") 提取了 $count 个有效配置项"
     else
@@ -125,19 +125,7 @@ merge_configs() {
     local clean_base
     clean_base=$(mktemp) || {
         log_error "无法创建临时文件"
-        rm -f "$temp_config"
-        exit 1
-    }
-    local clean_branch
-    clean_branch=$(mktemp) || {
-        log_error "无法创建临时文件"
-        rm -f "$temp_config" "$clean_base"
-        exit 1
-    }
-    local clean_variant
-    clean_variant=$(mktemp) || {
-        log_error "无法创建临时文件"
-        rm -f "$temp_config" "$clean_base" "$clean_branch"
+        rm -f "$temp_config" "$clean_base" "$clean_branch" "$clean_variant" "$clean_variant"
         exit 1
     }
     
@@ -188,7 +176,7 @@ merge_configs() {
         log_warn "变体配置为空: $VARIANT_CONFIG"
     fi
     
-    # 去重并排序
+    # 基去重并排序
     if [[ -s "$temp_config" ]]; then
         sort -u "$temp_config" > "$OUTPUT_CONFIG"
     else
@@ -199,165 +187,23 @@ merge_configs() {
     # 验证输出文件
     if [[ ! -f "$OUTPUT_CONFIG" ]]; then
         log_error "生成合并配置失败"
-        rm -f "$temp_config" "$clean_base" "$clean_branch" "$temp_file" "$clean_variant"
+        rm -f "$temp_config" "$clean_base" "$clean_branch" "$clean_variant"
         exit 1
     fi
     
     local final_count
-    final_count=$(cat "$OUTPUT_CONFIG" 2>/dev/null | wc -l || echo "0")
+    final_count=$(cat "$OUTPUT_CONFIG" 2>/dev/null | wc -l || echo "0"
     log_info "配置合并完成: $OUTPUT_CONFIG (共 $final_count 个配置项)"
     
     # 清理临时文件
-    rm -f "$temp_config" "$clean_base" "$clean_branch" "$clean_variant"
-    trap - EXIT
+    rm -f "$temp_config" "$clean_base" "$clean_branch" "$clean_variant" EXIT
     
     # 验证配置
     validate_config "$OUTPUT_CONFIG"
-}
-
-# 提取Luci软件包
-extract_luci_packages() {
-    local config_file="$1"
-    local output_file="$2"
     
-    # 检查配置文件是否存在
-    if [[ ! -f "$config_file" ]]; then
-        log_warn "配置文件不存在: $config_file"
-        > "$output_file"
-        return 0
-    fi
-    
-    # 检查配置文件是否为空
-    if [[ ! -s "$config_file" ]]; then
-        log_warn "配置文件为空: $config_file"
-        > "$output_file"
-        return 0
-    fi
-    
-    log_info "提取Luci软件包列表..."
-    
-    # 提取所有以=y结尾的luci配置
-    if grep -q "^CONFIG_PACKAGE_luci.*=y$" "$config_file" 2>/dev/null; then
-        grep "^CONFIG_PACKAGE_luci.*=y$" "$config_file" 2>/dev/null | \
-            sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
-            sort > "$output_file" 2>/dev/null || {
-            log_warn "提取Luci软件包失败"
-            > "$output_file"
-        }
-        
-        local count
-        count=$(cat "$output_file" 2>/dev/null | wc -l || echo "0")
-        log_info "找到 $count 个Luci软件包"
-    else
-        log_warn "未找到Luci软件包配置"
-        > "$output_file"
-    fi
-}
-
-# 生成差异报告
-generate_diff_report() {
-    local before_file="$1"
-    local after_file="$2"
-    local report_file="$3"
-    local stage="$4"  # 添加阶段标识
-    
-    log_info "生成Luci软件包差异报告 ($stage)..."
-    
-    # 检查文件是否存在
-    [[ ! -f "$before_file" ]] && touch "$before_file"
-    [[ ! -f "$after_file" ]] && touch "$after_file"
-    
-    # 创建报告文件
-    {
-        echo "# Luci软件包差异报告 ($stage)"
-        echo ""
-        echo "## 统计信息"
-        
-        # 计算统计信息
-        local before_count
-        before_count=$(cat "$before_file" 2>/dev/null | wc -l || echo "0")
-        local after_count
-        after_count=$(cat "$after_file" 2>/dev/null | wc -l || echo "0")
-        local added_count
-        added_count=$(comm -13 "$before_file" "$after_file" 2>/dev/null | wc -l || echo "0")
-        local removed_count
-        removed_count=$(comm -23 "$before_file" "$after_file" 2>/dev/null | wc -l || echo "0")
-        
-        echo "- $stage 前Luci包数量: $before_count"
-        echo "- $stage 后Luci包数量: $after_count"
-        echo "- 新增Luci包数量: $added_count"
-        echo "- 移除Luci包数量: $removed_count"
-        echo ""
-        echo "## 新增的Luci软件包"
-        
-        # 列出新增的包
-        if [[ $added_count -gt 0 ]]; then
-            comm -13 "$before_file" "$after_file" 2>/dev/null | while read -r pkg; do
-                echo "  + $pkg"
-            done
-        else
-            echo "  无新增包"
-        fi
-        
-        echo ""
-        echo "## 移除的Luci软件包"
-        
-        # 列出移除的包
-        if [[ $removed_count -gt 0 ]]; then
-            comm -23 "$before_file" "$after_file" 2>/dev/null | while read -r pkg; do
-                echo "  - $pkg"
-            done
-        else
-            echo "  无移除包"
-        fi
-        
-        echo ""
-        echo "## 完整的Luci软件包列表"
-        
-        # 列出所有包
-        if [[ -s "$after_file" ]]; then
-            cat "$after_file" | while read -r pkg; do
-                echo "  * $pkg"
-            done
-        else
-            echo "  无Luci软件包"
-        fi
-    } > "$report_file"
-    
-    log_info "差异报告已生成: $report_file"
-}
-
-# 高亮显示报告
-highlight_report() {
-    local report_file="$1"
-    local title="$2"
-    
-    # 检查报告文件是否存在
-    if [[ ! -f "$report_file" ]]; then
-        log_warn "报告文件不存在: $report_file"
-        return
-    fi
-    
-    echo ""
-    echo -e "\033[1;34m========== $title ==========\033[0m"
-    echo ""
-    
-    # 使用颜色高亮显示
-    while IFS= read -r line; do
-        if [[ $line =~ ^\s*\+ ]]; then
-            echo -e "\033[32m$line\033[0m"  # 绿色显示新增
-        elif [[ $line =~ ^\s*- ]]; then
-            echo -e "\033[31m$line\033[0m"  # 简色显示移除
-        elif [[ $line =~ ^## ]]; then
-            echo -e "\033[34m$line\033[0m"  # 蓝色显示标题
-        elif [[ $line =~ ^- ]]; then
-            echo -e "\033[33m$line\033[0m"  # 黄色显示统计
-        else
-            echo "$line"
-        fi
-    done < "$report_file"
-    
-    echo ""
+    log_info "配置合并流程完成"
+    log_info "接下来请运行 make defconfig 来处理依赖关系"
+    log_info "defconfig后，请运行 luci_report.sh 生成对比报告"
 }
 
 # 验证配置
@@ -369,7 +215,7 @@ validate_config() {
     # 检查是否有语法错误
     if [[ -f "$config_file" ]]; then
         local config_count
-        config_count=$(grep -c "^CONFIG_.*=" "$config_file" 2>/dev/null || echo "0")
+        config_count=$(grep -c "^CONFIG_.*=" "$config_file" 2>/dev/null | wc -l || echo "0"
         log_info "配置文件包含 $config_count 个配置项"
         
         # 检查关键配置
@@ -402,7 +248,7 @@ main() {
     
     # 创建临时目录
     local temp_dir
-    temp_dir=$(mktemp -d) || {
+    temp_dir=$(mktemp -d || {
         log_error "无法创建临时目录"
         exit 1
     }
@@ -434,8 +280,7 @@ main() {
     
     # 生成合并阶段的报告
     local merge_report="${OUTPUT_CONFIG}.merge_report.md"
-    generate_diff_report "$before_luci" "$merged_luci" "$merge_report" "配置合并"
-    highlight_report "$merge_report" "配置合并阶段的Luci软件包变化"
+    generate_diff_report "$before_luci" "$merged_luci" "$merge_report"
     
     log_info "配置合并流程完成"
     log_info "接下来请运行 make defconfig 来处理依赖关系"
