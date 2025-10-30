@@ -95,9 +95,9 @@ extract_luci_packages() {
             }
             
             # 验证输出文件
-            if [[ -f "$output" ]]; then
+            if [[ -f "$output_file" ]]; then
                 local count
-                count=$(cat "$output" 2>/dev/null | wc -l || echo "0"
+                count=$(cat "$output_file" 2>/dev/null | wc -l || echo "0"
                 log_info "提取到 $count 个Luci软件包"
             else
                 log_warn "输出文件创建失败"
@@ -106,9 +106,6 @@ extract_luci_packages() {
             log_warn "未找到Luci软件包配置"
             > "$output"
         fi
-    else
-        log_warn "未找到Luci软件包配置"
-        > "$output"
     fi
 }
 
@@ -128,7 +125,7 @@ categorize_packages() {
             echo ""
             echo "## 分类统计"
             echo "- 核心组件: 0 个"
-            echo "- 管理管理: 0 个"
+            echo "- 网络管理: 0 个"
             echo "- 系统工具: 0 个"
             echo "- 主题界面: 0 个"
             echo "- 协议支持: 0 个"
@@ -140,14 +137,20 @@ categorize_packages() {
         return
     fi
     
-    # 定义分类（使用普通数组）
-    categories=("核心组件:luci-base luci-compat luci-lib-" "网络管理:luci-app-" "系统工具:luci-i18n- luci-mod-" "主题界面:luci-theme-" "协议支持:luci-proto-")
+    # 定义分类
+    local categories=(
+        "核心组件:luci-base luci-compat luci-lib-"
+        "网络管理:luci-app-"
+        "系统工具:luci-i18n- luci-mod-"
+        "主题界面:luci-theme-"
+        "协议支持:luci-proto-"
+    )
     
     # 创建报告文件
     {
         echo "# Luci软件包分类报告"
         echo ""
-        echo "## 统�计信息"
+        echo "## 统计信息"
         
         # 统计总数
         local total_count
@@ -344,7 +347,7 @@ main() {
         log_warn "配置文件不存在: $CONFIG_FILE"
     fi
     
-    # 确保输出目录存在
+    # �保输出目录存在
     if ! ensure_output_dir; then
         log_error "无法创建输出目录，但继续执行"
     fi
