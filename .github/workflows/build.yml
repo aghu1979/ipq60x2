@@ -223,11 +223,89 @@ jobs:
             ${CONFIGS_DIR}/${CONFIG_VARIANT}.config \
             .config
           
-          # 补全配置
-          make defconfig
+          # 保存defconfig前的配置
+          cp .config .config.before_defconfig
           
-          # 生成Luci包报告（补全后）
-          ${SCRIPTS_DIR}/luci_report.sh .config $OUTPUT_DIR/luci_report_after.txt
+          # 补全配置
+          echo ""
+          echo -e "\033[1;34m========== 运行 make defconfig 处理依赖关系 ==========\033[0m"
+          echo ""
+          make defconfig 2>&1 | tee $OUTPUT_DIR/defconfig.log
+          echo ""
+          echo -e "\033[1;34m========== make defconfig 完成 ==========\033[0m"
+          echo ""
+          
+          # 生成defconfig前的Luci包报告
+          ${SCRIPTS_DIR}/luci_report.sh .config.before_defconfig $OUTPUT_DIR/luci_report_before.txt "defconfig前"
+          
+          # 生成defconfig后的Luci包报告
+          ${SCRIPTS_DIR}/luci_report.sh .config $OUTPUT_DIR/luci_report_after.txt "defconfig后"
+          
+          # 生成对比报告
+          python3 << EOF
+import os
+
+# 读取defconfig前后的包列表
+before_file = "$OUTPUT_DIR/luci_report_before.txt"
+after_file = "$OUTPUT_DIR/luci_report_after.txt"
+
+# 提取包名
+def extract_packages(filename):
+    packages = []
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            content = f.read()
+            # 提取* 开头的行
+            for line in content.split('\n'):
+                if line.strip().startswith('  - '):
+                    packages.append(line.strip()[4:])
+    return sorted(packages)
+
+before_pkgs = extract_packages(before_file)
+after_pkgs = extract_packages(after_file)
+
+# 计算差异
+before_set = set(before_pkgs)
+after_set = set(after_pkgs)
+
+added = sorted(after_set - before_set)
+removed = sorted(before_set - after_set)
+
+# 生成对比报告
+report = f"""# Luci软件包变化报告 (make defconfig前后对比)
+
+## 统计信息
+- defconfig前: {len(before_pkgs)} 个包
+- defconfig后: {len(after_pkgs)} 个包
+- 新增: {len(added)} 个包
+- 移除: {len(removed)} 个包
+
+## 新增的软件包（由依赖自动引入）
+"""
+if added:
+    for pkg in added:
+        report += f"  + {pkg}\n"
+else:
+    report += "  无\n"
+
+report += "\n## 移除的软件包（因依赖问题被禁用）\n"
+if removed:
+    for pkg in removed:
+        report += f"  - {pkg}\n"
+else:
+    report += "  无\n"
+
+report += "\n## 完整的软件包列表（defconfig后）\n"
+for pkg in after_pkgs:
+    report += f"  * {pkg}\n"
+
+# 保存报告
+with open("$OUTPUT_DIR/luci_comparison_report.md", "w") as f:
+    f.write(report)
+
+# 输出报告
+print(report)
+EOF
 
       - name: 下载软件包
         run: |
