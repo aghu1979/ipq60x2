@@ -1,182 +1,232 @@
 #!/bin/bash
+# 公共函数库
+# 提供通用的工具函数
 
-# 通用函数库
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
 
-# 查找配置文件函数
-find_config_file() {
-    local base_name="$1"
-    local config_dir="${GITHUB_WORKSPACE}/${CONFIG_BASE_DIR}"
-    
-    # 尝试不同格式
-    for ext in ".config" ".config.txt"; do
-        if [ -f "${config_dir}/${base_name}${ext}" ]; then
-            echo "${config_dir}/${base_name}${ext}"
-            return 0
-        fi
-    done
-    
-    # 使用find查找
-    local found_file=$(find "$config_dir" -iname "${base_name}.config*" -type f | head -n 1)
-    if [ -n "$found_file" ]; then
-        echo "$found_file"
-        return 0
-    fi
-    
-    return 1
+# 日志函数
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*"
 }
 
-# 检查命令执行结果
-check_result() {
-    local result=$1
-    local message="$2"
-    local step="$3"
-    
-    if [ $result -eq 0 ]; then
-        log "INFO" "✅ $message" "$step"
-        return 0
+log_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*"
+}
+
+log_debug() {
+    if [[ "${DEBUG:-0}" == "1" ]]; then
+        echo -e "${BLUE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') $*"
+    fi
+}
+
+# 错误处理函数
+error_exit() {
+    log_error "$1"
+    exit "${2:-1}"
+}
+
+# 检查命令是否存在
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# 检查文件是否存在且可读
+check_file() {
+    local file="$1"
+    if [[ ! -f "$file" ]]; then
+        error_exit "文件不存在: $file"
+    fi
+    if [[ ! -r "$file" ]]; then
+        error_exit "文件不可读: $file"
+    fi
+}
+
+# 检查目录是否存在
+check_dir() {
+    local dir="$1"
+    if [[ ! -d "$dir" ]]; then
+        error_exit "目录不存在: $dir"
+    fi
+}
+
+# 创建目录（如果不存在）
+ensure_dir() {
+    local dir="$1"
+    if [[ ! -d "$dir" ]]; then
+        mkdir -p "$dir" || error_exit "无法创建目录: $dir"
+        log_info "创建目录: $dir"
+    fi
+}
+
+# 获取CPU核心数
+get_cpu_cores() {
+    if command_exists nproc; then
+        nproc
     else
-        log "ERROR" "❌ $message" "$step"
-        return 1
+        echo 1
     fi
 }
 
-# 显示进度条
+# 获取系统内存大小（GB）
+get_memory_gb() {
+    if [[ -f /proc/meminfo ]]; then
+        local mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+        echo $((mem_kb / 1024 / 1024))
+    else
+        echo 1
+    fi
+}
+
+# 计算合适的编译线程数
+calc_make_jobs() {
+    local cpu_cores=$(get_cpu_cores)
+    local memory_gb=$(get_memory_gb)
+    
+    # 每个编译任务大约需要1.5GB内存
+    local max_jobs_by_mem=$((memory_gb * 2 / 3))
+    local jobs=$((cpu_cores < max_jobs_by_mem ? cpu_cores : max_jobs_by_mem))
+    
+    # 至少使用1个线程，最多不超过CPU核心数
+    if [[ $jobs -lt 1 ]]; then
+        jobs=1
+    elif [[ $jobs -gt $cpu_cores ]]; then
+        jobs=$cpu_cores
+    fi
+    
+    echo $jobs
+}
+
+# 检查磁盘空间
+check_disk_space() {
+    local path="$1"
+    local required_gb="$2"
+    
+    local available_kb=$(df "$path" | awk 'NR==2 {print $4}')
+    local available_gb=$((available_kb / 1024 / 1024))
+    
+    if [[ $available_gb -lt $required_gb ]]; then
+        error_exit "磁盘空间不足。需要: ${required_gb}GB, 可用: ${available_gb}GB"
+    fi
+}
+
+# 清理函数
+cleanup_on_exit() {
+    log_info "执行清理操作..."
+    # 这里可以添加清理逻辑
+}
+
+# 设置陷阱
+trap cleanup_on_exit EXIT
+
+# 进度条函数
 show_progress() {
     local current="$1"
     local total="$2"
-    local description="$3"
+    local desc="$3"
+    
     local percent=$((current * 100 / total))
     local filled=$((percent / 2))
     local empty=$((50 - filled))
     
-    printf "\r\033[0;36m[%3d%%] [" "$percent"
-    printf "%*s" $filled | tr ' ' '█'
-    printf "%*s" $empty | tr ' ' '░'
-    printf "] %s\033[0m" "$description"
+    printf "\r${CYAN}[%s]${NC} [" "$desc"
+    printf "%*s" $filled | tr ' ' '='
+    printf "%*s" $empty | tr ' ' '-'
+    printf "] %d%% (%d/%d)" $percent $current $total
 }
 
-# 创建错误监控脚本
-create_error_monitor() {
-    local log_file="$1"
-    local monitor_script="/tmp/monitor_errors.sh"
+# 等待函数
+wait_for_process() {
+    local pid="$1"
+    local timeout="${2:-300}"
+    local interval="${3:-5}"
     
-    cat > "$monitor_script" << EOF
-#!/bin/bash
-LOG_FILE="$log_file"
-# 扩展错误模式，包含更多错误类型
-ERROR_PATTERNS=(
-    "failed to build"
-    "failed to install"
-    "Error:"
-    "ERROR:"
-    "error:"
-    "make.*\*\*\*.*Error"
-    "command terminated with signal"
-    "cannot stat"
-    "No such file or directory"
-    "Permission denied"
-    "Segmentation fault"
-    "Compilation failed"
-    "Build failed"
-    "undefined reference"
-    "multiple definition"
-)
-
-# 记录的错误，避免重复
-RECORDED_ERRORS=""
-
-# 简化的错误记录函数，避免递归调用
-simple_log_error() {
-    local error_msg="\$1"
-    local package="\$2"
-    
-    echo -e "\n\033[1;41;37m🔥 构建错误 🔥\033[0m"
-    echo -e "\033[1;31m错误信息: \$error_msg\033[0m"
-    echo -e "\033[1;31m相关包: \$package\033[0m"
-    echo -e "\033[1;41;37m================\033[0m\n"
-}
-
-tail -f "\$LOG_FILE" | while read line; do
-    for pattern in "\${ERROR_PATTERNS[@]}"; do
-        if echo "\$line" | grep -q "\$pattern"; then
-            # 提取包名 - 改进包名提取逻辑
-            PACKAGE=\$(echo "\$line" | grep -oE 'package/[^/]*|/tmp/[^/]*' | head -1 | cut -d'/' -f2)
-            if [ -z "\$PACKAGE" ]; then
-                PACKAGE=\$(echo "\$line" | grep -oE '[a-zA-Z0-9_-]+\.tar\.[a-z0-9]+' | head -1 | sed 's/\.tar\.[a-z0-9]+$//')
-            fi
-            if [ -z "\$PACKAGE" ]; then
-                PACKAGE=\$(echo "\$line" | grep -oE 'ERROR: package/[^\s]+' | sed 's/ERROR: package\///')
-            fi
-            if [ -z "\$PACKAGE" ]; then
-                PACKAGE="未知"
-            fi
-            
-            # 检查是否已经记录过这个错误
-            ERROR_KEY="\${PACKAGE}:\${line}"
-            if echo "\$RECORDED_ERRORS" | grep -q "\$ERROR_KEY"; then
-                continue  # 已经记录过，跳过
-            fi
-            
-            # 添加到已记录错误列表
-            RECORDED_ERRORS="\${RECORDED_ERRORS}\${ERROR_KEY}\n"
-            
-            # 调用简化的错误记录函数
-            simple_log_error "\$line" "\$PACKAGE"
-            break  # 只记录第一个匹配的错误模式
+    local elapsed=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [[ $elapsed -ge $timeout ]]; then
+            kill "$pid" 2>/dev/null || true
+            error_exit "进程超时: $pid"
         fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
     done
-done
-EOF
     
-    chmod +x "$monitor_script"
-    echo "$monitor_script"
+    wait "$pid"
+    return $?
 }
 
-# 等待并终止监控进程
-wait_and_kill_monitor() {
-    local monitor_pid="$1"
+# 版本比较函数
+version_compare() {
+    local version1="$1"
+    local version2="$2"
     
-    if [ -n "$monitor_pid" ] && kill -0 "$monitor_pid" 2>/dev/null; then
-        kill "$monitor_pid" 2>/dev/null || true
-        wait "$monitor_pid" 2>/dev/null || true
-    fi
-}
-
-# 执行自定义脚本
-execute_custom_script() {
-    local script_path="$1"
-    local script_name="$2"
-    
-    # 确保日志系统已加载
-    if [ -z "$(type -t log)" ]; then
-        # 如果日志系统未加载，使用简单的日志函数
-        log() {
-            local level="$1"
-            local message="$2"
-            echo "[$level] $message"
-        }
-    fi
-    
-    if [ -f "$script_path" ]; then
-        log "INFO" "执行${script_name}脚本: $script_path"
-        chmod +x "$script_path" || {
-            log "ERROR" "设置${script_name}脚本权限失败"
-            return 1
-        }
-        
-        cd "$OPENWRT_PATH"
-        if "$script_path"; then
-            log "INFO" "${script_name}脚本执行成功"
-            return 0
-        else
-            log "ERROR" "${script_name}脚本执行失败"
-            return 1
-        fi
+    if [[ $version1 == $version2 ]]; then
+        echo 0
     else
-        log "WARN" "${script_name}脚本不存在，跳过"
-        return 0
+        local IFS=.
+        local i ver1=($version1) ver2=($version2)
+        
+        for ((i=${#ver1[@]}; i<${#ver2[@]}; i++)); do
+            ver1[i]=0
+        done
+        
+        for ((i=0; i<${#ver1[@]}; i++)); do
+            if [[ -z ${ver2[i]} ]]; then
+                ver2[i]=0
+            fi
+            
+            if ((10#${ver1[i]} > 10#${ver2[i]})); then
+                echo 1
+                return
+            fi
+            
+            if ((10#${ver1[i]} < 10#${ver2[i]})); then
+                echo -1
+                return
+            fi
+        done
+        
+        echo 0
     fi
 }
 
-# 导出函数
-export -f find_config_file check_result show_progress create_error_monitor wait_and_kill_monitor execute_custom_script
+# 生成随机字符串
+generate_random_string() {
+    local length="${1:-16}"
+    if command_exists openssl; then
+        openssl rand -hex $((length / 2))
+    else
+        tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c "$length"
+    fi
+}
+
+# 检查网络连接
+check_network() {
+    local url="${1:-https://www.google.com}"
+    local timeout="${2:-10}"
+    
+    if command_exists curl; then
+        curl -s --connect-timeout "$timeout" "$url" >/dev/null
+    elif command_exists wget; then
+        wget -q --timeout="$timeout" --tries=1 "$url" -O /dev/null
+    else
+        ping -c 1 -W "$timeout" 8.8.8.8 >/dev/null
+    fi
+}
+
+# 导出所有函数
+export -f log_info log_warn log_error log_debug
+export -f error_exit command_exists check_file check_dir
+export -f ensure_dir get_cpu_cores get_memory_gb calc_make_jobs
+export -f check_disk_space show_progress wait_for_process
+export -f version_compare generate_random_string check_network
