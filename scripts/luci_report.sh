@@ -10,8 +10,9 @@ source "${SCRIPT_DIR}/common.sh"
 
 # 使用说明
 usage() {
-    echo "用法: $0 <config_file> <output_file> [stage]"
-    echo "示例: $0 .config luci_report.txt 'defconfig后'"
+    echo "用法: $0 <config_file> <output_file> [stage] [before_config]"
+    echo "示例: $0 .config luci_report.txt 'defconfig后' .config.before_defconfig"
+    echo "      $0 .config luci_report.txt 'defconfig对比' .config.before_defconfig"
     exit 1
 }
 
@@ -23,6 +24,7 @@ fi
 CONFIG_FILE="$1"
 OUTPUT_FILE="$2"
 STAGE="${3:-'报告'}"
+BEFORE_CONFIG="${4:-}"
 
 # 日志函数
 log_info() {
@@ -184,6 +186,91 @@ EOF
     fi
 }
 
+# 生成对比报告
+generate_comparison_report() {
+    local before_file="$1"
+    local after_file="$2"
+    local output_file="$3"
+    
+    log_info "生成Luci软件包对比报告..."
+    
+    # 检查文件是否存在
+    if [[ ! -f "$before_file" ]]; then
+        log_warn "对比前的配置文件不存在: $before_file"
+        return
+    fi
+    
+    if [[ ! -f "$after_file" ]]; then
+        log_warn "对比后的配置文件不存在: $after_file"
+        return
+    fi
+    
+    # 使用Python生成对比报告
+    python3 -c "
+import os
+
+before_file = '$before_file'
+after_file = '$after_file'
+output_file = '$output_file'
+
+def extract_packages(filename):
+    packages = []
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            content = f.read()
+            for line in content.split('\n'):
+                if line.strip().startswith('  - '):
+                    packages.append(line.strip()[4:])
+    return sorted(packages)
+
+before_pkgs = extract_packages(before_file)
+after_pkgs = extract_packages(after_file)
+
+before_set = set(before_pkgs)
+after_set = set(after_pkgs)
+
+added = sorted(after_set - before_set)
+removed = sorted(before_set - after_set)
+
+report_lines = []
+report_lines.append('# Luci软件包变化报告 (make defconfig前后对比)')
+report_lines.append('')
+report_lines.append('## 统计信息')
+report_lines.append(f'- defconfig前: {len(before_pkgs)} 个包')
+report_lines.append(f'- defconfig后: {len(after_pkgs)} 个包')
+report_lines.append(f'- 新增: {len(added)} 个包')
+report_lines.append(f'- 移除: {len(removed)} 个包')
+report_lines.append('')
+report_lines.append('## 新增的软件包（由依赖自动引入）')
+
+if added:
+    for pkg in added:
+        report_lines.append(f'  + {pkg}')
+else:
+    report_lines.append('  无')
+
+report_lines.append('')
+report_lines.append('## 移除的软件包（因依赖问题被禁用）')
+
+if removed:
+    for pkg in removed:
+        report_lines.append(f'  - {pkg}')
+else:
+    report_lines.append('  无')
+
+report_lines.append('')
+report_lines.append('## 完整的软件包列表（defconfig后）')
+
+for pkg in after_pkgs:
+    report_lines.append(f'  * {pkg}')
+
+with open(output_file, 'w') as f:
+    f.write('\n'.join(report_lines))
+
+print('\n'.join(report_lines))
+"
+}
+
 # 主函数
 main() {
     log_info "生成Luci软件包报告 ($STAGE)..."
@@ -203,19 +290,38 @@ main() {
     # 提取Luci包
     extract_luci_packages "$CONFIG_FILE" "$temp_file"
     
-    # 生成分类报告
-    categorize_packages "$temp_file" "$OUTPUT_FILE"
+    # 如果是对比模式，生成对比报告
+    if [[ "$STAGE" == "defconfig对比" ]] && [[ -n "$BEFORE_CONFIG" ]]; then
+        local before_temp=$(mktemp)
+        trap "rm -f $before_temp" EXIT
+        extract_luci_packages "$BEFORE_CONFIG" "$before_temp"
+        
+        # 生成对比报告
+        generate_comparison_report "$before_temp" "$temp_file" "$OUTPUT_FILE"
+        
+        # 显示报告
+        if [[ -f "$OUTPUT_FILE" ]]; then
+            echo ""
+            echo -e "\033[1;34m========== make defconfig前后对比报告 ==========\033[0m"
+            echo ""
+            cat "$OUTPUT_FILE"
+            echo ""
+        fi
+    else
+        # 生成分类报告
+        categorize_packages "$temp_file" "$OUTPUT_FILE"
+        
+        # 显示报告内容
+        if [[ -f "$OUTPUT_FILE" ]]; then
+            echo ""
+            echo -e "\033[1;34m========== $STAGE 的Luci软件包报告 ==========\033[0m"
+            echo ""
+            cat "$OUTPUT_FILE"
+            echo ""
+        fi
+    fi
     
     log_info "Luci软件包报告已生成: $OUTPUT_FILE"
-    
-    # 显示报告内容
-    if [[ -f "$OUTPUT_FILE" ]]; then
-        echo ""
-        echo -e "\033[1;34m========== $STAGE 的Luci软件包报告 ==========\033[0m"
-        echo ""
-        cat "$OUTPUT_FILE"
-        echo ""
-    fi
 }
 
 # 执行主函数
