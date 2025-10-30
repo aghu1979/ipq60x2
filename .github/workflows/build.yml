@@ -20,7 +20,6 @@ jobs:
     name: 准备 ${{ matrix.repo_name }} 环境
     runs-on: ubuntu-22.04
     
-    # 定义要编译的源码仓库矩阵
     strategy:
       fail-fast: false
       matrix:
@@ -36,7 +35,6 @@ jobs:
             repo_branch: k6.12-nss
 
     outputs:
-      # 将仓库列表传递给下一个作业
       repo_matrix: ${{ steps.set_matrix.outputs.repo_matrix }}
 
     steps:
@@ -63,7 +61,8 @@ jobs:
 
       - name: 加载自定义脚本
         run: |
-          [ -e scripts ] && cp -rf scripts/*.sh openwrt/
+          # 【修正1】复制整个 scripts 目录，保持目录结构
+          cp -rf scripts openwrt/
           chmod +x openwrt/scripts/*.sh
 
       - name: 更新和安装 Feeds
@@ -103,7 +102,6 @@ jobs:
     needs: prepare
     runs-on: ubuntu-22.04
     
-    # 定义最终的编译矩阵: 仓库 x 变体
     strategy:
       fail-fast: false
       matrix:
@@ -127,17 +125,21 @@ jobs:
           sudo chown $USER:$GROUPS /workdir
 
       - name: 克隆源码
+        id: clone_repo # 添加 id 以便后续步骤引用
         working-directory: /workdir
         run: |
           # 从矩阵中获取仓库信息
           REPO_URL=$(jq -r ".${{ matrix.repo }}.url" "$CONFIGS_DIR/repos.json")
           REPO_BRANCH=$(jq -r ".${{ matrix.repo }}.branch" "$CONFIGS_DIR/repos.json")
+          # 【修正2】将 repo_branch 设置为环境变量，供缓存步骤使用
+          echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_ENV
           git clone "$REPO_URL" -b "$REPO_BRANCH" openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
       - name: 加载自定义脚本
         run: |
-          [ -e scripts ] && cp -rf scripts/*.sh openwrt/
+          # 【修正1】复制整个 scripts 目录，保持目录结构
+          cp -rf scripts openwrt/
           chmod +x openwrt/scripts/*.sh
 
       - name: 恢复缓存
@@ -146,10 +148,10 @@ jobs:
           path: |
             openwrt/dl
             openwrt/toolchain
-          key: ${{ matrix.repo }}-${{ matrix.repo_branch }}-${{ hashFiles('**/feeds.conf.default', '**/Ultra.config') }}
-          # 即使 key 不完全匹配，也会尝试恢复同仓库同分支的最新缓存
+          # 【修正2】使用环境变量 REPO_BRANCH 构建缓存键
+          key: ${{ matrix.repo }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default', '**/Ultra.config') }}
           restore-keys: |
-            ${{ matrix.repo }}-${{ matrix.repo_branch }}-
+            ${{ matrix.repo }}-${{ env.REPO_BRANCH }}-
 
       - name: 更新和安装 Feeds
         run: |
