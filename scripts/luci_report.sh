@@ -10,18 +10,19 @@ source "${SCRIPT_DIR}/common.sh"
 
 # 使用说明
 usage() {
-    echo "用法: $0 <config_file> <output_file>"
-    echo "示例: $0 .config luci_report.txt"
+    echo "用法: $0 <config_file> <output_file> [stage]"
+    echo "示例: $0 .config luci_report.txt 'defconfig后'"
     exit 1
 }
 
 # 检查参数
-if [[ $# -ne 2 ]]; then
+if [[ $# -lt 2 ]]; then
     usage
 fi
 
 CONFIG_FILE="$1"
 OUTPUT_FILE="$2"
+STAGE="${3:-'报告'}"
 
 # 日志函数
 log_info() {
@@ -185,7 +186,7 @@ EOF
 
 # 主函数
 main() {
-    log_info "生成Luci软件包报告..."
+    log_info "生成Luci软件包报告 ($STAGE)..."
     
     # 检查配置文件
     if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -209,6 +210,8 @@ main() {
     
     # 显示报告内容
     if [[ -f "$OUTPUT_FILE" ]]; then
+        echo ""
+        echo -e "\033[1;34m========== $STAGE 的Luci软件包报告 ==========\033[0m"
         echo ""
         cat "$OUTPUT_FILE"
         echo ""
