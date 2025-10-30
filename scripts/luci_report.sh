@@ -62,12 +62,15 @@ extract_luci_packages() {
     log_info "提取Luci软件包..."
     
     # 提取所有Luci包
-    if grep -q "^CONFIG_PACKAGE_luci.*=y$" "$config"; then
-        grep "^CONFIG_PACKAGE_luci.*=y$" "$config" | \
+    if grep -q "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null; then
+        grep "^CONFIG_PACKAGE_luci.*=y$" "$config" 2>/dev/null | \
             sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
-            sort > "$output"
+            sort > "$output" 2>/dev/null || {
+            log_warn "提取Luci软件包失败"
+            touch "$output"
+        }
         
-        local count=$(wc -l < "$output")
+        local count=$(wc -l < "$output" 2>/dev/null || echo "0")
         log_info "提取到 $count 个Luci软件包"
     else
         log_warn "未找到Luci软件包配置"
@@ -208,6 +211,7 @@ generate_comparison_report() {
     # 使用Python生成对比报告
     python3 -c "
 import os
+import sys
 
 before_file = '$before_file'
 after_file = '$after_file'
@@ -223,51 +227,57 @@ def extract_packages(filename):
                     packages.append(line.strip()[4:])
     return sorted(packages)
 
-before_pkgs = extract_packages(before_file)
-after_pkgs = extract_packages(after_file)
-
-before_set = set(before_pkgs)
-after_set = set(after_pkgs)
-
-added = sorted(after_set - before_set)
-removed = sorted(before_set - after_set)
-
-report_lines = []
-report_lines.append('# Luci软件包变化报告 (make defconfig前后对比)')
-report_lines.append('')
-report_lines.append('## 统计信息')
-report_lines.append(f'- defconfig前: {len(before_pkgs)} 个包')
-report_lines.append(f'- defconfig后: {len(after_pkgs)} 个包')
-report_lines.append(f'- 新增: {len(added)} 个包')
-report_lines.append(f'- 移除: {len(removed)} 个包')
-report_lines.append('')
-report_lines.append('## 新增的软件包（由依赖自动引入）')
-
-if added:
-    for pkg in added:
-        report_lines.append(f'  + {pkg}')
-else:
-    report_lines.append('  无')
-
-report_lines.append('')
-report_lines.append('## 移除的软件包（因依赖问题被禁用）')
-
-if removed:
-    for pkg in removed:
-        report_lines.append(f'  - {pkg}')
-else:
-    report_lines.append('  无')
-
-report_lines.append('')
-report_lines.append('## 完整的软件包列表（defconfig后）')
-
-for pkg in after_pkgs:
-    report_lines.append(f'  * {pkg}')
-
-with open(output_file, 'w') as f:
-    f.write('\n'.join(report_lines))
-
-print('\n'.join(report_lines))
+try:
+    before_pkgs = extract_packages(before_file)
+    after_pkgs = extract_packages(after_file)
+    
+    before_set = set(before_pkgs)
+    after_set = set(after_pkgs)
+    
+    added = sorted(after_set - before_set)
+    removed = sorted(before_set - after_set)
+    
+    report_lines = []
+    report_lines.append('# Luci软件包变化报告 (make defconfig前后对比)')
+    report_lines.append('')
+    report_lines.append('## 统计信息')
+    report_lines.append(f'- defconfig前: {len(before_pkgs)} 个包')
+    report_lines.append(f'- defconfig后: {len(after_pkgs)} 个包')
+    report_lines.append(f'- 新增: {len(added)} 个包')
+    report_lines.append(f'- 移除: {len(removed)} 个包')
+    report_lines.append('')
+    report_lines.append('## 新增的软件包（由依赖自动引入）')
+    
+    if added:
+        for pkg in added:
+            report_lines.append(f'  + {pkg}')
+    else:
+        report_lines.append('  无')
+    
+    report_lines.append('')
+    report_lines.append('## 移除的软件包（因依赖问题被禁用）')
+    
+    if removed:
+        for pkg in removed:
+            report_lines.append(f'  - {pkg}')
+    else:
+        report_lines.append('  无')
+    
+    report_lines.append('')
+    report_lines.append('## 完整的软件包列表（defconfig后）')
+    
+    for pkg in after_pkgs:
+        report_lines.append(f'  * {pkg}')
+    
+    with open(output_file, 'w') as f:
+        f.write('\n'.join(report_lines))
+    
+    print('\n'.join(report_lines))
+except Exception as e:
+    print(f'生成报告时出错: {e}')
+    # 生成一个简单的错误报告
+    with open(output_file, 'w') as f:
+        f.write('# Luci软件包变化报告\n\n生成报告时出错\n')
 "
 }
 
