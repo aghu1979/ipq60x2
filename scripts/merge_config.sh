@@ -2,13 +2,8 @@
 # 配置合并脚本
 # 功能：合并多个配置文件并生成报告
 
-# 注意：不使用 set -euo pipefail，以处理管道中的错误
-set -eo pipefail
-
-# 导入公共函数
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# 不导入 common.sh 中的 set -euo pipefail
-# source "${SCRIPT_DIR}/common.sh"
+# 完全不使用 set -euo pipefail，避免管道错误导致脚本退出
+set -e
 
 # 使用说明
 usage() {
@@ -104,7 +99,7 @@ clean_config() {
         return 1
     fi
     
-    local count=$(wc -l < "$output" 2>/dev/null || echo "0")
+    local count=$(cat "$output_file" 2>/dev/null | wc -l || echo "0")
     if [[ $count -gt 0 ]]; then
         log_info "从 $(basename "$input") 提取了 $count 个有效配置项"
     else
@@ -180,7 +175,7 @@ merge_configs() {
         exit 1
     fi
     
-    local final_count=$(wc -l < "$OUTPUT_CONFIG" 2>/dev/null || echo "0")
+    local final_count=$(cat "$OUTPUT_CONFIG" 2>/dev/null | wc -l || echo "0")
     log_info "配置合并完成: $OUTPUT_CONFIG (共 $final_count 个配置项)"
     
     # 清理临时文件
@@ -218,7 +213,7 @@ extract_luci_packages() {
             touch "$output_file"
         }
         
-        local count=$(wc -l < "$output_file" 2>/dev/null || echo "0")
+        local count=$(cat "$output_file" 2>/dev/null | wc -l || echo "0")
         log_info "找到 $count 个Luci软件包"
     else
         log_warn "未找到Luci软件包配置"
@@ -240,63 +235,57 @@ generate_diff_report() {
     [[ ! -f "$after_file" ]] && touch "$after_file"
     
     # 创建报告文件
-    cat > "$report_file" << EOF
-# Luci软件包差异报告 ($stage)
-
-## 统计信息
-EOF
-    
-    # 计算统计信息
-    local before_count=$(wc -l < "$before_file" 2>/dev/null || echo "0")
-    local after_count=$(wc -l < "$after_file" 2>/dev/null || echo "0")
-    local added_count=$(comm -13 "$before_file" "$after_file" 2>/dev/null | wc -l || echo "0")
-    local removed_count=$(comm -23 "$before_file" "$after_file" 2>/dev/null | wc -l || echo "0")
-    
-    cat >> "$report_file" << EOF
-- $stage 前Luci包数量: $before_count
-- $stage 后Luci包数量: $after_count
-- 新增Luci包数量: $added_count
-- 移除Luci包数量: $removed_count
-
-## 新增的Luci软件包
-EOF
-    
-    # 列出新增的包
-    if [[ $added_count -gt 0 ]]; then
-        comm -13 "$before_file" "$after_file" 2>/dev/null | while read -r pkg; do
-            echo "  + $pkg" >> "$report_file"
-        done
-    else
-        echo "  无新增包" >> "$report_file"
-    fi
-    
-    cat >> "$report_file" << EOF
-
-## 移除的Luci软件包
-EOF
-    
-    # 列出移除的包
-    if [[ $removed_count -gt 0 ]]; then
-        comm -23 "$before_file" "$after_file" 2>/dev/null | while read -r pkg; do
-            echo "  - $pkg" >> "$report_file"
-        done
-    else
-        echo "  无移除包" >> "$report_file"
-    fi
-    
-    cat >> "$report_file" << EOF
-
-## 完整的Luci软件包列表
-EOF
-    
-    # 列出所有包
-    if [[ -s "$after_file" ]]; then
-        cat "$after_file" | while read -r pkg; do
-            echo "  * $pkg" >> "$report_file"
-        done
-    else
-        echo "  无Luci软件包" >> "$report_file"
-    fi
+    {
+        echo "# Luci软件包差异报告 ($stage)"
+        echo ""
+        echo "## 统计信息"
+        
+        # 计算统计信息
+        local before_count=$(cat "$before_file" 2>/dev/null | wc -l || echo "0")
+        local after_count=$(cat "$after_file" 2>/dev/null | wc -l || echo "0")
+        local added_count=$(comm -13 "$before_file" "$after_file" 2>/dev/null | wc -l || echo "0")
+        local removed_count=$(comm -23 "$before_file" "$after_file" 2>/dev/null | wc -l || echo "0")
+        
+        echo "- $stage 前Luci包数量: $before_count"
+        echo "- $stage 后Luci包数量: $after_count"
+        echo "- 新增Luci包数量: $added_count"
+        echo "- 移除Luci包数量: $removed_count"
+        echo ""
+        echo "## 新增的Luci软件包"
+        
+        # 列出新增的包
+        if [[ $added_count -gt 0 ]]; then
+            comm -13 "$before_file" "$after_file" 2>/dev/null | while read -r pkg; do
+                echo "  + $pkg"
+            done
+        else
+            echo "  无新增包"
+        fi
+        
+        echo ""
+        echo "## 移除的Luci软件包"
+        
+        # 列出移除的包
+        if [[ $removed_count -gt 0 ]]; then
+            comm -23 "$before_file" "$after_file" 2>/dev/null | while read -r pkg; do
+                echo "  - $pkg"
+            done
+        else
+            echo "  无移除包"
+        fi
+        
+        echo ""
+        echo "## 完整的Luci软件包列表"
+        
+        # 列出所有包
+        if [[ -s "$after_file" ]]; then
+            cat "$after_file" | while read -r pkg; do
+                echo "  * $pkg"
+            done
+        else
+            echo "  无Luci软件包"
+        fi
+    } > "$report_file"
     
     log_info "差异报告已生成: $report_file"
 }
