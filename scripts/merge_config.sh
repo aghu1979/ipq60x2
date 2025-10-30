@@ -229,16 +229,17 @@ generate_diff_report() {
     local before_file="$1"
     local after_file="$2"
     local report_file="$3"
+    local stage="$4"  # 添加阶段标识
     
-    log_info "生成Luci软件包差异报告..."
+    log_info "生成Luci软件包差异报告 ($stage)..."
     
     # 检查文件是否存在
     [[ ! -f "$before_file" ]] && touch "$before_file"
     [[ ! -f "$after_file" ]] && touch "$after_file"
     
     # 创建报告文件
-    cat > "$report_file" << 'EOF'
-# Luci软件包差异报告
+    cat > "$report_file" << EOF
+# Luci软件包差异报告 ($stage)
 
 ## 统计信息
 EOF
@@ -250,8 +251,8 @@ EOF
     local removed_count=$(comm -23 "$before_file" "$after_file" 2>/dev/null | wc -l || echo "0")
     
     cat >> "$report_file" << EOF
-- 合并前Luci包数量: $before_count
-- 合并后Luci包数量: $after_count
+- $stage 前Luci包数量: $before_count
+- $stage 后Luci包数量: $after_count
 - 新增Luci包数量: $added_count
 - 移除Luci包数量: $removed_count
 
@@ -301,6 +302,7 @@ EOF
 # 高亮显示报告
 highlight_report() {
     local report_file="$1"
+    local title="$2"
     
     # 检查报告文件是否存在
     if [[ ! -f "$report_file" ]]; then
@@ -308,7 +310,8 @@ highlight_report() {
         return
     fi
     
-    log_info "显示Luci软件包报告（高亮模式）："
+    echo ""
+    echo -e "\033[1;34m========== $title ==========\033[0m"
     echo ""
     
     # 使用颜色高亮显示
@@ -391,18 +394,17 @@ main() {
     # 验证配置
     validate_config "$OUTPUT_CONFIG"
     
-    # 保存合并后的Luci包列表
-    local after_luci="$temp_dir/luci_after.txt"
-    extract_luci_packages "$OUTPUT_CONFIG" "$after_luci"
+    # 保存合并后的Luci包列表（defconfig前）
+    local merged_luci="$temp_dir/luci_merged.txt"
+    extract_luci_packages "$OUTPUT_CONFIG" "$merged_luci"
     
-    # 生成差异报告
-    local report_file="${OUTPUT_CONFIG}.luci_report.md"
-    generate_diff_report "$before_luci" "$after_luci" "$report_file"
-    
-    # 高亮显示报告
-    highlight_report "$report_file"
+    # 生成合并阶段的报告
+    local merge_report="${OUTPUT_CONFIG}.merge_report.md"
+    generate_diff_report "$before_luci" "$merged_luci" "$merge_report" "配置合并"
+    highlight_report "$merge_report" "配置合并阶段的Luci软件包变化"
     
     log_info "配置合并流程完成"
+    log_info "接下来请运行 make defconfig 来处理依赖关系"
 }
 
 # 执行主函数
