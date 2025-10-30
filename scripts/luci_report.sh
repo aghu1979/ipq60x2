@@ -33,7 +33,7 @@ log_warn() {
 }
 
 log_error() {
-    echo -e "\033[31m[ERROR]\033[0m $*"
+    echo -e "\033[31m[1000m[ERROR]\033[0m $*"
 }
 
 # 确保输出目录存在
@@ -243,7 +243,7 @@ generate_comparison_report() {
         return
     fi
     
-    # 使用纯bash生成对比报告，避免Python问题
+    # 使用纯bash生成对比报告
     {
         echo "# Luci软件包变化报告 (make defconfig前后对比)"
         echo ""
@@ -254,7 +254,7 @@ generate_comparison_report() {
         local -a after_pkgs=()
         
         # 读取defconfig前的包
-        while IFS= read -r pkg; do
+        while IFS= -r pkg; do
             if [[ -n "$pkg" ]]; then
                 before_pkgs+=("$pkg")
             fi
