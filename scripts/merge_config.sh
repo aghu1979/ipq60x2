@@ -405,6 +405,7 @@ main() {
     
     log_info "配置合并流程完成"
     log_info "接下来请运行 make defconfig 来处理依赖关系"
+    log_info "defconfig后，请运行 luci_report.sh 生成对比报告"
 }
 
 # 执行主函数
