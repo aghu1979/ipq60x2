@@ -89,9 +89,9 @@ extract_luci_packages() {
                     sed 's/^CONFIG_PACKAGE_//' | \
                     sed 's/=y$//' | \
                     sort > "$output" 2>/dev/null || {
-                        log_error "备用方法也失败"
-                        > "$output"
-                    }
+                    log_error "备用方法也失败"
+                    > "$output"
+                }
             }
             
             # 验证输出文件
@@ -154,7 +154,7 @@ categorize_packages() {
         
         # 统计总数
         local total_count
-        total_count=$(cat "$input_file" 2>/dev/null | wc -l || echo "0")
+        total_count=$(cat "$input_file" 2>/dev/null | wc -l || echo "0"
         echo "- 总包数: $total_count"
         echo ""
         echo "## 分类统计"
@@ -164,7 +164,7 @@ categorize_packages() {
         
         # 使用更简单的方式统计
         for category in "${categories[@]}"; do
-            local pattern="${category#*:}"
+            pattern="${category#*:}"
             local count=0
             
             while IFS= read -r pkg; do
@@ -184,7 +184,7 @@ categorize_packages() {
         
         # 详细列表
         for category in "${categories[@]}"; do
-            local pattern="${category#*:}"
+            pattern="${category#*:}"
             echo ""
             echo "### ${category%:*}"
             
@@ -209,7 +209,7 @@ categorize_packages() {
             while IFS= read -r pkg; do
                 local categorized=false
                 for category in "${categories[@]}"; do
-                    local pattern="${category#*:}"
+                    pattern="${category#*:}"
                     if [[ "$pkg" == $pattern* ]]; then
                         categorized=true
                         break
@@ -347,7 +347,7 @@ main() {
         log_warn "配置文件不存在: $CONFIG_FILE"
     fi
     
-    # �保输出目录存在
+    # 确保输出目录存在
     if ! ensure_output_dir; then
         log_error "无法创建输出目录，但继续执行"
     fi
@@ -370,7 +370,7 @@ main() {
             log_error "无法创建临时文件"
             exit 1
         }
-        trap "rm -f $before_temp" EXIT
+        trap "rm -f "$before_temp" EXIT
         extract_luci_packages "$BEFORE_CONFIG" "$before_temp"
         
         # 生成对比报告
