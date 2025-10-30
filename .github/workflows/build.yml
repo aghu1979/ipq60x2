@@ -9,9 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  # 使用绝对路径，避免混淆
-  SCRIPTS_DIR: /workdir/scripts
-  CONFIGS_DIR: /workdir/configs
+  CONFIGS_DIR: configs
   FEEDS_CONF: feeds.conf.default
   DIY_P1_SH: scripts/diy.sh
   DIY_P2_SH: scripts/diy.sh
@@ -52,45 +50,36 @@ jobs:
           sudo -E apt-get -qq clean
           sudo timedatectl set-timezone "Asia/Shanghai"
           sudo apt-get install -y jq
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
 
       - name: 克隆源码
-        working-directory: /workdir
-        run: |
-          git clone ${{ matrix.repo_url }} -b ${{ matrix.repo_branch }} openwrt
+        run: git clone ${{ matrix.repo_url }} -b ${{ matrix.repo_branch }} openwrt
 
-      - name: 加载自定义脚本和配置
-        run: |
-          # 【修正】将脚本和配置目录复制到 /workdir，避免路径问题
-          cp -rf $GITHUB_WORKSPACE/scripts /workdir/
-          cp -rf $GITHUB_WORKSPACE/configs /workdir/
-          chmod +x $SCRIPTS_DIR/*.sh
+      - name: 加载自定义脚本
+        run: chmod +x scripts/*.sh
 
       - name: 更新和安装 Feeds
         run: |
-          cd /workdir/openwrt
-          $SCRIPTS_DIR/repo.sh
+          cd openwrt
+          ../scripts/repo.sh
           ./scripts/feeds install -a
 
       - name: 合并 Ultra 配置 (用于最大化依赖)
         run: |
-          cd /workdir/openwrt
-          # 【修正】使用绝对路径调用脚本
-          $SCRIPTS_DIR/merge_configs.sh "${{ matrix.repo_name }}" "Ultra"
+          cd openwrt
+          ../scripts/merge_configs.sh "${{ matrix.repo_name }}" "Ultra"
 
       - name: 下载所有软件包
-        run: cd /workdir/openwrt && make download -j$(nproc)
+        run: cd openwrt && make download -j$(nproc)
 
       - name: 编译工具链
-        run: cd /workdir/openwrt && make toolchain -j$(nproc)
+        run: cd openwrt && make toolchain -j$(nproc)
 
       - name: 设置缓存
         uses: actions/cache@v4
         with:
           path: |
-            /workdir/openwrt/dl
-            /workdir/openwrt/toolchain
+            openwrt/dl
+            openwrt/toolchain
           key: ${{ matrix.repo_name }}-${{ matrix.repo_branch }}-${{ hashFiles('**/feeds.conf.default', '**/Ultra.config') }}
           restore-keys: |
             ${{ matrix.repo_name }}-${{ matrix.repo_branch }}-
@@ -124,71 +113,63 @@ jobs:
           sudo -E apt-get -qq clean
           sudo timedatectl set-timezone "Asia/Shanghai"
           sudo apt-get install -y jq
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
 
       - name: 克隆源码
         id: clone_repo
-        working-directory: /workdir
         run: |
-          REPO_URL=$(jq -r ".${{ matrix.repo }}.url" "$GITHUB_WORKSPACE/configs/repos.json")
-          REPO_BRANCH=$(jq -r ".${{ matrix.repo }}.branch" "$GITHUB_WORKSPACE/configs/repos.json")
+          REPO_URL=$(jq -r ".${{ matrix.repo }}.url" "$CONFIGS_DIR/repos.json")
+          REPO_BRANCH=$(jq -r ".${{ matrix.repo }}.branch" "$CONFIGS_DIR/repos.json")
           echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_ENV
           git clone "$REPO_URL" -b "$REPO_BRANCH" openwrt
 
-      - name: 加载自定义脚本和配置
-        run: |
-          # 【修正】将脚本和配置目录复制到 /workdir
-          cp -rf $GITHUB_WORKSPACE/scripts /workdir/
-          cp -rf $GITHUB_WORKSPACE/configs /workdir/
-          chmod +x $SCRIPTS_DIR/*.sh
+      - name: 加载自定义脚本
+        run: chmod +x scripts/*.sh
 
       - name: 恢复缓存
         uses: actions/cache@v4
         with:
           path: |
-            /workdir/openwrt/dl
-            /workdir/openwrt/toolchain
+            openwrt/dl
+            openwrt/toolchain
           key: ${{ matrix.repo }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default', '**/Ultra.config') }}
           restore-keys: |
             ${{ matrix.repo }}-${{ env.REPO_BRANCH }}-
 
       - name: 更新和安装 Feeds
         run: |
-          cd /workdir/openwrt
-          $SCRIPTS_DIR/repo.sh
+          cd openwrt
+          ../scripts/repo.sh
           ./scripts/feeds install -a
 
       - name: 合并配置文件
         run: |
-          cd /workdir/openwrt
-          # 【修正】使用绝对路径调用脚本
-          $SCRIPTS_DIR/merge_configs.sh "${{ matrix.repo }}" "${{ matrix.variant }}"
+          cd openwrt
+          ../scripts/merge_configs.sh "${{ matrix.repo }}" "${{ matrix.variant }}"
 
       - name: 生成 defconfig 前的 Luci 报告
         run: |
-          cd /workdir/openwrt
+          cd openwrt
           cp .config .config.before_defconfig
-          $SCRIPTS_DIR/luci_report.sh .config.before_defconfig luci_report_before.txt "defconfig前"
+          ../scripts/luci_report.sh .config.before_defconfig luci_report_before.txt "defconfig前"
 
       - name: 生成 Defconfig
-        run: cd /workdir/openwrt && make defconfig
+        run: cd openwrt && make defconfig
 
       - name: 生成 defconfig 后的 Luci 报告与对比
         run: |
-          cd /workdir/openwrt
-          $SCRIPTS_DIR/luci_report.sh .config luci_report_after.txt "defconfig后"
-          $SCRIPTS_DIR/luci_report.sh .config luci_report_diff.txt "defconfig对比" .config.before_defconfig
+          cd openwrt
+          ../scripts/luci_report.sh .config luci_report_after.txt "defconfig后"
+          ../scripts/luci_report.sh .config luci_report_diff.txt "defconfig对比" .config.before_defconfig
 
       - name: 加载 DIY Part 1 (添加软件源)
-        run: cd /workdir/openwrt && ./${{ env.DIY_P1_SH }} P1
+        run: cd openwrt && ./${{ env.DIY_P1_SH }} P1
 
       - name: 加载 DIY Part 2 (修改默认设置)
-        run: cd /workdir/openwrt && ./${{ env.DIY_P2_SH }} P2
+        run: cd openwrt && ./${{ env.DIY_P2_SH }} P2
 
       - name: 编译固件
         run: |
-          cd /workdir/openwrt
+          cd openwrt
           echo -e "$(nproc) thread build."
           make -j$(nproc) || make -j1 || make -j1 V=s
 
@@ -197,5 +178,5 @@ jobs:
         with:
           name: ${{ matrix.repo }}_${{ matrix.variant }}_firmware
           path: |
-            /workdir/openwrt/bin/targets/ipq60xx/generic/*
-            /workdir/openwrt/luci_report_*.txt
+            openwrt/bin/targets/ipq60xx/generic/*
+            openwrt/luci_report_*.txt
