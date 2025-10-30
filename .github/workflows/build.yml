@@ -193,6 +193,12 @@ jobs:
           export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           
+          # 确保输出目录存在
+          mkdir -p $OUTPUT_DIR
+          
+          # 清理旧配置
+          rm -f .config
+          
           # 合并配置
           ${SCRIPTS_DIR}/merge_config.sh \
             ${CONFIGS_DIR}/base_${CHIP_SUBTARGET}.config \
@@ -203,8 +209,7 @@ jobs:
           # 补全配置
           make defconfig
           
-          # 生成Luci包报告
-          ${SCRIPTS_DIR}/luci_report.sh .config $OUTPUT_DIR/luci_report_before.txt
+          # 生成Luci包报告（补全后）
           ${SCRIPTS_DIR}/luci_report.sh .config $OUTPUT_DIR/luci_report_after.txt
 
       - name: 下载软件包
