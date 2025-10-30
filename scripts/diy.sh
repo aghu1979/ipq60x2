@@ -1,59 +1,83 @@
 #!/bin/bash
-# 固件DIY脚本 - 精简优化版本
-# 功能：设置固件初始配置
+set -e
 
-set -euo pipefail
+# =============================================================================
+# DIY Part 1 & 2 Script
+# =============================================================================
 
-# 日志函数
-log() {
-  echo -e "\033[32m[INFO]\033[0m $*"
-}
+# --- Configuration for P1 ---
+# Custom feeds to add
+CUSTOM_FEEDS=(
+    "src-git small https://github.com/kenzok8/small-package"
+)
+# Custom packages to clone
+declare -A CUSTOM_PACKAGES=(
+    ["luci-app-openclash"]="https://github.com/vernesong/OpenClash.git"
+)
 
-error() {
-  echo -e "\033[31m[ERROR]\033[0m $*"
-  exit 1
-}
+# --- Configuration for P2 ---
+# Default system settings
+DEFAULT_HOSTNAME="WRT"
+DEFAULT_IP_ADDR="192.168.111.1"
+# --- End of Configuration ---
 
-warning() {
-  echo -e "\033[33m[WARN]\033[0m $*"
-}
 
-# 设置默认IP为192.168.111.1
-log "设置默认IP为192.168.111.1..."
-sed -i 's/192.168.1.1/192.168.111.1/g' || error "修改默认IP失败"
+case "$1" in
+"P1")
+    echo ">>> DIY Part 1: Adding custom feeds and packages"
+    # Add custom feeds
+    for feed in "${CUSTOM_FEEDS[@]}"; do
+        echo "Adding feed: $feed"
+        echo "$feed" >> feeds.conf.default
+    done
 
-# 设置密码为空
-log "设置密码为空..."
-sed -i 's/root::0:0:0:99999:7:::/g' package/base-files/files/etc/shadow || error "设置密码为空失败"
+    # Clone custom packages
+    for pkg_dir in "${!CUSTOM_PACKAGES[@]}"; do
+        pkg_url="${CUSTOM_PACKAGES[$pkg_dir]}"
+        echo "Cloning package '$pkg_dir' from '$pkg_url'"
+        rm -rf "package/$pkg_dir"
+        if ! git clone "$pkg_url" "package/$pkg_dir"; then
+            echo "错误: 克隆包 $pkg_dir 失败!" >&2
+            exit 1
+        fi
+    done
+    ;;
+"P2")
+    echo ">>> DIY Part 2: Applying default system settings"
+    # Modify default settings
+    sed -i "s/OpenWrt/$DEFAULT_HOSTNAME/g" package/base-files/files/bin/config_generate
+    sed -i "s/192.168.1.1/$DEFAULT_IP_ADDR/g" package/base-files/files/bin/config_generate
+    
+    # Set root password to empty
+    echo "Setting root password to empty..."
+    mkdir -p files/etc
+    cat > files/etc/shadow <<EOF
+root:::0:99999:7:::
+daemon:*:0:0:99999:7:::
+adm:*:0:0:99999:7:::
+mail:*:0:0:99999:7:::
+ftp:*:0:0:99999:7:::
+nobody:*:0:0:99999:7:::
+EOF
 
-# 设置机器名为WRT
-log "设置机器名为WRT..."
-sed -i 's/OpenWrt/WRT/g' || error "设置机器名失败"
-
-# 调整Argon主题显示
-if [ -d "feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css" ]; then
-    log_info "优化Argon主题显示..."
-    sed -i '/^\.td\.cbi-section-actions {$/,/^}$/ {
-      /^}$/a\
-        /^}$/a\
-        echo ' \
-.cbi-section.fade-in .cbi-section-actions {$/,/^}$/ {
-          /^}$/a\
-          echo ' \
-.cbi-section.fade-in .cbi-section-actions {\
-            position: relative;\
-            min-height: 2.765rem\
-            display: flex;\
-            align-items: center;\
-            right: 1rem\
-            position: absolute;\
-            right: 1rem\
-          '}' \
-        } \
-    ' feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css/cascade.css || error "优化Argon主题失败"
-    log_info "Argon主题优化完成"
-else
-    warning "未找到Argon主题，跳过优化"
-fi
-
-log_info "自定义配置应用完成"
+    # Rename device name (merged from old device_rename.sh)
+    NETWORK_CONFIG_FILE="target/linux/ipq60xx/base-files/etc/board.d/02_network"
+    declare -A DEVICE_RENAME_MAP=(
+        ["ipq60xx-ax6000"]="IPQ60xx-AX6000"
+    )
+    if [ -f "$NETWORK_CONFIG_FILE" ]; then
+        echo "Modifying device names in $NETWORK_CONFIG_FILE"
+        for old_name in "${!DEVICE_RENAME_MAP[@]}"; do
+            new_name="${DEVICE_RENAME_MAP[$old_name]}"
+            echo "  - Renaming '$old_name' to '$new_name'"
+            sed -i "s/$old_name/$new_name/g" "$NETWORK_CONFIG_FILE"
+        done
+    else
+        echo "Warning: File $NETWORK_CONFIG_FILE not found. Skipping device rename." >&2
+    fi
+    ;;
+*)
+    echo "用法: $0 {P1|P2}" >&2
+    exit 1
+    ;;
+esac
