@@ -14,7 +14,8 @@ on:
 
 env:
   # 主仓库地址（包含配置文件）
-  MAIN_REPO_URL: https://github.com/aghu1979/ipq60x2
+  MAIN_REPO_OWNER: aghu1979
+  MAIN_REPO_NAME: ipq60x2
   MAIN_REPO_BRANCH: main
   CONFIGS_DIR: configs
   SCRIPTS_DIR: scripts
@@ -41,7 +42,7 @@ jobs:
       - name: 检出主仓库
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.MAIN_REPO_URL }}
+          repository: ${{ env.MAIN_REPO_OWNER }}/${{ env.MAIN_REPO_NAME }}
           ref: ${{ env.MAIN_REPO_BRANCH }}
 
       - name: 设置环境变量
@@ -114,7 +115,7 @@ jobs:
       - name: 检出主仓库
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.MAIN_REPO_URL }}
+          repository: ${{ env.MAIN_REPO_OWNER }}/${{ env.MAIN_REPO_NAME }}
           ref: ${{ env.MAIN_REPO_BRANCH }}
 
       - name: 安装依赖
@@ -219,6 +220,7 @@ jobs:
           
           # 复制编译产物
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
+          export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
           export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           mkdir -p $OUTPUT_DIR
           cp bin/targets/${CHIP_FAMILY}/${CHIP_SUBTARGET}/* $OUTPUT_DIR/ 2>/dev/null || true
@@ -243,7 +245,7 @@ jobs:
       - name: 检出主仓库
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.MAIN_REPO_URL }}
+          repository: ${{ env.MAIN_REPO_OWNER }}/${{ env.MAIN_REPO_NAME }}
           ref: ${{ env.MAIN_REPO_BRANCH }}
 
       - name: 下载Ultra编译产物
@@ -348,7 +350,7 @@ jobs:
       - name: 检出主仓库
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.MAIN_REPO_URL }}
+          repository: ${{ env.MAIN_REPO_OWNER }}/${{ env.MAIN_REPO_NAME }}
           ref: ${{ env.MAIN_REPO_BRANCH }}
 
       - name: 下载所有编译产物
@@ -383,7 +385,7 @@ jobs:
           
           ## 发布信息
           - 发布日期: ${{ needs.prepare.outputs.build_date }}
-          - 配置仓库: ${{ env.MAIN_REPO_URL }}
+          - 配置仓库: https://github.com/${{ env.MAIN_REPO_OWNER }}/${{ env.MAIN_REPO_NAME }}
           - 编译设备: ${{ join(needs.prepare.outputs.devices, ', ') }}
           - 配置哈希: ${{ needs.prepare.outputs.config_hash }}
           
