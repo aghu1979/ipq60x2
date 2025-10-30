@@ -1,0 +1,338 @@
+name: IPQ60xx 固件编译
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '发布标签（留空则自动生成）'
+        required: false
+        type: string
+  push:
+    branches: [ main, master ]
+  schedule:
+    - cron: '0 2 * * 1'  # 每周一凌晨2点自动编译
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  REPO_BRANCH: master
+  FEEDS_CONF: feeds.conf.default
+  CONFIGS_DIR: configs
+  SCRIPTS_DIR: scripts
+  OUTPUT_DIR: output
+  RELEASE_NAME: IPQ60xx-Firmware
+
+jobs:
+  # 准备阶段：获取配置和设备信息
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      devices: ${{ steps.extract_devices.outputs.devices }}
+      build_date: ${{ steps.set_date.outputs.date }}
+      release_tag: ${{ steps.set_tag.outputs.tag }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置环境变量
+        id: set_date
+        run: |
+          echo "date=$(date +'%Y.%m.%d')" >> $GITHUB_OUTPUT
+
+      - name: 设置发布标签
+        id: set_tag
+        run: |
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.release_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 提取设备名称
+        id: extract_devices
+        run: |
+          python3 << 'EOF'
+          import re
+          
+          # 读取芯片基础配置
+          with open('${{ env.CONFIGS_DIR }}/base_ipq60xx.config', 'r') as f:
+              content = f.read()
+          
+          # 提取设备名称
+          pattern = r'CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_(.+?)=y'
+          devices = re.findall(pattern, content)
+          
+          # 输出JSON格式
+          import json
+          print(f"devices={json.dumps(devices)}")
+          EOF
+
+  # 第一阶段：并行编译Ultra变体
+  build-ultra:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        branch: [immwrt, libwrt, openwrt]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential ccache ecj fastjar file g++ gawk \
+            gettext git java-propose-classpath libelf-dev \
+            libncurses5-dev libncursesw5-dev libssl-dev \
+            python3 unzip wget python3-distutils python3-setuptools \
+            python3-dev rsync subversion swig time xsltproc zlib1g-dev \
+            python3-pyelftools
+
+      - name: 设置缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            dl
+            staging_dir
+            build_dir
+          key: ${{ runner.os }}-ultra-${{ matrix.branch }}-${{ needs.prepare.outputs.build_date }}
+          restore-keys: |
+            ${{ runner.os }}-ultra-${{ matrix.branch }}-
+            ${{ runner.os }}-ultra-
+
+      - name: 初始化编译环境
+        run: |
+          # 设置环境变量
+          export CCACHE_DIR=$PWD/.ccache
+          export CCACHE_COMPRESS=1
+          export CCACHE_MAXSIZE=20G
+          export CONFIG_BRANCH=${{ matrix.branch }}
+          export CONFIG_VARIANT=Ultra
+          export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
+          
+          # 创建输出目录
+          mkdir -p $OUTPUT_DIR
+          
+          # 克隆源码
+          git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
+          cd openwrt
+          
+          # 执行初始化脚本
+          chmod +x ../${{ env.SCRIPTS_DIR }}/*.sh
+          ../${{ env.SCRIPTS_DIR }}/repo.sh
+          ../${{ env.SCRIPTS_DIR }}/diy.sh
+
+      - name: 合并配置文件
+        run: |
+          cd openwrt
+          export CONFIG_BRANCH=${{ matrix.branch }}
+          export CONFIG_VARIANT=Ultra
+          export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
+          
+          # 合并配置
+          ../${{ env.SCRIPTS_DIR }}/merge_config.sh \
+            ${{ env.CONFIGS_DIR }}/base_ipq60xx.config \
+            ${{ env.CONFIGS_DIR }}/base_${{ matrix.branch }}.config \
+            ${{ env.CONFIGS_DIR }}/Ultra.config \
+            .config
+          
+          # 补全配置
+          make defconfig
+          
+          # 生成Luci包报告
+          ../${{ env.SCRIPTS_DIR }}/luci_report.sh .config $OUTPUT_DIR/luci_report_before.txt
+          ../${{ env.SCRIPTS_DIR }}/luci_report.sh .config $OUTPUT_DIR/luci_report_after.txt
+
+      - name: 下载软件包
+        run: |
+          cd openwrt
+          make download -j$(nproc)
+          find dl -size -1024c -exec ls -l {} \;
+
+      - name: 编译固件
+        run: |
+          cd openwrt
+          make -j$(nproc) || make -j1 V=s
+          
+          # 复制编译产物
+          export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
+          mkdir -p $OUTPUT_DIR
+          cp bin/targets/qualcommax/ipq60xx/* $OUTPUT_DIR/ 2>/dev/null || true
+          cp bin/packages/* $OUTPUT_DIR/packages/ 2>/dev/null || true
+
+      - name: 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultra-${{ matrix.branch }}
+          path: ${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra/
+          retention-days: 7
+
+  # 第二阶段：编译Max和Pro变体
+  build-others:
+    needs: [prepare, build-ultra]
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        variant: [Max, Pro]
+        branch: [immwrt, libwrt, openwrt]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载Ultra编译产物
+        uses: actions/download-artifact@v4
+        with:
+          name: ultra-${{ matrix.branch }}
+          path: ${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra/
+
+      - name: 设置缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            dl
+            staging_dir
+            build_dir
+          key: ${{ runner.os }}-${{ matrix.variant }}-${{ matrix.branch }}-${{ needs.prepare.outputs.build_date }}
+          restore-keys: |
+            ${{ runner.os }}-ultra-${{ matrix.branch }}-
+            ${{ runner.os }}-${{ matrix.variant }}-${{ matrix.branch }}-
+
+      - name: 编译${{ matrix.variant }}变体
+        run: |
+          # 设置环境变量
+          export CCACHE_DIR=$PWD/.ccache
+          export CCACHE_COMPRESS=1
+          export CCACHE_MAXSIZE=20G
+          export CONFIG_BRANCH=${{ matrix.branch }}
+          export CONFIG_VARIANT=${{ matrix.variant }}
+          export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-${{ matrix.variant }}
+          
+          # 创建输出目录
+          mkdir -p $OUTPUT_DIR
+          
+          # 如果存在Ultra编译环境，直接使用
+          if [ -d "openwrt" ]; then
+            echo "使用现有编译环境"
+          else
+            # 克隆源码
+            git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
+            cd openwrt
+            
+            # 执行初始化脚本
+            chmod +x ../${{ env.SCRIPTS_DIR }}/*.sh
+            ../${{ env.SCRIPTS_DIR }}/repo.sh
+            ../${{ env.SCRIPTS_DIR }}/diy.sh
+            cd ..
+          fi
+          
+          cd openwrt
+          
+          # 合并配置
+          ../${{ env.SCRIPTS_DIR }}/merge_config.sh \
+            ${{ env.CONFIGS_DIR }}/base_ipq60xx.config \
+            ${{ env.CONFIGS_DIR }}/base_${{ matrix.branch }}.config \
+            ${{ env.CONFIGS_DIR }}/${{ matrix.variant }}.config \
+            .config
+          
+          # 补全配置
+          make defconfig
+          
+          # 只编译差异部分
+          make -j$(nproc) || make -j1 V=s
+          
+          # 复制编译产物
+          mkdir -p $OUTPUT_DIR
+          cp bin/targets/qualcommax/ipq60xx/* $OUTPUT_DIR/ 2>/dev/null || true
+          cp bin/packages/* $OUTPUT_DIR/packages/ 2>/dev/null || true
+
+      - name: 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant }}-${{ matrix.branch }}
+          path: ${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-${{ matrix.variant }}/
+          retention-days: 7
+
+  # 设备重命名和发布
+  release:
+    needs: [prepare, build-others]
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载所有编译产物
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ env.OUTPUT_DIR }}/
+
+      - name: 设备重命名
+        run: |
+          # 为每个设备重命名固件
+          for device in $(echo '${{ needs.prepare.outputs.devices }}' | jq -r '.[]'); do
+            echo "处理设备: $device"
+            
+            # 重命名各分支的固件
+            for branch in immwrt libwrt openwrt; do
+              for variant in Ultra Max Pro; do
+                src_dir="${{ env.OUTPUT_DIR }}/${variant}-${branch}"
+                if [ -d "$src_dir" ]; then
+                  ${{ env.SCRIPTS_DIR }}/device_rename.sh \
+                    "$src_dir" \
+                    "$device" \
+                    "${{ env.RELEASE_NAME }}-${variant}-${branch}-${device}-${{ needs.prepare.outputs.build_date }}"
+                fi
+              done
+            done
+          done
+
+      - name: 生成发布说明
+        run: |
+          cat > ${{ env.OUTPUT_DIR }}/RELEASE.md << 'EOF'
+          # IPQ60xx 固件发布
+          
+          ## 发布信息
+          - 发布日期: ${{ needs.prepare.outputs.build_date }}
+          - OpenWrt分支: ${{ env.REPO_BRANCH }}
+          - 编译设备: ${{ join(needs.prepare.outputs.devices, ', ') }}
+          
+          ## 变体说明
+          - **Ultra**: 包含所有功能，适合高级用户
+          - **Max**: 平衡功能和性能，适合大多数用户
+          - **Pro**: 精简版本，适合路由器性能较低的场景
+          
+          ## 分支说明
+          - **immwrt**: ImmortalWrt分支，包含更多自定义功能
+          - **libwrt**: LibWrt分支，专注于稳定性
+          - **openwrt**: 官方OpenWrt分支
+          
+          ## 使用说明
+          1. 下载对应设备的固件文件
+          2. 通过路由器后台升级固件
+          3. 升级后恢复出厂设置
+          
+          ## 默认设置
+          - IP地址: 192.168.1.1
+          - 用户名: root
+          - 密码: password
+          - 主机名: IPQ60xx-Router
+          
+          ## 注意事项
+          - 升级前请备份配置
+          - 首次使用建议恢复出厂设置
+          - 如有问题请提交Issue
+          EOF
+
+      - name: 创建发布
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: ${{ env.RELEASE_NAME }} ${{ needs.prepare.outputs.release_tag }}
+          body_path: ${{ env.OUTPUT_DIR }}/RELEASE.md
+          files: ${{ env.OUTPUT_DIR }}/**/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
