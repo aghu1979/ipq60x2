@@ -13,13 +13,18 @@ on:
     - cron: '0 2 * * 1'  # 每周一凌晨2点自动编译
 
 env:
-  REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: master
-  FEEDS_CONF: feeds.conf.default
+  # 主仓库地址（包含配置文件）
+  MAIN_REPO_URL: https://github.com/aghu1979/ipq60x2
+  MAIN_REPO_BRANCH: main
   CONFIGS_DIR: configs
   SCRIPTS_DIR: scripts
   OUTPUT_DIR: output
   RELEASE_NAME: IPQ60xx-Firmware
+  # 芯片和平台配置（避免硬编码）
+  CHIP_FAMILY: qualcommax
+  CHIP_SUBTARGET: ipq60xx
+  # 缓存配置
+  CACHE_VERSION: v2
 
 jobs:
   # 准备阶段：获取配置和设备信息
@@ -29,9 +34,15 @@ jobs:
       devices: ${{ steps.extract_devices.outputs.devices }}
       build_date: ${{ steps.set_date.outputs.date }}
       release_tag: ${{ steps.set_tag.outputs.tag }}
+      repos_info: ${{ steps.get_repos.outputs.repos }}
+      config_hash: ${{ steps.calc_hash.outputs.hash }}
+      cache_key_base: ${{ steps.calc_hash.outputs.cache_key_base }}
     steps:
-      - name: 检出代码
+      - name: 检出主仓库
         uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MAIN_REPO_URL }}
+          ref: ${{ env.MAIN_REPO_BRANCH }}
 
       - name: 设置环境变量
         id: set_date
@@ -47,18 +58,44 @@ jobs:
             echo "tag=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
           fi
 
+      - name: 获取仓库信息
+        id: get_repos
+        run: |
+          # 读取repos.json并输出
+          echo "repos<<EOF" >> $GITHUB_OUTPUT
+          cat ${{ env.CONFIGS_DIR }}/repos.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 计算配置文件哈希值
+        id: calc_hash
+        run: |
+          # 计算所有配置文件的组合哈希
+          HASH=$(find ${{ env.CONFIGS_DIR }} -type f -name "*.config" -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "cache_key_base=${{ env.CACHE_VERSION }}-${{ runner.os }}-${HASH}" >> $GITHUB_OUTPUT
+          echo "配置文件哈希: $HASH"
+
       - name: 提取设备名称
         id: extract_devices
         run: |
           python3 << 'EOF'
           import re
+          import os
+          
+          # 从环境变量获取配置
+          config_dir = os.environ.get('CONFIGS_DIR')
+          chip_family = os.environ.get('CHIP_FAMILY')
+          chip_subtarget = os.environ.get('CHIP_SUBTARGET')
+          
+          # 构建配置文件路径
+          base_config = f"{config_dir}/base_{chip_subtarget}.config"
           
           # 读取芯片基础配置
-          with open('${{ env.CONFIGS_DIR }}/base_ipq60xx.config', 'r') as f:
+          with open(base_config, 'r') as f:
               content = f.read()
           
-          # 提取设备名称
-          pattern = r'CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_(.+?)=y'
+          # 使用变量构建正则表达式
+          pattern = rf'CONFIG_TARGET_DEVICE_{chip_family}_{chip_subtarget}_DEVICE_(.+?)=y'
           devices = re.findall(pattern, content)
           
           # 输出JSON格式
@@ -74,8 +111,11 @@ jobs:
       matrix:
         branch: [immwrt, libwrt, openwrt]
     steps:
-      - name: 检出代码
+      - name: 检出主仓库
         uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MAIN_REPO_URL }}
+          ref: ${{ env.MAIN_REPO_BRANCH }}
 
       - name: 安装依赖
         run: |
@@ -84,22 +124,25 @@ jobs:
             build-essential ccache ecj fastjar file g++ gawk \
             gettext git java-propose-classpath libelf-dev \
             libncurses5-dev libncursesw5-dev libssl-dev \
-            python3 unzip wget python3-distutils python3-setuptools \
+            python3 unzip wget python3-setuptools \
             python3-dev rsync subversion swig time xsltproc zlib1g-dev \
-            python3-pyelftools
+            python3-pyelftools jq
 
       - name: 设置缓存
         uses: actions/cache@v4
         with:
           path: |
             .ccache
-            dl
-            staging_dir
-            build_dir
-          key: ${{ runner.os }}-ultra-${{ matrix.branch }}-${{ needs.prepare.outputs.build_date }}
+            openwrt/dl
+            openwrt/staging_dir
+            openwrt/build_dir
+            openwrt/tmp
+          key: ${{ needs.prepare.outputs.cache_key_base }}-ultra-${{ matrix.branch }}
           restore-keys: |
-            ${{ runner.os }}-ultra-${{ matrix.branch }}-
-            ${{ runner.os }}-ultra-
+            ${{ needs.prepare.outputs.cache_key_base }}-ultra-
+            ${{ needs.prepare.outputs.cache_key_base }}-
+            ${{ env.CACHE_VERSION }}-${{ runner.os }}-ultra-${{ matrix.branch }}-
+            ${{ env.CACHE_VERSION }}-${{ runner.os }}-
 
       - name: 初始化编译环境
         run: |
@@ -110,18 +153,35 @@ jobs:
           export CONFIG_BRANCH=${{ matrix.branch }}
           export CONFIG_VARIANT=Ultra
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
+          export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
+          export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           
           # 创建输出目录
           mkdir -p $OUTPUT_DIR
+          mkdir -p .ccache
           
-          # 克隆源码
-          git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
+          # 根据repos.json中的信息克隆对应的源码
+          REPO_INFO=$(echo '${{ needs.prepare.outputs.repos_info }}' | jq -r ".${{ matrix.branch }}")
+          REPO_URL=$(echo "$REPO_INFO" | jq -r '.url')
+          REPO_BRANCH=$(echo "$REPO_INFO" | jq -r '.branch')
+          REPO_SHORT=$(echo "$REPO_INFO" | jq -r '.short')
+          
+          echo "克隆仓库: $REPO_URL"
+          echo "使用分支: $REPO_BRANCH"
+          echo "简称: $REPO_SHORT"
+          
+          # 克隆源码仓库
+          git clone $REPO_URL -b $REPO_BRANCH openwrt
           cd openwrt
           
+          # 复制脚本文件到源码目录
+          cp -r ../${{ env.SCRIPTS_DIR }} ./
+          cp -r ../${{ env.CONFIGS_DIR }} ./
+          
           # 执行初始化脚本
-          chmod +x ../${{ env.SCRIPTS_DIR }}/*.sh
-          ../${{ env.SCRIPTS_DIR }}/repo.sh
-          ../${{ env.SCRIPTS_DIR }}/diy.sh
+          chmod +x ${SCRIPTS_DIR}/*.sh
+          ${SCRIPTS_DIR}/repo.sh
+          ${SCRIPTS_DIR}/diy.sh
 
       - name: 合并配置文件
         run: |
@@ -129,20 +189,22 @@ jobs:
           export CONFIG_BRANCH=${{ matrix.branch }}
           export CONFIG_VARIANT=Ultra
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
+          export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
+          export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           
           # 合并配置
-          ../${{ env.SCRIPTS_DIR }}/merge_config.sh \
-            ${{ env.CONFIGS_DIR }}/base_ipq60xx.config \
-            ${{ env.CONFIGS_DIR }}/base_${{ matrix.branch }}.config \
-            ${{ env.CONFIGS_DIR }}/Ultra.config \
+          ${SCRIPTS_DIR}/merge_config.sh \
+            ${CONFIGS_DIR}/base_${CHIP_SUBTARGET}.config \
+            ${CONFIGS_DIR}/base_${CONFIG_BRANCH}.config \
+            ${CONFIGS_DIR}/${CONFIG_VARIANT}.config \
             .config
           
           # 补全配置
           make defconfig
           
           # 生成Luci包报告
-          ../${{ env.SCRIPTS_DIR }}/luci_report.sh .config $OUTPUT_DIR/luci_report_before.txt
-          ../${{ env.SCRIPTS_DIR }}/luci_report.sh .config $OUTPUT_DIR/luci_report_after.txt
+          ${SCRIPTS_DIR}/luci_report.sh .config $OUTPUT_DIR/luci_report_before.txt
+          ${SCRIPTS_DIR}/luci_report.sh .config $OUTPUT_DIR/luci_report_after.txt
 
       - name: 下载软件包
         run: |
@@ -157,8 +219,9 @@ jobs:
           
           # 复制编译产物
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-ultra
+          export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           mkdir -p $OUTPUT_DIR
-          cp bin/targets/qualcommax/ipq60xx/* $OUTPUT_DIR/ 2>/dev/null || true
+          cp bin/targets/${CHIP_FAMILY}/${CHIP_SUBTARGET}/* $OUTPUT_DIR/ 2>/dev/null || true
           cp bin/packages/* $OUTPUT_DIR/packages/ 2>/dev/null || true
 
       - name: 上传编译产物
@@ -177,8 +240,11 @@ jobs:
         variant: [Max, Pro]
         branch: [immwrt, libwrt, openwrt]
     steps:
-      - name: 检出代码
+      - name: 检出主仓库
         uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MAIN_REPO_URL }}
+          ref: ${{ env.MAIN_REPO_BRANCH }}
 
       - name: 下载Ultra编译产物
         uses: actions/download-artifact@v4
@@ -191,13 +257,17 @@ jobs:
         with:
           path: |
             .ccache
-            dl
-            staging_dir
-            build_dir
-          key: ${{ runner.os }}-${{ matrix.variant }}-${{ matrix.branch }}-${{ needs.prepare.outputs.build_date }}
+            openwrt/dl
+            openwrt/staging_dir
+            openwrt/build_dir
+            openwrt/tmp
+          key: ${{ needs.prepare.outputs.cache_key_base }}-${{ matrix.variant }}-${{ matrix.branch }}
           restore-keys: |
-            ${{ runner.os }}-ultra-${{ matrix.branch }}-
-            ${{ runner.os }}-${{ matrix.variant }}-${{ matrix.branch }}-
+            ${{ needs.prepare.outputs.cache_key_base }}-ultra-${{ matrix.branch }}
+            ${{ needs.prepare.outputs.cache_key_base }}-${{ matrix.variant }}-
+            ${{ needs.prepare.outputs.cache_key_base }}-
+            ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ matrix.variant }}-${{ matrix.branch }}-
+            ${{ env.CACHE_VERSION }}-${{ runner.os }}-
 
       - name: 编译${{ matrix.variant }}变体
         run: |
@@ -208,32 +278,47 @@ jobs:
           export CONFIG_BRANCH=${{ matrix.branch }}
           export CONFIG_VARIANT=${{ matrix.variant }}
           export OUTPUT_DIR=${{ env.OUTPUT_DIR }}/${{ matrix.branch }}-${{ matrix.variant }}
+          export CHIP_FAMILY=${{ env.CHIP_FAMILY }}
+          export CHIP_SUBTARGET=${{ env.CHIP_SUBTARGET }}
           
           # 创建输出目录
           mkdir -p $OUTPUT_DIR
+          mkdir -p .ccache
           
           # 如果存在Ultra编译环境，直接使用
           if [ -d "openwrt" ]; then
             echo "使用现有编译环境"
           else
-            # 克隆源码
-            git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
+            # 根据repos.json中的信息克隆对应的源码
+            REPO_INFO=$(echo '${{ needs.prepare.outputs.repos_info }}' | jq -r ".${{ matrix.branch }}")
+            REPO_URL=$(echo "$REPO_INFO" | jq -r '.url')
+            REPO_BRANCH=$(echo "$REPO_INFO" | jq -r '.branch')
+            
+            echo "克隆仓库: $REPO_URL"
+            echo "使用分支: $REPO_BRANCH"
+            
+            # 克隆源码仓库
+            git clone $REPO_URL -b $REPO_BRANCH openwrt
             cd openwrt
             
+            # 复制脚本文件到源码目录
+            cp -r ../${{ env.SCRIPTS_DIR }} ./
+            cp -r ../${{ env.CONFIGS_DIR }} ./
+            
             # 执行初始化脚本
-            chmod +x ../${{ env.SCRIPTS_DIR }}/*.sh
-            ../${{ env.SCRIPTS_DIR }}/repo.sh
-            ../${{ env.SCRIPTS_DIR }}/diy.sh
+            chmod +x ${SCRIPTS_DIR}/*.sh
+            ${SCRIPTS_DIR}/repo.sh
+            ${SCRIPTS_DIR}/diy.sh
             cd ..
           fi
           
           cd openwrt
           
           # 合并配置
-          ../${{ env.SCRIPTS_DIR }}/merge_config.sh \
-            ${{ env.CONFIGS_DIR }}/base_ipq60xx.config \
-            ${{ env.CONFIGS_DIR }}/base_${{ matrix.branch }}.config \
-            ${{ env.CONFIGS_DIR }}/${{ matrix.variant }}.config \
+          ${SCRIPTS_DIR}/merge_config.sh \
+            ${CONFIGS_DIR}/base_${CHIP_SUBTARGET}.config \
+            ${CONFIGS_DIR}/base_${CONFIG_BRANCH}.config \
+            ${CONFIGS_DIR}/${CONFIG_VARIANT}.config \
             .config
           
           # 补全配置
@@ -244,7 +329,7 @@ jobs:
           
           # 复制编译产物
           mkdir -p $OUTPUT_DIR
-          cp bin/targets/qualcommax/ipq60xx/* $OUTPUT_DIR/ 2>/dev/null || true
+          cp bin/targets/${CHIP_FAMILY}/${CHIP_SUBTARGET}/* $OUTPUT_DIR/ 2>/dev/null || true
           cp bin/packages/* $OUTPUT_DIR/packages/ 2>/dev/null || true
 
       - name: 上传编译产物
@@ -260,8 +345,11 @@ jobs:
     runs-on: ubuntu-24.04
     if: github.event_name != 'pull_request'
     steps:
-      - name: 检出代码
+      - name: 检出主仓库
         uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MAIN_REPO_URL }}
+          ref: ${{ env.MAIN_REPO_BRANCH }}
 
       - name: 下载所有编译产物
         uses: actions/download-artifact@v4
@@ -295,8 +383,14 @@ jobs:
           
           ## 发布信息
           - 发布日期: ${{ needs.prepare.outputs.build_date }}
-          - OpenWrt分支: ${{ env.REPO_BRANCH }}
+          - 配置仓库: ${{ env.MAIN_REPO_URL }}
           - 编译设备: ${{ join(needs.prepare.outputs.devices, ', ') }}
+          - 配置哈希: ${{ needs.prepare.outputs.config_hash }}
+          
+          ## 源码仓库信息
+          - ImmortalWrt: https://github.com/laipeng668/immortalwrt.git (master)
+          - OpenWrt: https://github.com/laipeng668/openwrt.git (master)
+          - LibWrt: https://github.com/laipeng668/openwrt-6.x.git (k6.12-nss)
           
           ## 变体说明
           - **Ultra**: 包含所有功能，适合高级用户
@@ -314,10 +408,10 @@ jobs:
           3. 升级后恢复出厂设置
           
           ## 默认设置
-          - IP地址: 192.168.1.1
+          - IP地址: 192.168.111.1
           - 用户名: root
-          - 密码: password
-          - 主机名: IPQ60xx-Router
+          - 密码: 空
+          - 主机名: WRT
           
           ## 注意事项
           - 升级前请备份配置
