@@ -26,7 +26,6 @@ env:
   FIRMWARE_IP: 192.168.111.1
   FIRMWARE_NAME: WRT
   FIRMWARE_PASSWORD: ''
-  REPO_BRANCH: master
 
 jobs:
   # 准备阶段：获取配置和依赖
@@ -34,6 +33,7 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       immwrt_repo: ${{ steps.parse_config.outputs.immwrt_repo }}
+      immwrt_branch: ${{ steps.parse_config.outputs.immwrt_branch }}
       build_date: ${{ steps.date.outputs.date }}
       release_tag: ${{ steps.tag.outputs.tag }}
       cache_key_base: ${{ steps.cache_key.outputs.base_key }}
@@ -64,25 +64,22 @@ jobs:
               exit 1
             fi
             
-            # 获取immwrt仓库地址
-            REPO=$(jq -r '.immwrt' configs/repos.json 2>/dev/null)
-            if [ "$REPO" = "null" ] || [ -z "$REPO" ]; then
-              # 尝试从repos对象中获取
-              REPO=$(jq -r '.repos.immwrt' configs/repos.json 2>/dev/null)
-            fi
-            if [ "$REPO" = "null" ] || [ -z "$REPO" ]; then
-              # 尝试从url字段获取
-              REPO=$(jq -r '.immwrt.url' configs/repos.json 2>/dev/null)
-            fi
+            # 获取immwrt仓库地址 - 处理对象格式
+            REPO=$(jq -r '.immwrt.url' configs/repos.json 2>/dev/null)
+            BRANCH=$(jq -r '.immwrt.branch' configs/repos.json 2>/dev/null)
             
             if [ "$REPO" = "null" ] || [ -z "$REPO" ]; then
-              echo "❌ 无法从repos.json中获取immwrt仓库地址"
-              echo "请检查文件格式，确保包含immwrt字段"
+              echo "❌ 无法从repos.json中获取immwrt.url"
               exit 1
+            fi
+            
+            if [ "$BRANCH" = "null" ] || [ -z "$BRANCH" ]; then
+              BRANCH="master"
             fi
             
             # 清理可能的空白字符
             REPO=$(echo "$REPO" | xargs)
+            BRANCH=$(echo "$BRANCH" | xargs)
             
             # 验证URL格式
             if [[ ! "$REPO" =~ ^https?:// ]]; then
@@ -91,7 +88,9 @@ jobs:
             fi
             
             echo "immwrt_repo=$REPO" >> $GITHUB_OUTPUT
+            echo "immwrt_branch=$BRANCH" >> $GITHUB_OUTPUT
             echo "✅ 获取到immwrt仓库: $REPO"
+            echo "✅ 获取到分支: $BRANCH"
           else
             echo "❌ 未找到repos.json文件"
             exit 1
@@ -197,7 +196,8 @@ jobs:
         run: |
           cd /workdir
           echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
-          git clone ${{ needs.prepare.outputs.immwrt_repo }} -b $REPO_BRANCH openwrt
+          echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
+          git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
       - name: 集成自定义脚本功能
@@ -496,7 +496,7 @@ jobs:
           
           # 替换变量
           sed -i "s/\${BUILD_DATE}/${{ needs.prepare.outputs.build_date }}/g" firmware_info.md
-          sed -i "s/\${REPO_BRANCH}/${{ env.REPO_BRANCH }}/g" firmware_info.md
+          sed -i "s/\${REPO_BRANCH}/${{ needs.prepare.outputs.immwrt_branch }}/g" firmware_info.md
           sed -i "s#\${IMMWRT_REPO}#${{ needs.prepare.outputs.immwrt_repo }}#g" firmware_info.md
           sed -i "s/\${CONFIG_HASH}/${{ needs.prepare.outputs.config_hash }}/g" firmware_info.md
           sed -i "s/\${FIRMWARE_IP}/${{ env.FIRMWARE_IP }}/g" firmware_info.md
