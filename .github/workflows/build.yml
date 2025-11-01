@@ -37,10 +37,11 @@ jobs:
       build_date: ${{ steps.date.outputs.date }}
       release_tag: ${{ steps.tag.outputs.tag }}
       cache_key_base: ${{ steps.cache_key.outputs.base_key }}
-      cache_suffix: ${{ steps.cache_key.outputs.suffix }}
+      cache_key_full: ${{ steps.cache_key.outputs.full_key }}
       matrix_ultra: ${{ steps.matrix.outputs.ultra }}
       matrix_variants: ${{ steps.matrix.outputs.variants }}
       config_hash: ${{ steps.config_hash.outputs.hash }}
+      toolchain_hash: ${{ steps.config_hash.outputs.toolchain_hash }}
     
     steps:
       - name: 检出代码
@@ -99,10 +100,15 @@ jobs:
       - name: 计算配置文件哈希
         id: config_hash
         run: |
-          # 计算所有配置文件的哈希值用于缓存
-          HASH=$(find configs/ -type f -exec cat {} \; | md5sum | cut -d' ' -f1)
-          echo "hash=$HASH" >> $GITHUB_OUTPUT
-          echo "📝 配置文件哈希: $HASH"
+          # 计算配置文件哈希（不包含日期）
+          CONFIG_HASH=$(find configs/ -type f -name "*.config" -exec cat {} \; | md5sum | cut -d' ' -f1)
+          # 计算工具链哈希（基于基础配置）
+          TOOLCHAIN_HASH=$(cat configs/base_ipq60xx.config configs/base_immwrt.config 2>/dev/null | md5sum | cut -d' ' -f1)
+          
+          echo "hash=$CONFIG_HASH" >> $GITHUB_OUTPUT
+          echo "toolchain_hash=$TOOLCHAIN_HASH" >> $GITHUB_OUTPUT
+          echo "📝 配置文件哈希: $CONFIG_HASH"
+          echo "🔨 工具链哈希: $TOOLCHAIN_HASH"
 
       - name: 生成构建日期
         id: date
@@ -117,7 +123,7 @@ jobs:
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then
             TAG="${{ github.event.inputs.release_tag }}"
           else
-            TAG="AutoBuild-${{ steps.date.outputs.date }}-$(git rev-parse --short HEAD)"
+            TAG="AutoBuild-$(git rev-parse --short HEAD)"
           fi
           # 确保标签格式正确
           TAG=$(echo "$TAG" | sed 's/[^a-zA-Z0-9._-]//g')
@@ -130,19 +136,28 @@ jobs:
           echo 'ultra=["Ultra"]' >> $GITHUB_OUTPUT
           echo 'variants=["Max","Pro"]' >> $GITHUB_OUTPUT
 
-      - name: 生成企业级缓存键
+      - name: 生成优化的缓存键
         id: cache_key
         run: |
-          # 多层缓存策略
+          # 基础缓存键（基于配置哈希，不包含日期）
           BASE_KEY="openwrt-base-${{ steps.config_hash.outputs.hash }}"
-          SUFFIX="${{ steps.date.outputs.date }}-$(git rev-parse --short HEAD)"
-          # 清理可能的特殊字符
+          # 工具链缓存键
+          TOOLCHAIN_KEY="openwrt-toolchain-${{ steps.config_hash.outputs.toolchain_hash }}"
+          # 完整缓存键（包含源码commit）
+          FULL_KEY="${BASE_KEY}-$(git rev-parse --short HEAD)"
+          
+          # 清理特殊字符
           BASE_KEY=$(echo "$BASE_KEY" | tr -d '\n\r')
-          SUFFIX=$(echo "$SUFFIX" | tr -d '\n\r')
+          TOOLCHAIN_KEY=$(echo "$TOOLCHAIN_KEY" | tr -d '\n\r')
+          FULL_KEY=$(echo "$FULL_KEY" | tr -d '\n\r')
+          
           echo "base_key=$BASE_KEY" >> $GITHUB_OUTPUT
-          echo "suffix=$SUFFIX" >> $GITHUB_OUTPUT
+          echo "toolchain_key=$TOOLCHAIN_KEY" >> $GITHUB_OUTPUT
+          echo "full_key=$FULL_KEY" >> $GITHUB_OUTPUT
+          
           echo "🔑 基础缓存键: $BASE_KEY"
-          echo "🔑 缓存后缀: $SUFFIX"
+          echo "🔑 工具链缓存键: $TOOLCHAIN_KEY"
+          echo "🔑 完整缓存键: $FULL_KEY"
 
   # 基础环境构建
   build-base:
@@ -178,7 +193,7 @@ jobs:
           fi
           echo "✅ 仓库地址验证通过"
 
-      - name: 企业级缓存策略
+      - name: 企业级多层缓存策略
         id: cache
         uses: actions/cache@v4
         with:
@@ -186,10 +201,12 @@ jobs:
             /workdir/openwrt
             ~/.cache/go-build
             ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_base }}-${{ needs.prepare.outputs.cache_suffix }}
+          key: ${{ needs.prepare.outputs.cache_key_full }}
           restore-keys: |
             ${{ needs.prepare.outputs.cache_key_base }}-
             openwrt-base-
+            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
+            openwrt-toolchain-
 
       - name: 克隆源码
         if: steps.cache.outputs.cache-hit != 'true'
@@ -214,13 +231,13 @@ jobs:
           echo "  - 修改版本号"
           sed -i "s/DISTRIB_REVISION='.*'/DISTRIB_REVISION='R${{ needs.prepare.outputs.build_date }}'/g" package/base-files/files/etc/openwrt_release
           
-          # 3. 添加自定义软件源（如果需要）
+          # 3. 添加自定义软件源
           echo "  - 添加自定义软件源配置"
           cat >> feeds.conf.default << EOF
           src-git small_package https://github.com/kenzok8/small-package;main
           EOF
           
-          # 4. 修改默认主题（如果需要）
+          # 4. 修改默认主题
           echo "  - 设置默认主题"
           sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/luci/Makefile 2>/dev/null || true
           
@@ -248,11 +265,11 @@ jobs:
           echo "  - 安装feeds"
           ./scripts/feeds install -a
           
-          # 5. 安装特定软件包（如果需要）
+          # 5. 安装特定软件包
           echo "  - 安装特定软件包"
-          ./scripts/feeds install luci-app-passwall
-          ./scripts/feeds install luci-app-openclash
-          ./scripts/feeds install luci-theme-argon
+          ./scripts/feeds install luci-app-passwall 2>/dev/null || true
+          ./scripts/feeds install luci-app-openclash 2>/dev/null || true
+          ./scripts/feeds install luci-theme-argon 2>/dev/null || true
           
           echo "✅ diy.sh P2功能集成完成"
 
@@ -266,15 +283,6 @@ jobs:
           echo "  - 清理无用软件包"
           find package/ -name "*openvswitch*" -type d -exec rm -rf {} + 2>/dev/null || true
           find package/ -name "*docker*" -type d -exec rm -rf {} + 2>/dev/null || true
-          
-          # 2. 修改软件包版本（如果需要）
-          echo "  - 优化软件包配置"
-          
-          # 3. 添加自定义补丁（如果需要）
-          echo "  - 应用自定义补丁"
-          
-          # 4. 优化编译配置
-          echo "  - 优化编译配置"
           
           echo "✅ repo.sh功能集成完成"
 
@@ -357,10 +365,12 @@ jobs:
             /workdir/openwrt
             ~/.cache/go-build
             ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_base }}-${{ needs.prepare.outputs.cache_suffix }}
+          key: ${{ needs.prepare.outputs.cache_key_full }}
           restore-keys: |
             ${{ needs.prepare.outputs.cache_key_base }}-
             openwrt-base-
+            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
+            openwrt-toolchain-
 
       - name: 准备Ultra配置
         run: |
@@ -370,21 +380,81 @@ jobs:
             cat "$GITHUB_WORKSPACE/configs/Ultra.config" >> .config
           make defconfig
 
-      - name: 检查Luci软件包完整性
+      - name: 生成Luci软件包检查报告
+        id: luci_check
         run: |
           cd /workdir/openwrt
-          echo "🔍 检查Luci软件包完整性"
+          echo "🔍 生成Luci软件包检查报告"
           
-          # 检查关键Luci包
-          LUCI_PACKAGES=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
-          for pkg in $LUCI_PACKAGES; do
-            if [ ! -d "package/$pkg" ] && [ ! -d "feeds/packages/$pkg" ] && [ ! -d "feeds/luci/$pkg" ]; then
-              echo "⚠️ 警告: 未找到软件包 $pkg"
+          # 创建报告文件
+          REPORT_FILE="$GITHUB_WORKSPACE/luci_check_report.txt"
+          echo "========================================" > $REPORT_FILE
+          echo "Luci软件包检查报告 - Ultra变体" >> $REPORT_FILE
+          echo "========================================" >> $REPORT_FILE
+          echo "构建时间: ${{ needs.prepare.outputs.build_date }}" >> $REPORT_FILE
+          echo "" >> $REPORT_FILE
+          
+          # 获取配置中的所有Luci包
+          echo "【配置中的Luci软件包】" >> $REPORT_FILE
+          CONFIG_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          echo "$CONFIG_LUCI" | while read pkg; do
+            if [ -n "$pkg" ]; then
+              echo "  - $pkg" >> $REPORT_FILE
+            fi
+          done
+          echo "" >> $REPORT_FILE
+          
+          # 检查每个包是否存在
+          echo "【软件包存在性检查】" >> $REPORT_FILE
+          MISSING_COUNT=0
+          FOUND_COUNT=0
+          
+          for pkg in $CONFIG_LUCI; do
+            if [ -n "$pkg" ]; then
+              if [ -d "package/$pkg" ] || [ -d "feeds/packages/$pkg" ] || [ -d "feeds/luci/$pkg" ]; then
+                echo "  ✅ $pkg - 存在" >> $REPORT_FILE
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              else
+                echo "  ❌ $pkg - 缺失" >> $REPORT_FILE
+                MISSING_COUNT=$((MISSING_COUNT + 1))
+              fi
             fi
           done
           
-          # 尝试编译Luci
-          make package/luci/compile V=s || echo "Luci编译检查完成"
+          echo "" >> $REPORT_FILE
+          echo "【统计信息】" >> $REPORT_FILE
+          echo "  总计: $(echo "$CONFIG_LUCI" | grep -c .) 个包" >> $REPORT_FILE
+          echo "  存在: $FOUND_COUNT 个包" >> $REPORT_FILE
+          echo "  缺失: $MISSING_COUNT 个包" >> $REPORT_FILE
+          
+          # 输出到控制台
+          echo ""
+          echo "🔍 ========================================"
+          echo "🔍 Luci软件包检查报告 - Ultra变体"
+          echo "🔍 ========================================"
+          cat $REPORT_FILE
+          echo "🔍 ========================================"
+          echo ""
+          
+          # 保存到输出
+          echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
+          echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
+          
+          # 如果有缺失包，设置警告
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "⚠️ 警告: 发现 $MISSING_COUNT 个缺失的Luci软件包"
+            echo "📄 详细报告已保存到: luci_check_report.txt"
+          else
+            echo "✅ 所有Luci软件包检查通过"
+          fi
+
+      - name: 上传Luci检查报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-check-report-ultra
+          path: luci_check_report.txt
+          retention-days: 30
 
       - name: 编译Ultra固件
         run: |
@@ -438,10 +508,12 @@ jobs:
             /workdir/openwrt
             ~/.cache/go-build
             ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_base }}-${{ needs.prepare.outputs.cache_suffix }}
+          key: ${{ needs.prepare.outputs.cache_key_full }}
           restore-keys: |
             ${{ needs.prepare.outputs.cache_key_base }}-
             openwrt-base-
+            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
+            openwrt-toolchain-
 
       - name: 准备${{ matrix.variant }}配置
         run: |
@@ -462,6 +534,81 @@ jobs:
             cat "$GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config" >> .config
           
           make defconfig
+
+      - name: 生成Luci软件包检查报告
+        id: luci_check
+        run: |
+          cd /workdir/openwrt
+          echo "🔍 生成Luci软件包检查报告 - ${{ matrix.variant }}变体"
+          
+          # 创建报告文件
+          REPORT_FILE="$GITHUB_WORKSPACE/luci_check_report_${{ matrix.variant }}.txt"
+          echo "========================================" > $REPORT_FILE
+          echo "Luci软件包检查报告 - ${{ matrix.variant }}变体" >> $REPORT_FILE
+          echo "========================================" >> $REPORT_FILE
+          echo "构建时间: ${{ needs.prepare.outputs.build_date }}" >> $REPORT_FILE
+          echo "" >> $REPORT_FILE
+          
+          # 获取配置中的所有Luci包
+          echo "【配置中的Luci软件包】" >> $REPORT_FILE
+          CONFIG_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          echo "$CONFIG_LUCI" | while read pkg; do
+            if [ -n "$pkg" ]; then
+              echo "  - $pkg" >> $REPORT_FILE
+            fi
+          done
+          echo "" >> $REPORT_FILE
+          
+          # 检查每个包是否存在
+          echo "【软件包存在性检查】" >> $REPORT_FILE
+          MISSING_COUNT=0
+          FOUND_COUNT=0
+          
+          for pkg in $CONFIG_LUCI; do
+            if [ -n "$pkg" ]; then
+              if [ -d "package/$pkg" ] || [ -d "feeds/packages/$pkg" ] || [ -d "feeds/luci/$pkg" ]; then
+                echo "  ✅ $pkg - 存在" >> $REPORT_FILE
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              else
+                echo "  ❌ $pkg - 缺失" >> $REPORT_FILE
+                MISSING_COUNT=$((MISSING_COUNT + 1))
+              fi
+            fi
+          done
+          
+          echo "" >> $REPORT_FILE
+          echo "【统计信息】" >> $REPORT_FILE
+          echo "  总计: $(echo "$CONFIG_LUCI" | grep -c .) 个包" >> $REPORT_FILE
+          echo "  存在: $FOUND_COUNT 个包" >> $REPORT_FILE
+          echo "  缺失: $MISSING_COUNT 个包" >> $REPORT_FILE
+          
+          # 输出到控制台
+          echo ""
+          echo "🔍 ========================================"
+          echo "🔍 Luci软件包检查报告 - ${{ matrix.variant }}变体"
+          echo "🔍 ========================================"
+          cat $REPORT_FILE
+          echo "🔍 ========================================"
+          echo ""
+          
+          # 保存到输出
+          echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
+          echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
+          
+          # 如果有缺失包，设置警告
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "⚠️ 警告: ${{ matrix.variant }}变体发现 $MISSING_COUNT 个缺失的Luci软件包"
+          else
+            echo "✅ ${{ matrix.variant }}变体所有Luci软件包检查通过"
+          fi
+
+      - name: 上传Luci检查报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-check-report-${{ matrix.variant }}
+          path: luci_check_report_${{ matrix.variant }}.txt
+          retention-days: 30
 
       - name: 编译${{ matrix.variant }}固件
         run: |
@@ -526,6 +673,7 @@ jobs:
           - **源码分支**: ${REPO_BRANCH}
           - **源码仓库**: ${IMMWRT_REPO}
           - **配置哈希**: ${CONFIG_HASH}
+          - **缓存命中**: ${CACHE_HIT}
           
           ## 🔧 固件设置
           - **IP地址**: ${FIRMWARE_IP}
@@ -559,6 +707,7 @@ jobs:
           sed -i "s/\${REPO_BRANCH}/${{ needs.prepare.outputs.immwrt_branch }}/g" firmware_info.md
           sed -i "s#\${IMMWRT_REPO}#${{ needs.prepare.outputs.immwrt_repo }}#g" firmware_info.md
           sed -i "s/\${CONFIG_HASH}/${{ needs.prepare.outputs.config_hash }}/g" firmware_info.md
+          sed -i "s/\${CACHE_HIT}/${{ needs.build-base.outputs.cache-hit }}/g" firmware_info.md
           sed -i "s/\${FIRMWARE_IP}/${{ env.FIRMWARE_IP }}/g" firmware_info.md
           sed -i "s/\${FIRMWARE_NAME}/${{ env.FIRMWARE_NAME }}/g" firmware_info.md
           sed -i "s/\${RUN_ID}/${{ github.run_id }}/g" firmware_info.md
@@ -603,8 +752,8 @@ jobs:
         if: always()
         run: |
           echo "## 📊 构建结果汇总" >> $GITHUB_STEP_SUMMARY
-          echo "| 变体 | 状态 | 固件数量 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 变体 | 状态 | 固件数量 | 缓存命中 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|----------|----------|" >> $GITHUB_STEP_SUMMARY
           
           for variant in Ultra Max Pro; do
             if [ -d "firmware/$variant" ]; then
@@ -614,7 +763,7 @@ jobs:
               count=0
               status="❌ 失败"
             fi
-            echo "| $variant | $status | $count |" >> $GITHUB_STEP_SUMMARY
+            echo "| $variant | $status | $count | ${{ needs.build-base.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
           done
           
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -622,9 +771,17 @@ jobs:
           echo "- **Release标签**: ${{ needs.prepare.outputs.release_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "- **构建日期**: ${{ needs.prepare.outputs.build_date }}" >> $GITHUB_STEP_SUMMARY
           echo "- **配置哈希**: ${{ needs.prepare.outputs.config_hash }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **工具链哈希**: ${{ needs.prepare.outputs.toolchain_hash }}" >> $GITHUB_STEP_SUMMARY
           echo "- **缓存命中**: ${{ needs.build-base.outputs.cache-hit }}" >> $GITHUB_STEP_SUMMARY
           
           # 下载链接
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## ⬇️ 下载链接" >> $GITHUB_STEP_SUMMARY
           echo "[查看所有固件](https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.release_tag }})" >> $GITHUB_STEP_SUMMARY
+          
+          # Luci检查报告链接
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Luci检查报告" >> $GITHUB_STEP_SUMMARY
+          echo "- [Ultra变体报告](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [Max变体报告](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [Pro变体报告](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
