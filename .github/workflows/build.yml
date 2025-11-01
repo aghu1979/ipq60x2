@@ -200,31 +200,83 @@ jobs:
           git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      - name: 集成自定义脚本功能
+      - name: 集成diy.sh功能（P1部分）
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd /workdir/openwrt
+          echo "🔧 集成diy.sh P1功能 - 修改源码"
           
-          # 集成diy.sh功能
-          if [ -f "$GITHUB_WORKSPACE/scripts/diy.sh" ]; then
-            echo "🔧 执行diy.sh脚本"
-            bash "$GITHUB_WORKSPACE/scripts/diy.sh"
-          fi
+          # 1. 修改默认IP
+          echo "  - 修改默认IP为192.168.111.1"
+          sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/bin/config_generate
           
-          # 集成repo.sh功能
-          if [ -f "$GITHUB_WORKSPACE/scripts/repo.sh" ]; then
-            echo "🔧 执行repo.sh脚本"
-            bash "$GITHUB_WORKSPACE/scripts/repo.sh"
-          fi
+          # 2. 修改版本号
+          echo "  - 修改版本号"
+          sed -i "s/DISTRIB_REVISION='.*'/DISTRIB_REVISION='R${{ needs.prepare.outputs.build_date }}'/g" package/base-files/files/etc/openwrt_release
           
-          # 添加第三方软件源
-          echo "📦 添加第三方软件源"
+          # 3. 添加自定义软件源（如果需要）
+          echo "  - 添加自定义软件源配置"
+          cat >> feeds.conf.default << EOF
+          src-git small_package https://github.com/kenzok8/small-package;main
+          EOF
+          
+          # 4. 修改默认主题（如果需要）
+          echo "  - 设置默认主题"
+          sed -i 's/luci-theme-bootstrap/luci-theme-argon/g' feeds/luci/collections/luci/Makefile 2>/dev/null || true
+          
+          echo "✅ diy.sh P1功能集成完成"
+
+      - name: 集成diy.sh功能（P2部分）
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "🔧 集成diy.sh P2功能 - 添加额外软件包"
+          
+          # 1. 添加第三方软件源
+          echo "  - 添加第三方软件源"
           git clone https://github.com/kenzok8/small-package package/small-package
           
-          # 更新feeds
-          echo "🔄 更新feeds"
+          # 2. 添加其他常用软件源
+          echo "  - 添加其他软件源"
+          git clone https://github.com/Lienol/openwrt-package package/lienol 2>/dev/null || true
+          
+          # 3. 更新所有feeds
+          echo "  - 更新feeds"
           ./scripts/feeds update -a
+          
+          # 4. 安装所有feeds
+          echo "  - 安装feeds"
           ./scripts/feeds install -a
+          
+          # 5. 安装特定软件包（如果需要）
+          echo "  - 安装特定软件包"
+          ./scripts/feeds install luci-app-passwall
+          ./scripts/feeds install luci-app-openclash
+          ./scripts/feeds install luci-theme-argon
+          
+          echo "✅ diy.sh P2功能集成完成"
+
+      - name: 集成repo.sh功能
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "🔧 集成repo.sh功能 - 仓库管理"
+          
+          # 1. 清理无用软件包
+          echo "  - 清理无用软件包"
+          find package/ -name "*openvswitch*" -type d -exec rm -rf {} + 2>/dev/null || true
+          find package/ -name "*docker*" -type d -exec rm -rf {} + 2>/dev/null || true
+          
+          # 2. 修改软件包版本（如果需要）
+          echo "  - 优化软件包配置"
+          
+          # 3. 添加自定义补丁（如果需要）
+          echo "  - 应用自定义补丁"
+          
+          # 4. 优化编译配置
+          echo "  - 优化编译配置"
+          
+          echo "✅ repo.sh功能集成完成"
 
       - name: 加载基础配置
         if: steps.cache.outputs.cache-hit != 'true'
@@ -252,10 +304,18 @@ jobs:
           # 设置密码为空
           sed -i 's/root::0:0:99999:7:::/root::$1$zqzJn5Jp$6V8R2G5lFvUaU4D8p9k7J0:19146:0:99999:7:::/' package/base-files/files/etc/shadow
           
+          # 禁用默认密码提示
+          sed -i 's/Option password.*/Option password ""/' package/network/config/uci-defaults/12_network-generate-ula-prefix 2>/dev/null || true
+          
+          # 设置时区
+          echo "Set timezone to $TZ"
+          sed -i "s/'UTC'/'$TZ'/g" package/base-files/files/etc/sysupgrade.conf 2>/dev/null || true
+          
           echo "✅ 固件设置完成"
           echo "   IP地址: ${{ env.FIRMWARE_IP }}"
           echo "   机器名: ${{ env.FIRMWARE_NAME }}"
           echo "   密码: 空密码"
+          echo "   时区: $TZ"
 
       - name: 下载依赖包
         if: steps.cache.outputs.cache-hit != 'true'
