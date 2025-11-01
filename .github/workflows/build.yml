@@ -400,57 +400,106 @@ jobs:
           if [ -z "$CONFIG_LUCI" ]; then
             echo "⚠️  未在配置中找到Luci软件包"
             TOTAL_COUNT=0
+            PACKAGE_LIST=""
           else
             echo "📦 配置中的Luci软件包列表："
+            echo "┌─────────────────────────────────────────────────────────┐"
+            echo "│ 序号 │ 软件包名称                                      │"
+            echo "├─────────────────────────────────────────────────────────┤"
+            index=1
             echo "$CONFIG_LUCI" | while read pkg; do
               if [ -n "$pkg" ]; then
-                echo "  📄 $pkg"
+                printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+                index=$((index + 1))
               fi
             done
+            echo "└─────────────────────────────────────────────────────────┘"
             TOTAL_COUNT=$(echo "$CONFIG_LUCI" | grep -c .)
+            PACKAGE_LIST="$CONFIG_LUCI"
           fi
           
           echo ""
           echo "🔍 开始检查软件包存在性..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "┌──────────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                    │ 状态     │ 位置      │"
+          echo "├──────────────────────────────────────────────────────────────┤"
           
           # 检查每个包是否存在
           MISSING_COUNT=0
           FOUND_COUNT=0
           MISSING_PACKAGES=""
           FOUND_PACKAGES=""
+          MISSING_DETAILS=""
+          FOUND_DETAILS=""
+          index=1
           
           for pkg in $CONFIG_LUCI; do
             if [ -n "$pkg" ]; then
-              if [ -d "package/$pkg" ] || [ -d "feeds/packages/$pkg" ] || [ -d "feeds/luci/$pkg" ]; then
-                echo "✅ $pkg - 存在"
+              location=""
+              if [ -d "package/$pkg" ]; then
+                location="package/"
+                status="✅ 存在"
                 FOUND_COUNT=$((FOUND_COUNT + 1))
                 FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
+                FOUND_DETAILS="$FOUND_DETAILS│ %4d │ %-30s │ %-8s │ %-10s │\n"
+              elif [ -d "feeds/packages/$pkg" ]; then
+                location="feeds/packages/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
+                FOUND_DETAILS="$FOUND_DETAILS│ %4d │ %-30s │ %-8s │ %-10s │\n"
+              elif [ -d "feeds/luci/$pkg" ]; then
+                location="feeds/luci/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
+                FOUND_DETAILS="$FOUND_DETAILS│ %4d │ %-30s │ %-8s │ %-10s │\n"
               else
-                echo "❌ $pkg - 缺失"
+                location="未找到"
+                status="❌ 缺失"
                 MISSING_COUNT=$((MISSING_COUNT + 1))
                 MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
+                MISSING_DETAILS="$MISSING_DETAILS│ %4d │ %-30s │ %-8s │ %-10s │\n"
               fi
+              printf "│ %4d │ %-30s │ %-8s │ %-10s │\n" "$index" "$pkg" "$status" "$location"
+              index=$((index + 1))
             fi
           done
           
+          echo "└──────────────────────────────────────────────────────────────┘"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           echo "📊 检查结果统计："
-          echo "┌─────────────┬──────────┐"
-          echo "│    状态     │   数量   │"
-          echo "├─────────────┼──────────┤"
-          echo "│ ✅ 存在     │ $FOUND_COUNT  │"
-          echo "│ ❌ 缺失     │ $MISSING_COUNT  │"
-          echo "│ 📦 总计     │ $TOTAL_COUNT  │"
-          echo "└─────────────┴──────────┘"
+          echo "┌─────────────┬──────────┬──────────┐"
+          echo "│    状态     │   数量   │  百分比  │"
+          echo "├─────────────┼──────────┼──────────┤"
+          if [ $TOTAL_COUNT -gt 0 ]; then
+            FOUND_PERCENT=$((FOUND_COUNT * 100 / TOTAL_COUNT))
+            MISSING_PERCENT=$((MISSING_COUNT * 100 / TOTAL_COUNT))
+          else
+            FOUND_PERCENT=0
+            MISSING_PERCENT=0
+          fi
+          echo "│ ✅ 存在     │ $FOUND_COUNT  │  $FOUND_PERCENT%  │"
+          echo "│ ❌ 缺失     │ $MISSING_COUNT  │  $MISSING_PERCENT%  │"
+          echo "│ 📦 总计     │ $TOTAL_COUNT  │  100%   │"
+          echo "└─────────────┴──────────┴──────────┘"
           
           if [ $MISSING_COUNT -gt 0 ]; then
             echo ""
             echo "⚠️  缺失的软件包列表："
+            echo "┌─────────────────────────────────────────┐"
+            echo "│ 序号 │ 软件包名称                        │"
+            echo "├─────────────────────────────────────────┤"
+            index=1
             for pkg in $MISSING_PACKAGES; do
-              echo "  🔴 $pkg"
+              if [ -n "$pkg" ]; then
+                printf "│ %4d │ %-35s │\n" "$index" "$pkg"
+                index=$((index + 1))
+              fi
             done
+            echo "└─────────────────────────────────────────┘"
             echo ""
             echo "🚨 警告：发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能！"
           else
@@ -468,22 +517,56 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
+          echo "missing_packages=$MISSING_PACKAGES" >> $GITHUB_OUTPUT
+          echo "found_packages=$FOUND_PACKAGES" >> $GITHUB_OUTPUT
           
           # 添加到Step Summary
           echo "# 🔍 Luci软件包检查报告 - Ultra变体" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
-          echo "| 状态 | 数量 | 图标 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ 存在 | $FOUND_COUNT | 🟢 |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ 缺失 | $MISSING_COUNT | 🔴 |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📦 总计 | $TOTAL_COUNT | 📦 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 完整软件包列表" >> $GITHUB_STEP_SUMMARY
+          echo "| 序号 | 软件包名称 | 状态 | 位置 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------------|------|------|" >> $GITHUB_STEP_SUMMARY
+          
+          index=1
+          for pkg in $CONFIG_LUCI; do
+            if [ -n "$pkg" ]; then
+              location=""
+              status=""
+              if [ -d "package/$pkg" ]; then
+                location="package/"
+                status="✅"
+              elif [ -d "feeds/packages/$pkg" ]; then
+                location="feeds/packages/"
+                status="✅"
+              elif [ -d "feeds/luci/$pkg" ]; then
+                location="feeds/luci/"
+                status="✅"
+              else
+                location="未找到"
+                status="❌"
+              fi
+              echo "| $index | $pkg | $status | $location |" >> $GITHUB_STEP_SUMMARY
+              index=$((index + 1))
+            fi
+          done
           
           if [ $MISSING_COUNT -gt 0 ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "## ⚠️ 缺失的软件包" >> $GITHUB_STEP_SUMMARY
+            index=1
             for pkg in $MISSING_PACKAGES; do
-              echo "- 🔴 $pkg" >> $GITHUB_STEP_SUMMARY
+              if [ -n "$pkg" ]; then
+                echo "$index. 🔴 $pkg" >> $GITHUB_STEP_SUMMARY
+                index=$((index + 1))
+              fi
             done
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🚨 注意" >> $GITHUB_STEP_SUMMARY
@@ -494,7 +577,7 @@ jobs:
             echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: 📄 生成检查报告文件
+      - name: 📄 生成详细检查报告文件
         if: always()
         run: |
           cd /workdir/openwrt
@@ -504,27 +587,57 @@ jobs:
           echo "Luci软件包检查报告 - Ultra变体" >> $REPORT_FILE
           echo "========================================" >> $REPORT_FILE
           echo "构建时间: ${{ needs.prepare.outputs.build_date }}" >> $REPORT_FILE
+          echo "检查时间: $(date)" >> $REPORT_FILE
           echo "" >> $REPORT_FILE
           
           CONFIG_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
-          echo "配置中的Luci软件包:" >> $REPORT_FILE
-          echo "$CONFIG_LUCI" | while read pkg; do
-            if [ -n "$pkg" ]; then
-              echo "  - $pkg" >> $REPORT_FILE
-            fi
-          done
+          
+          echo "【统计信息】" >> $REPORT_FILE
+          echo "总计: $(echo "$CONFIG_LUCI" | grep -c .) 个包" >> $REPORT_FILE
           echo "" >> $REPORT_FILE
           
-          echo "检查结果:" >> $REPORT_FILE
+          echo "【完整软件包列表】" >> $REPORT_FILE
+          echo "序号  软件包名称                    状态     位置" >> $REPORT_FILE
+          echo "----  ----------------------------  -------  ----------" >> $REPORT_FILE
+          
+          index=1
           for pkg in $CONFIG_LUCI; do
             if [ -n "$pkg" ]; then
-              if [ -d "package/$pkg" ] || [ -d "feeds/packages/$pkg" ] || [ -d "feeds/luci/$pkg" ]; then
-                echo "  ✅ $pkg - 存在" >> $REPORT_FILE
+              location=""
+              status=""
+              if [ -d "package/$pkg" ]; then
+                location="package/"
+                status="存在"
+              elif [ -d "feeds/packages/$pkg" ]; then
+                location="feeds/packages/"
+                status="存在"
+              elif [ -d "feeds/luci/$pkg" ]; then
+                location="feeds/luci/"
+                status="存在"
               else
-                echo "  ❌ $pkg - 缺失" >> $REPORT_FILE
+                location="未找到"
+                status="缺失"
+              fi
+              printf "%-4d  %-28s  %-7s  %s\n" "$index" "$pkg" "$status" "$location" >> $REPORT_FILE
+              index=$((index + 1))
+            fi
+          done
+          
+          echo "" >> $REPORT_FILE
+          echo "【缺失的软件包】" >> $REPORT_FILE
+          missing_count=0
+          for pkg in $CONFIG_LUCI; do
+            if [ -n "$pkg" ]; then
+              if [ ! -d "package/$pkg" ] && [ ! -d "feeds/packages/$pkg" ] && [ ! -d "feeds/luci/$pkg" ]; then
+                echo "$missing_count. $pkg" >> $REPORT_FILE
+                missing_count=$((missing_count + 1))
               fi
             fi
           done
+          
+          if [ $missing_count -eq 0 ]; then
+            echo "无缺失的软件包" >> $REPORT_FILE
+          fi
           
           echo "报告已生成: $REPORT_FILE"
 
@@ -601,57 +714,100 @@ jobs:
           if [ -z "$CONFIG_LUCI" ]; then
             echo "⚠️  未在配置中找到Luci软件包"
             TOTAL_COUNT=0
+            PACKAGE_LIST=""
           else
             echo "📦 配置中的Luci软件包列表："
+            echo "┌─────────────────────────────────────────────────────────┐"
+            echo "│ 序号 │ 软件包名称                                      │"
+            echo "├─────────────────────────────────────────────────────────┤"
+            index=1
             echo "$CONFIG_LUCI" | while read pkg; do
               if [ -n "$pkg" ]; then
-                echo "  📄 $pkg"
+                printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+                index=$((index + 1))
               fi
             done
+            echo "└─────────────────────────────────────────────────────────┘"
             TOTAL_COUNT=$(echo "$CONFIG_LUCI" | grep -c .)
+            PACKAGE_LIST="$CONFIG_LUCI"
           fi
           
           echo ""
           echo "🔍 开始检查软件包存在性..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "┌──────────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                    │ 状态     │ 位置      │"
+          echo "├──────────────────────────────────────────────────────────────┤"
           
           # 检查每个包是否存在
           MISSING_COUNT=0
           FOUND_COUNT=0
           MISSING_PACKAGES=""
           FOUND_PACKAGES=""
+          index=1
           
           for pkg in $CONFIG_LUCI; do
             if [ -n "$pkg" ]; then
-              if [ -d "package/$pkg" ] || [ -d "feeds/packages/$pkg" ] || [ -d "feeds/luci/$pkg" ]; then
-                echo "✅ $pkg - 存在"
+              location=""
+              if [ -d "package/$pkg" ]; then
+                location="package/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
+              elif [ -d "feeds/packages/$pkg" ]; then
+                location="feeds/packages/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
+              elif [ -d "feeds/luci/$pkg" ]; then
+                location="feeds/luci/"
+                status="✅ 存在"
                 FOUND_COUNT=$((FOUND_COUNT + 1))
                 FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
               else
-                echo "❌ $pkg - 缺失"
+                location="未找到"
+                status="❌ 缺失"
                 MISSING_COUNT=$((MISSING_COUNT + 1))
                 MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
               fi
+              printf "│ %4d │ %-30s │ %-8s │ %-10s │\n" "$index" "$pkg" "$status" "$location"
+              index=$((index + 1))
             fi
           done
           
+          echo "└──────────────────────────────────────────────────────────────┘"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
           echo "📊 检查结果统计："
-          echo "┌─────────────┬──────────┐"
-          echo "│    状态     │   数量   │"
-          echo "├─────────────┼──────────┤"
-          echo "│ ✅ 存在     │ $FOUND_COUNT  │"
-          echo "│ ❌ 缺失     │ $MISSING_COUNT  │"
-          echo "│ 📦 总计     │ $TOTAL_COUNT  │"
-          echo "└─────────────┴──────────┘"
+          echo "┌─────────────┬──────────┬──────────┐"
+          echo "│    状态     │   数量   │  百分比  │"
+          echo "├─────────────┼──────────┼──────────┤"
+          if [ $TOTAL_COUNT -gt 0 ]; then
+            FOUND_PERCENT=$((FOUND_COUNT * 100 / TOTAL_COUNT))
+            MISSING_PERCENT=$((MISSING_COUNT * 100 / TOTAL_COUNT))
+          else
+            FOUND_PERCENT=0
+            MISSING_PERCENT=0
+          fi
+          echo "│ ✅ 存在     │ $FOUND_COUNT  │  $FOUND_PERCENT%  │"
+          echo "│ ❌ 缺失     │ $MISSING_COUNT  │  $MISSING_PERCENT%  │"
+          echo "│ 📦 总计     │ $TOTAL_COUNT  │  100%   │"
+          echo "└─────────────┴──────────┴──────────┘"
           
           if [ $MISSING_COUNT -gt 0 ]; then
             echo ""
             echo "⚠️  缺失的软件包列表："
+            echo "┌─────────────────────────────────────────┐"
+            echo "│ 序号 │ 软件包名称                        │"
+            echo "├─────────────────────────────────────────┤"
+            index=1
             for pkg in $MISSING_PACKAGES; do
-              echo "  🔴 $pkg"
+              if [ -n "$pkg" ]; then
+                printf "│ %4d │ %-35s │\n" "$index" "$pkg"
+                index=$((index + 1))
+              fi
             done
+            echo "└─────────────────────────────────────────┘"
             echo ""
             echo "🚨 警告：发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能！"
           else
@@ -669,22 +825,56 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
+          echo "missing_packages=$MISSING_PACKAGES" >> $GITHUB_OUTPUT
+          echo "found_packages=$FOUND_PACKAGES" >> $GITHUB_OUTPUT
           
           # 添加到Step Summary
           echo "# 🔍 Luci软件包检查报告 - ${{ matrix.variant }}变体" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
-          echo "| 状态 | 数量 | 图标 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ 存在 | $FOUND_COUNT | 🟢 |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ 缺失 | $MISSING_COUNT | 🔴 |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📦 总计 | $TOTAL_COUNT | 📦 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 完整软件包列表" >> $GITHUB_STEP_SUMMARY
+          echo "| 序号 | 软件包名称 | 状态 | 位置 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------------|------|------|" >> $GITHUB_STEP_SUMMARY
+          
+          index=1
+          for pkg in $CONFIG_LUCI; do
+            if [ -n "$pkg" ]; then
+              location=""
+              status=""
+              if [ -d "package/$pkg" ]; then
+                location="package/"
+                status="✅"
+              elif [ -d "feeds/packages/$pkg" ]; then
+                location="feeds/packages/"
+                status="✅"
+              elif [ -d "feeds/luci/$pkg" ]; then
+                location="feeds/luci/"
+                status="✅"
+              else
+                location="未找到"
+                status="❌"
+              fi
+              echo "| $index | $pkg | $status | $location |" >> $GITHUB_STEP_SUMMARY
+              index=$((index + 1))
+            fi
+          done
           
           if [ $MISSING_COUNT -gt 0 ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "## ⚠️ 缺失的软件包" >> $GITHUB_STEP_SUMMARY
+            index=1
             for pkg in $MISSING_PACKAGES; do
-              echo "- 🔴 $pkg" >> $GITHUB_STEP_SUMMARY
+              if [ -n "$pkg" ]; then
+                echo "$index. 🔴 $pkg" >> $GITHUB_STEP_SUMMARY
+                index=$((index + 1))
+              fi
             done
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🚨 注意" >> $GITHUB_STEP_SUMMARY
@@ -695,7 +885,7 @@ jobs:
             echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: 📄 生成检查报告文件
+      - name: 📄 生成详细检查报告文件
         if: always()
         run: |
           cd /workdir/openwrt
@@ -705,27 +895,57 @@ jobs:
           echo "Luci软件包检查报告 - ${{ matrix.variant }}变体" >> $REPORT_FILE
           echo "========================================" >> $REPORT_FILE
           echo "构建时间: ${{ needs.prepare.outputs.build_date }}" >> $REPORT_FILE
+          echo "检查时间: $(date)" >> $REPORT_FILE
           echo "" >> $REPORT_FILE
           
           CONFIG_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
-          echo "配置中的Luci软件包:" >> $REPORT_FILE
-          echo "$CONFIG_LUCI" | while read pkg; do
-            if [ -n "$pkg" ]; then
-              echo "  - $pkg" >> $REPORT_FILE
-            fi
-          done
+          
+          echo "【统计信息】" >> $REPORT_FILE
+          echo "总计: $(echo "$CONFIG_LUCI" | grep -c .) 个包" >> $REPORT_FILE
           echo "" >> $REPORT_FILE
           
-          echo "检查结果:" >> $REPORT_FILE
+          echo "【完整软件包列表】" >> $REPORT_FILE
+          echo "序号  软件包名称                    状态     位置" >> $REPORT_FILE
+          echo "----  ----------------------------  -------  ----------" >> $REPORT_FILE
+          
+          index=1
           for pkg in $CONFIG_LUCI; do
             if [ -n "$pkg" ]; then
-              if [ -d "package/$pkg" ] || [ -d "feeds/packages/$pkg" ] || [ -d "feeds/luci/$pkg" ]; then
-                echo "  ✅ $pkg - 存在" >> $REPORT_FILE
+              location=""
+              status=""
+              if [ -d "package/$pkg" ]; then
+                location="package/"
+                status="存在"
+              elif [ -d "feeds/packages/$pkg" ]; then
+                location="feeds/packages/"
+                status="存在"
+              elif [ -d "feeds/luci/$pkg" ]; then
+                location="feeds/luci/"
+                status="存在"
               else
-                echo "  ❌ $pkg - 缺失" >> $REPORT_FILE
+                location="未找到"
+                status="缺失"
+              fi
+              printf "%-4d  %-28s  %-7s  %s\n" "$index" "$pkg" "$status" "$location" >> $REPORT_FILE
+              index=$((index + 1))
+            fi
+          done
+          
+          echo "" >> $REPORT_FILE
+          echo "【缺失的软件包】" >> $REPORT_FILE
+          missing_count=0
+          for pkg in $CONFIG_LUCI; do
+            if [ -n "$pkg" ]; then
+              if [ ! -d "package/$pkg" ] && [ ! -d "feeds/packages/$pkg" ] && [ ! -d "feeds/luci/$pkg" ]; then
+                echo "$missing_count. $pkg" >> $REPORT_FILE
+                missing_count=$((missing_count + 1))
               fi
             fi
           done
+          
+          if [ $missing_count -eq 0 ]; then
+            echo "无缺失的软件包" >> $REPORT_FILE
+          fi
           
           echo "报告已生成: $REPORT_FILE"
 
