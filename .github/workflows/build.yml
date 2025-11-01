@@ -208,14 +208,59 @@ jobs:
             openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
             openwrt-toolchain-
 
-      - name: 克隆源码
-        if: steps.cache.outputs.cache-hit != 'true'
+      - name: 检查缓存状态并准备源码目录
         run: |
-          cd /workdir
-          echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
-          echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
-          git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
+          echo "🔍 缓存状态: ${{ steps.cache.outputs.cache-hit }}"
+          
+          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
+            echo "✅ 缓存命中，检查源码目录..."
+            if [ -d "/workdir/openwrt" ]; then
+              echo "📁 源码目录已存在"
+              if [ -f "/workdir/openwrt/Makefile" ]; then
+                echo "✅ 源码目录完整，跳过克隆"
+              else
+                echo "⚠️ 源码目录不完整，清理后重新克隆"
+                rm -rf /workdir/openwrt
+                echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
+                echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
+                cd /workdir
+                git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
+              fi
+            else
+              echo "⚠️ 源码目录不存在，重新克隆"
+              echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
+              echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
+              cd /workdir
+              git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
+            fi
+          else
+            echo "❌ 缓存未命中，执行完整克隆"
+            # 确保目录不存在
+            if [ -d "/workdir/openwrt" ]; then
+              echo "🗑️ 清理已存在的源码目录"
+              rm -rf /workdir/openwrt
+            fi
+            echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
+            echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
+            cd /workdir
+            git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
+          fi
+          
+          # 创建软链接
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          
+          # 验证克隆结果
+          if [ -f "/workdir/openwrt/Makefile" ]; then
+            echo "✅ 源码验证成功"
+            echo "📊 源码信息:"
+            cd /workdir/openwrt
+            echo "  - 当前分支: $(git branch --show-current)"
+            echo "  - 最新提交: $(git rev-parse --short HEAD)"
+            echo "  - 提交时间: $(git log -1 --format='%cd' --date=short)"
+          else
+            echo "❌ 源码验证失败"
+            exit 1
+          fi
 
       - name: 集成diy.sh功能（P1部分）
         if: steps.cache.outputs.cache-hit != 'true'
@@ -372,6 +417,14 @@ jobs:
             openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
             openwrt-toolchain-
 
+      - name: 验证源码完整性
+        run: |
+          if [ ! -f "/workdir/openwrt/Makefile" ]; then
+            echo "❌ 源码目录不完整，尝试恢复..."
+            exit 1
+          fi
+          echo "✅ 源码目录验证通过"
+
       - name: 🚨 准备Ultra配置
         run: |
           cd /workdir/openwrt
@@ -430,8 +483,6 @@ jobs:
           FOUND_COUNT=0
           MISSING_PACKAGES=""
           FOUND_PACKAGES=""
-          MISSING_DETAILS=""
-          FOUND_DETAILS=""
           index=1
           
           for pkg in $CONFIG_LUCI; do
@@ -442,25 +493,21 @@ jobs:
                 status="✅ 存在"
                 FOUND_COUNT=$((FOUND_COUNT + 1))
                 FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
-                FOUND_DETAILS="$FOUND_DETAILS│ %4d │ %-30s │ %-8s │ %-10s │\n"
               elif [ -d "feeds/packages/$pkg" ]; then
                 location="feeds/packages/"
                 status="✅ 存在"
                 FOUND_COUNT=$((FOUND_COUNT + 1))
                 FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
-                FOUND_DETAILS="$FOUND_DETAILS│ %4d │ %-30s │ %-8s │ %-10s │\n"
               elif [ -d "feeds/luci/$pkg" ]; then
                 location="feeds/luci/"
                 status="✅ 存在"
                 FOUND_COUNT=$((FOUND_COUNT + 1))
                 FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
-                FOUND_DETAILS="$FOUND_DETAILS│ %4d │ %-30s │ %-8s │ %-10s │\n"
               else
                 location="未找到"
                 status="❌ 缺失"
                 MISSING_COUNT=$((MISSING_COUNT + 1))
                 MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
-                MISSING_DETAILS="$MISSING_DETAILS│ %4d │ %-30s │ %-8s │ %-10s │\n"
               fi
               printf "│ %4d │ %-30s │ %-8s │ %-10s │\n" "$index" "$pkg" "$status" "$location"
               index=$((index + 1))
@@ -673,6 +720,14 @@ jobs:
             openwrt-base-
             openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
             openwrt-toolchain-
+
+      - name: 验证源码完整性
+        run: |
+          if [ ! -f "/workdir/openwrt/Makefile" ]; then
+            echo "❌ 源码目录不完整，尝试恢复..."
+            exit 1
+          fi
+          echo "✅ 源码目录验证通过"
 
       - name: 🚨 准备${{ matrix.variant }}配置
         run: |
@@ -978,6 +1033,14 @@ jobs:
             openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
             openwrt-toolchain-
 
+      - name: 验证源码完整性
+        run: |
+          if [ ! -f "/workdir/openwrt/Makefile" ]; then
+            echo "❌ 源码目录不完整，尝试恢复..."
+            exit 1
+          fi
+          echo "✅ 源码目录验证通过"
+
       - name: 准备Ultra配置
         run: |
           cd /workdir/openwrt
@@ -1044,6 +1107,14 @@ jobs:
             openwrt-base-
             openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
             openwrt-toolchain-
+
+      - name: 验证源码完整性
+        run: |
+          if [ ! -f "/workdir/openwrt/Makefile" ]; then
+            echo "❌ 源码目录不完整，尝试恢复..."
+            exit 1
+          fi
+          echo "✅ 源码目录验证通过"
 
       - name: 准备${{ matrix.variant }}配置
         run: |
