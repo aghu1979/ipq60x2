@@ -48,12 +48,48 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
       - name: 解析配置文件
         id: parse_config
         run: |
           # 从repos.json获取immwrt仓库地址
           if [ -f "configs/repos.json" ]; then
-            REPO=$(jq -r '.immwrt' configs/repos.json)
+            # 检查JSON格式
+            if ! jq empty configs/repos.json; then
+              echo "❌ repos.json格式错误"
+              exit 1
+            fi
+            
+            # 获取immwrt仓库地址
+            REPO=$(jq -r '.immwrt' configs/repos.json 2>/dev/null)
+            if [ "$REPO" = "null" ] || [ -z "$REPO" ]; then
+              # 尝试从repos对象中获取
+              REPO=$(jq -r '.repos.immwrt' configs/repos.json 2>/dev/null)
+            fi
+            if [ "$REPO" = "null" ] || [ -z "$REPO" ]; then
+              # 尝试从url字段获取
+              REPO=$(jq -r '.immwrt.url' configs/repos.json 2>/dev/null)
+            fi
+            
+            if [ "$REPO" = "null" ] || [ -z "$REPO" ]; then
+              echo "❌ 无法从repos.json中获取immwrt仓库地址"
+              echo "请检查文件格式，确保包含immwrt字段"
+              exit 1
+            fi
+            
+            # 清理可能的空白字符
+            REPO=$(echo "$REPO" | xargs)
+            
+            # 验证URL格式
+            if [[ ! "$REPO" =~ ^https?:// ]]; then
+              echo "❌ 仓库地址格式无效: $REPO"
+              exit 1
+            fi
+            
             echo "immwrt_repo=$REPO" >> $GITHUB_OUTPUT
             echo "✅ 获取到immwrt仓库: $REPO"
           else
@@ -72,7 +108,9 @@ jobs:
       - name: 生成构建日期
         id: date
         run: |
-          echo "date=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+          DATE=$(date +"%Y.%m.%d-%H%M")
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "📅 构建日期: $DATE"
 
       - name: 生成Release标签
         id: tag
@@ -82,6 +120,8 @@ jobs:
           else
             TAG="AutoBuild-${{ steps.date.outputs.date }}-$(git rev-parse --short HEAD)"
           fi
+          # 确保标签格式正确
+          TAG=$(echo "$TAG" | sed 's/[^a-zA-Z0-9._-]//g')
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "🏷️ Release标签: $TAG"
 
@@ -97,6 +137,9 @@ jobs:
           # 多层缓存策略
           BASE_KEY="openwrt-base-${{ steps.config_hash.outputs.hash }}"
           SUFFIX="${{ steps.date.outputs.date }}-$(git rev-parse --short HEAD)"
+          # 清理可能的特殊字符
+          BASE_KEY=$(echo "$BASE_KEY" | tr -d '\n\r')
+          SUFFIX=$(echo "$SUFFIX" | tr -d '\n\r')
           echo "base_key=$BASE_KEY" >> $GITHUB_OUTPUT
           echo "suffix=$SUFFIX" >> $GITHUB_OUTPUT
           echo "🔑 基础缓存键: $BASE_KEY"
@@ -124,6 +167,17 @@ jobs:
 
       - name: 检出代码
         uses: actions/checkout@v4
+
+      - name: 验证仓库地址
+        run: |
+          REPO="${{ needs.prepare.outputs.immwrt_repo }}"
+          echo "📥 验证仓库地址: $REPO"
+          # 验证仓库是否可访问
+          if ! git ls-remote "$REPO" > /dev/null 2>&1; then
+            echo "❌ 仓库地址不可访问: $REPO"
+            exit 1
+          fi
+          echo "✅ 仓库地址验证通过"
 
       - name: 企业级缓存策略
         id: cache
@@ -404,18 +458,18 @@ jobs:
           
           # 生成固件信息文件
           cd $GITHUB_WORKSPACE/release
-          cat > firmware_info.md << EOF
+          cat > firmware_info.md << 'EOF'
           # OpenWrt IPQ60x2 固件发布
           
           ## 📋 固件信息
-          - **构建时间**: ${{ needs.prepare.outputs.build_date }}
-          - **源码分支**: ${{ env.REPO_BRANCH }}
-          - **源码仓库**: ${{ needs.prepare.outputs.immwrt_repo }}
-          - **配置哈希**: ${{ needs.prepare.outputs.config_hash }}
+          - **构建时间**: ${BUILD_DATE}
+          - **源码分支**: ${REPO_BRANCH}
+          - **源码仓库**: ${IMMWRT_REPO}
+          - **配置哈希**: ${CONFIG_HASH}
           
           ## 🔧 固件设置
-          - **IP地址**: ${{ env.FIRMWARE_IP }}
-          - **机器名**: ${{ env.FIRMWARE_NAME }}
+          - **IP地址**: ${FIRMWARE_IP}
+          - **机器名**: ${FIRMWARE_NAME}
           - **密码**: 空密码
           - **登录方式**: SSH或Web界面
           
@@ -427,7 +481,7 @@ jobs:
           ## 🚀 使用说明
           1. 下载对应变体的固件文件
           2. 通过路由器后台或TFTP方式刷入
-          3. 刷入后访问 ${{ env.FIRMWARE_IP }}
+          3. 刷入后访问 ${FIRMWARE_IP}
           4. 用户名: root，密码: 空
           
           ## ⚠️ 注意事项
@@ -437,8 +491,17 @@ jobs:
           
           ---
           构建系统: GitHub Actions
-          构建任务: ${{ github.run_id }}
+          构建任务: ${RUN_ID}
           EOF
+          
+          # 替换变量
+          sed -i "s/\${BUILD_DATE}/${{ needs.prepare.outputs.build_date }}/g" firmware_info.md
+          sed -i "s/\${REPO_BRANCH}/${{ env.REPO_BRANCH }}/g" firmware_info.md
+          sed -i "s#\${IMMWRT_REPO}#${{ needs.prepare.outputs.immwrt_repo }}#g" firmware_info.md
+          sed -i "s/\${CONFIG_HASH}/${{ needs.prepare.outputs.config_hash }}/g" firmware_info.md
+          sed -i "s/\${FIRMWARE_IP}/${{ env.FIRMWARE_IP }}/g" firmware_info.md
+          sed -i "s/\${FIRMWARE_NAME}/${{ env.FIRMWARE_NAME }}/g" firmware_info.md
+          sed -i "s/\${RUN_ID}/${{ github.run_id }}/g" firmware_info.md
           
           echo "✅ 固件整理完成"
           ls -la
