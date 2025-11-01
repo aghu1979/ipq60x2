@@ -38,8 +38,6 @@ jobs:
       release_tag: ${{ steps.tag.outputs.tag }}
       cache_key_base: ${{ steps.cache_key.outputs.base_key }}
       cache_key_full: ${{ steps.cache_key.outputs.full_key }}
-      matrix_ultra: ${{ steps.matrix.outputs.ultra }}
-      matrix_variants: ${{ steps.matrix.outputs.variants }}
       config_hash: ${{ steps.config_hash.outputs.hash }}
       toolchain_hash: ${{ steps.config_hash.outputs.toolchain_hash }}
     
@@ -129,12 +127,6 @@ jobs:
           TAG=$(echo "$TAG" | sed 's/[^a-zA-Z0-9._-]//g')
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "🏷️ Release标签: $TAG"
-
-      - name: 设置编译矩阵
-        id: matrix
-        run: |
-          echo 'ultra=["Ultra"]' >> $GITHUB_OUTPUT
-          echo 'variants=["Max","Pro"]' >> $GITHUB_OUTPUT
 
       - name: 生成优化的缓存键
         id: cache_key
@@ -396,7 +388,7 @@ jobs:
           echo "📁 /workdir目录大小:"
           du -sh /workdir/*
 
-  # 🔍 Ultra变体Luci软件包检查（独立Job）
+  # 🔍 Ultra变体Luci软件包检查
   check-ultra-luci:
     runs-on: ubuntu-22.04
     needs: [prepare, build-base]
@@ -429,6 +421,10 @@ jobs:
         run: |
           cd /workdir/openwrt
           echo "⚙️ 加载Ultra配置"
+          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
+            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
+          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
           [ -f "$GITHUB_WORKSPACE/configs/Ultra.config" ] && \
             cat "$GITHUB_WORKSPACE/configs/Ultra.config" >> .config
           make defconfig
@@ -453,7 +449,6 @@ jobs:
           if [ -z "$CONFIG_LUCI" ]; then
             echo "⚠️  未在配置中找到Luci软件包"
             TOTAL_COUNT=0
-            PACKAGE_LIST=""
           else
             echo "📦 配置中的Luci软件包列表："
             echo "┌─────────────────────────────────────────────────────────┐"
@@ -468,7 +463,6 @@ jobs:
             done
             echo "└─────────────────────────────────────────────────────────┘"
             TOTAL_COUNT=$(echo "$CONFIG_LUCI" | grep -c .)
-            PACKAGE_LIST="$CONFIG_LUCI"
           fi
           
           echo ""
@@ -481,8 +475,6 @@ jobs:
           # 检查每个包是否存在
           MISSING_COUNT=0
           FOUND_COUNT=0
-          MISSING_PACKAGES=""
-          FOUND_PACKAGES=""
           index=1
           
           for pkg in $CONFIG_LUCI; do
@@ -492,22 +484,18 @@ jobs:
                 location="package/"
                 status="✅ 存在"
                 FOUND_COUNT=$((FOUND_COUNT + 1))
-                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
               elif [ -d "feeds/packages/$pkg" ]; then
                 location="feeds/packages/"
                 status="✅ 存在"
                 FOUND_COUNT=$((FOUND_COUNT + 1))
-                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
               elif [ -d "feeds/luci/$pkg" ]; then
                 location="feeds/luci/"
                 status="✅ 存在"
                 FOUND_COUNT=$((FOUND_COUNT + 1))
-                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
               else
                 location="未找到"
                 status="❌ 缺失"
                 MISSING_COUNT=$((MISSING_COUNT + 1))
-                MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
               fi
               printf "│ %4d │ %-30s │ %-8s │ %-10s │\n" "$index" "$pkg" "$status" "$location"
               index=$((index + 1))
@@ -535,19 +523,6 @@ jobs:
           
           if [ $MISSING_COUNT -gt 0 ]; then
             echo ""
-            echo "⚠️  缺失的软件包列表："
-            echo "┌─────────────────────────────────────────┐"
-            echo "│ 序号 │ 软件包名称                        │"
-            echo "├─────────────────────────────────────────┤"
-            index=1
-            for pkg in $MISSING_PACKAGES; do
-              if [ -n "$pkg" ]; then
-                printf "│ %4d │ %-35s │\n" "$index" "$pkg"
-                index=$((index + 1))
-              fi
-            done
-            echo "└─────────────────────────────────────────┘"
-            echo ""
             echo "🚨 警告：发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能！"
           else
             echo ""
@@ -564,452 +539,14 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
-          echo "missing_packages=$MISSING_PACKAGES" >> $GITHUB_OUTPUT
-          echo "found_packages=$FOUND_PACKAGES" >> $GITHUB_OUTPUT
-          
-          # 添加到Step Summary
-          echo "# 🔍 Luci软件包检查报告 - Ultra变体" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
-          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📦 完整软件包列表" >> $GITHUB_STEP_SUMMARY
-          echo "| 序号 | 软件包名称 | 状态 | 位置 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------------|------|------|" >> $GITHUB_STEP_SUMMARY
-          
-          index=1
-          for pkg in $CONFIG_LUCI; do
-            if [ -n "$pkg" ]; then
-              location=""
-              status=""
-              if [ -d "package/$pkg" ]; then
-                location="package/"
-                status="✅"
-              elif [ -d "feeds/packages/$pkg" ]; then
-                location="feeds/packages/"
-                status="✅"
-              elif [ -d "feeds/luci/$pkg" ]; then
-                location="feeds/luci/"
-                status="✅"
-              else
-                location="未找到"
-                status="❌"
-              fi
-              echo "| $index | $pkg | $status | $location |" >> $GITHUB_STEP_SUMMARY
-              index=$((index + 1))
-            fi
-          done
-          
-          if [ $MISSING_COUNT -gt 0 ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## ⚠️ 缺失的软件包" >> $GITHUB_STEP_SUMMARY
-            index=1
-            for pkg in $MISSING_PACKAGES; do
-              if [ -n "$pkg" ]; then
-                echo "$index. 🔴 $pkg" >> $GITHUB_STEP_SUMMARY
-                index=$((index + 1))
-              fi
-            done
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🚨 注意" >> $GITHUB_STEP_SUMMARY
-            echo "缺失的软件包可能会影响固件的某些功能，请检查配置文件。" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## 🎉 检查结果" >> $GITHUB_STEP_SUMMARY
-            echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
-          fi
 
-      - name: 📄 生成详细检查报告文件
-        if: always()
-        run: |
-          cd /workdir/openwrt
-          REPORT_FILE="$GITHUB_WORKSPACE/luci_check_report_ultra.txt"
-          
-          echo "========================================" > $REPORT_FILE
-          echo "Luci软件包检查报告 - Ultra变体" >> $REPORT_FILE
-          echo "========================================" >> $REPORT_FILE
-          echo "构建时间: ${{ needs.prepare.outputs.build_date }}" >> $REPORT_FILE
-          echo "检查时间: $(date)" >> $REPORT_FILE
-          echo "" >> $REPORT_FILE
-          
-          CONFIG_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
-          
-          echo "【统计信息】" >> $REPORT_FILE
-          echo "总计: $(echo "$CONFIG_LUCI" | grep -c .) 个包" >> $REPORT_FILE
-          echo "" >> $REPORT_FILE
-          
-          echo "【完整软件包列表】" >> $REPORT_FILE
-          echo "序号  软件包名称                    状态     位置" >> $REPORT_FILE
-          echo "----  ----------------------------  -------  ----------" >> $REPORT_FILE
-          
-          index=1
-          for pkg in $CONFIG_LUCI; do
-            if [ -n "$pkg" ]; then
-              location=""
-              status=""
-              if [ -d "package/$pkg" ]; then
-                location="package/"
-                status="存在"
-              elif [ -d "feeds/packages/$pkg" ]; then
-                location="feeds/packages/"
-                status="存在"
-              elif [ -d "feeds/luci/$pkg" ]; then
-                location="feeds/luci/"
-                status="存在"
-              else
-                location="未找到"
-                status="缺失"
-              fi
-              printf "%-4d  %-28s  %-7s  %s\n" "$index" "$pkg" "$status" "$location" >> $REPORT_FILE
-              index=$((index + 1))
-            fi
-          done
-          
-          echo "" >> $REPORT_FILE
-          echo "【缺失的软件包】" >> $REPORT_FILE
-          missing_count=0
-          for pkg in $CONFIG_LUCI; do
-            if [ -n "$pkg" ]; then
-              if [ ! -d "package/$pkg" ] && [ ! -d "feeds/packages/$pkg" ] && [ ! -d "feeds/luci/$pkg" ]; then
-                echo "$missing_count. $pkg" >> $REPORT_FILE
-                missing_count=$((missing_count + 1))
-              fi
-            fi
-          done
-          
-          if [ $missing_count -eq 0 ]; then
-            echo "无缺失的软件包" >> $REPORT_FILE
-          fi
-          
-          echo "报告已生成: $REPORT_FILE"
-
-      - name: 📤 上传检查报告
+      - name: 📄 生成检查报告文件
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: luci-check-report-ultra
-          path: luci_check_report_ultra.txt
-          retention-days: 30
-
-  # 🔍 变体Luci软件包检查（独立Job）
-  check-variants-luci:
-    runs-on: ubuntu-22.04
-    needs: [prepare, build-base]
-    if: always() && needs.build-base.result == 'success'
-    strategy:
-      matrix:
-        variant: ${{ fromJson(needs.prepare.outputs.matrix_variants) }}
-      fail-fast: false
-    
-    steps:
-      - name: 恢复编译环境
-        uses: actions/cache@v4
-        with:
           path: |
-            /workdir/openwrt
-            ~/.cache/go-build
-            ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_full }}
-          restore-keys: |
-            ${{ needs.prepare.outputs.cache_key_base }}-
-            openwrt-base-
-            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
-            openwrt-toolchain-
-
-      - name: 验证源码完整性
-        run: |
-          if [ ! -f "/workdir/openwrt/Makefile" ]; then
-            echo "❌ 源码目录不完整，尝试恢复..."
-            exit 1
-          fi
-          echo "✅ 源码目录验证通过"
-
-      - name: 🚨 准备${{ matrix.variant }}配置
-        run: |
-          cd /workdir/openwrt
-          echo "⚙️ 加载${{ matrix.variant }}配置"
-          
-          # 清理之前的配置
-          make distclean
-          
-          # 重新加载基础配置
-          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
-            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
-          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
-          
-          # 加载变体配置
-          [ -f "$GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config" >> .config
-          
-          make defconfig
-
-      - name: 🔍🔍🔍 Luci软件包完整性检查 - ${{ matrix.variant }}变体 🔍🔍🔍
-        id: luci_check
-        run: |
-          cd /workdir/openwrt
-          
-          # 输出醒目的标题
-          echo ""
-          echo "╔══════════════════════════════════════════════════════════════╗"
-          echo "║                    🔍 LUCI软件包检查报告 🔍                    ║"
-          echo "║                     ${{ matrix.variant }}变体                      ║"
-          echo "╚══════════════════════════════════════════════════════════════╝"
-          echo ""
-          
-          # 获取配置中的所有Luci包
-          echo "📋 正在检查配置中的Luci软件包..."
-          CONFIG_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
-          
-          if [ -z "$CONFIG_LUCI" ]; then
-            echo "⚠️  未在配置中找到Luci软件包"
-            TOTAL_COUNT=0
-            PACKAGE_LIST=""
-          else
-            echo "📦 配置中的Luci软件包列表："
-            echo "┌─────────────────────────────────────────────────────────┐"
-            echo "│ 序号 │ 软件包名称                                      │"
-            echo "├─────────────────────────────────────────────────────────┤"
-            index=1
-            echo "$CONFIG_LUCI" | while read pkg; do
-              if [ -n "$pkg" ]; then
-                printf "│ %4d │ %-47s │\n" "$index" "$pkg"
-                index=$((index + 1))
-              fi
-            done
-            echo "└─────────────────────────────────────────────────────────┘"
-            TOTAL_COUNT=$(echo "$CONFIG_LUCI" | grep -c .)
-            PACKAGE_LIST="$CONFIG_LUCI"
-          fi
-          
-          echo ""
-          echo "🔍 开始检查软件包存在性..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "┌──────────────────────────────────────────────────────────────┐"
-          echo "│ 序号 │ 软件包名称                    │ 状态     │ 位置      │"
-          echo "├──────────────────────────────────────────────────────────────┤"
-          
-          # 检查每个包是否存在
-          MISSING_COUNT=0
-          FOUND_COUNT=0
-          MISSING_PACKAGES=""
-          FOUND_PACKAGES=""
-          index=1
-          
-          for pkg in $CONFIG_LUCI; do
-            if [ -n "$pkg" ]; then
-              location=""
-              if [ -d "package/$pkg" ]; then
-                location="package/"
-                status="✅ 存在"
-                FOUND_COUNT=$((FOUND_COUNT + 1))
-                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
-              elif [ -d "feeds/packages/$pkg" ]; then
-                location="feeds/packages/"
-                status="✅ 存在"
-                FOUND_COUNT=$((FOUND_COUNT + 1))
-                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
-              elif [ -d "feeds/luci/$pkg" ]; then
-                location="feeds/luci/"
-                status="✅ 存在"
-                FOUND_COUNT=$((FOUND_COUNT + 1))
-                FOUND_PACKAGES="$FOUND_PACKAGES $pkg"
-              else
-                location="未找到"
-                status="❌ 缺失"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-                MISSING_PACKAGES="$MISSING_PACKAGES $pkg"
-              fi
-              printf "│ %4d │ %-30s │ %-8s │ %-10s │\n" "$index" "$pkg" "$status" "$location"
-              index=$((index + 1))
-            fi
-          done
-          
-          echo "└──────────────────────────────────────────────────────────────┘"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "📊 检查结果统计："
-          echo "┌─────────────┬──────────┬──────────┐"
-          echo "│    状态     │   数量   │  百分比  │"
-          echo "├─────────────┼──────────┼──────────┤"
-          if [ $TOTAL_COUNT -gt 0 ]; then
-            FOUND_PERCENT=$((FOUND_COUNT * 100 / TOTAL_COUNT))
-            MISSING_PERCENT=$((MISSING_COUNT * 100 / TOTAL_COUNT))
-          else
-            FOUND_PERCENT=0
-            MISSING_PERCENT=0
-          fi
-          echo "│ ✅ 存在     │ $FOUND_COUNT  │  $FOUND_PERCENT%  │"
-          echo "│ ❌ 缺失     │ $MISSING_COUNT  │  $MISSING_PERCENT%  │"
-          echo "│ 📦 总计     │ $TOTAL_COUNT  │  100%   │"
-          echo "└─────────────┴──────────┴──────────┘"
-          
-          if [ $MISSING_COUNT -gt 0 ]; then
-            echo ""
-            echo "⚠️  缺失的软件包列表："
-            echo "┌─────────────────────────────────────────┐"
-            echo "│ 序号 │ 软件包名称                        │"
-            echo "├─────────────────────────────────────────┤"
-            index=1
-            for pkg in $MISSING_PACKAGES; do
-              if [ -n "$pkg" ]; then
-                printf "│ %4d │ %-35s │\n" "$index" "$pkg"
-                index=$((index + 1))
-              fi
-            done
-            echo "└─────────────────────────────────────────┘"
-            echo ""
-            echo "🚨 警告：发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能！"
-          else
-            echo ""
-            echo "🎉 恭喜！所有Luci软件包检查通过！"
-          fi
-          
-          echo ""
-          echo "╔══════════════════════════════════════════════════════════════╗"
-          echo "║                      检查完成                             ║"
-          echo "╚══════════════════════════════════════════════════════════════╝"
-          echo ""
-          
-          # 保存到输出
-          echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
-          echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
-          echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
-          echo "missing_packages=$MISSING_PACKAGES" >> $GITHUB_OUTPUT
-          echo "found_packages=$FOUND_PACKAGES" >> $GITHUB_OUTPUT
-          
-          # 添加到Step Summary
-          echo "# 🔍 Luci软件包检查报告 - ${{ matrix.variant }}变体" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
-          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📦 完整软件包列表" >> $GITHUB_STEP_SUMMARY
-          echo "| 序号 | 软件包名称 | 状态 | 位置 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------------|------|------|" >> $GITHUB_STEP_SUMMARY
-          
-          index=1
-          for pkg in $CONFIG_LUCI; do
-            if [ -n "$pkg" ]; then
-              location=""
-              status=""
-              if [ -d "package/$pkg" ]; then
-                location="package/"
-                status="✅"
-              elif [ -d "feeds/packages/$pkg" ]; then
-                location="feeds/packages/"
-                status="✅"
-              elif [ -d "feeds/luci/$pkg" ]; then
-                location="feeds/luci/"
-                status="✅"
-              else
-                location="未找到"
-                status="❌"
-              fi
-              echo "| $index | $pkg | $status | $location |" >> $GITHUB_STEP_SUMMARY
-              index=$((index + 1))
-            fi
-          done
-          
-          if [ $MISSING_COUNT -gt 0 ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## ⚠️ 缺失的软件包" >> $GITHUB_STEP_SUMMARY
-            index=1
-            for pkg in $MISSING_PACKAGES; do
-              if [ -n "$pkg" ]; then
-                echo "$index. 🔴 $pkg" >> $GITHUB_STEP_SUMMARY
-                index=$((index + 1))
-              fi
-            done
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### 🚨 注意" >> $GITHUB_STEP_SUMMARY
-            echo "缺失的软件包可能会影响固件的某些功能，请检查配置文件。" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## 🎉 检查结果" >> $GITHUB_STEP_SUMMARY
-            echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: 📄 生成详细检查报告文件
-        if: always()
-        run: |
-          cd /workdir/openwrt
-          REPORT_FILE="$GITHUB_WORKSPACE/luci_check_report_${{ matrix.variant }}.txt"
-          
-          echo "========================================" > $REPORT_FILE
-          echo "Luci软件包检查报告 - ${{ matrix.variant }}变体" >> $REPORT_FILE
-          echo "========================================" >> $REPORT_FILE
-          echo "构建时间: ${{ needs.prepare.outputs.build_date }}" >> $REPORT_FILE
-          echo "检查时间: $(date)" >> $REPORT_FILE
-          echo "" >> $REPORT_FILE
-          
-          CONFIG_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
-          
-          echo "【统计信息】" >> $REPORT_FILE
-          echo "总计: $(echo "$CONFIG_LUCI" | grep -c .) 个包" >> $REPORT_FILE
-          echo "" >> $REPORT_FILE
-          
-          echo "【完整软件包列表】" >> $REPORT_FILE
-          echo "序号  软件包名称                    状态     位置" >> $REPORT_FILE
-          echo "----  ----------------------------  -------  ----------" >> $REPORT_FILE
-          
-          index=1
-          for pkg in $CONFIG_LUCI; do
-            if [ -n "$pkg" ]; then
-              location=""
-              status=""
-              if [ -d "package/$pkg" ]; then
-                location="package/"
-                status="存在"
-              elif [ -d "feeds/packages/$pkg" ]; then
-                location="feeds/packages/"
-                status="存在"
-              elif [ -d "feeds/luci/$pkg" ]; then
-                location="feeds/luci/"
-                status="存在"
-              else
-                location="未找到"
-                status="缺失"
-              fi
-              printf "%-4d  %-28s  %-7s  %s\n" "$index" "$pkg" "$status" "$location" >> $REPORT_FILE
-              index=$((index + 1))
-            fi
-          done
-          
-          echo "" >> $REPORT_FILE
-          echo "【缺失的软件包】" >> $REPORT_FILE
-          missing_count=0
-          for pkg in $CONFIG_LUCI; do
-            if [ -n "$pkg" ]; then
-              if [ ! -d "package/$pkg" ] && [ ! -d "feeds/packages/$pkg" ] && [ ! -d "feeds/luci/$pkg" ]; then
-                echo "$missing_count. $pkg" >> $REPORT_FILE
-                missing_count=$((missing_count + 1))
-              fi
-            fi
-          done
-          
-          if [ $missing_count -eq 0 ]; then
-            echo "无缺失的软件包" >> $REPORT_FILE
-          fi
-          
-          echo "报告已生成: $REPORT_FILE"
-
-      - name: 📤 上传检查报告
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: luci-check-report-${{ matrix.variant }}
-          path: luci_check_report_${{ matrix.variant }}.txt
+            /workdir/openwrt/.config
           retention-days: 30
 
   # Ultra变体编译
@@ -1045,6 +582,10 @@ jobs:
         run: |
           cd /workdir/openwrt
           echo "⚙️ 加载Ultra配置"
+          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
+            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
+          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
           [ -f "$GITHUB_WORKSPACE/configs/Ultra.config" ] && \
             cat "$GITHUB_WORKSPACE/configs/Ultra.config" >> .config
           make defconfig
@@ -1083,15 +624,11 @@ jobs:
           echo "✅ Ultra固件整理完成"
           ls -la
 
-  # 变体并行编译
-  build-variants:
+  # 🔍 Max变体Luci软件包检查（Ultra成功后）
+  check-max-luci:
     runs-on: ubuntu-22.04
-    needs: [prepare, build-base, check-variants-luci]
-    if: always() && needs.build-base.result == 'success'
-    strategy:
-      matrix:
-        variant: ${{ fromJson(needs.prepare.outputs.matrix_variants) }}
-      fail-fast: false
+    needs: [prepare, build-base, build-ultra]
+    if: always() && needs.build-ultra.result == 'success'
     
     steps:
       - name: 恢复编译环境
@@ -1116,65 +653,458 @@ jobs:
           fi
           echo "✅ 源码目录验证通过"
 
-      - name: 准备${{ matrix.variant }}配置
+      - name: 🚨 准备Max配置
         run: |
           cd /workdir/openwrt
-          echo "⚙️ 加载${{ matrix.variant }}配置"
-          
-          # 清理之前的配置
+          echo "⚙️ 加载Max配置"
           make distclean
-          
-          # 重新加载基础配置
           [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
             cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
           [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
             cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
-          
-          # 加载变体配置
-          [ -f "$GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config" >> .config
-          
+          [ -f "$GITHUB_WORKSPACE/configs/Max.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/Max.config" >> .config
           make defconfig
 
-      - name: 编译${{ matrix.variant }}固件
+      - name: 🔍🔍🔍 Luci软件包完整性检查 - Max变体 🔍🔍🔍
+        id: luci_check
         run: |
           cd /workdir/openwrt
-          echo "🚀 开始编译${{ matrix.variant }}变体"
+          
+          # 输出醒目的标题
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                    🔍 LUCI软件包检查报告 🔍                    ║"
+          echo "║                        Max变体                            ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 获取配置中的所有Luci包
+          echo "📋 正在检查配置中的Luci软件包..."
+          CONFIG_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          
+          if [ -z "$CONFIG_LUCI" ]; then
+            echo "⚠️  未在配置中找到Luci软件包"
+            TOTAL_COUNT=0
+          else
+            echo "📦 配置中的Luci软件包列表："
+            echo "┌─────────────────────────────────────────────────────────┐"
+            echo "│ 序号 │ 软件包名称                                      │"
+            echo "├─────────────────────────────────────────────────────────┤"
+            index=1
+            echo "$CONFIG_LUCI" | while read pkg; do
+              if [ -n "$pkg" ]; then
+                printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+                index=$((index + 1))
+              fi
+            done
+            echo "└─────────────────────────────────────────────────────────┘"
+            TOTAL_COUNT=$(echo "$CONFIG_LUCI" | grep -c .)
+          fi
+          
+          echo ""
+          echo "🔍 开始检查软件包存在性..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "┌──────────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                    │ 状态     │ 位置      │"
+          echo "├──────────────────────────────────────────────────────────────┤"
+          
+          # 检查每个包是否存在
+          MISSING_COUNT=0
+          FOUND_COUNT=0
+          index=1
+          
+          for pkg in $CONFIG_LUCI; do
+            if [ -n "$pkg" ]; then
+              location=""
+              if [ -d "package/$pkg" ]; then
+                location="package/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              elif [ -d "feeds/packages/$pkg" ]; then
+                location="feeds/packages/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              elif [ -d "feeds/luci/$pkg" ]; then
+                location="feeds/luci/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              else
+                location="未找到"
+                status="❌ 缺失"
+                MISSING_COUNT=$((MISSING_COUNT + 1))
+              fi
+              printf "│ %4d │ %-30s │ %-8s │ %-10s │\n" "$index" "$pkg" "$status" "$location"
+              index=$((index + 1))
+            fi
+          done
+          
+          echo "└──────────────────────────────────────────────────────────────┘"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "📊 检查结果统计："
+          echo "┌─────────────┬──────────┬──────────┐"
+          echo "│    状态     │   数量   │  百分比  │"
+          echo "├─────────────┼──────────┼──────────┤"
+          if [ $TOTAL_COUNT -gt 0 ]; then
+            FOUND_PERCENT=$((FOUND_COUNT * 100 / TOTAL_COUNT))
+            MISSING_PERCENT=$((MISSING_COUNT * 100 / TOTAL_COUNT))
+          else
+            FOUND_PERCENT=0
+            MISSING_PERCENT=0
+          fi
+          echo "│ ✅ 存在     │ $FOUND_COUNT  │  $FOUND_PERCENT%  │"
+          echo "│ ❌ 缺失     │ $MISSING_COUNT  │  $MISSING_PERCENT%  │"
+          echo "│ 📦 总计     │ $TOTAL_COUNT  │  100%   │"
+          echo "└─────────────┴──────────┴──────────┘"
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo ""
+            echo "🚨 警告：发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能！"
+          else
+            echo ""
+            echo "🎉 恭喜！所有Luci软件包检查通过！"
+          fi
+          
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                      检查完成                             ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 保存到输出
+          echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
+          echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
+          echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
+
+      - name: 📄 生成检查报告文件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-check-report-max
+          path: |
+            /workdir/openwrt/.config
+          retention-days: 30
+
+  # 🔍 Pro变体Luci软件包检查（Ultra成功后）
+  check-pro-luci:
+    runs-on: ubuntu-22.04
+    needs: [prepare, build-base, build-ultra]
+    if: always() && needs.build-ultra.result == 'success'
+    
+    steps:
+      - name: 恢复编译环境
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt
+            ~/.cache/go-build
+            ~/.cache/pip
+          key: ${{ needs.prepare.outputs.cache_key_full }}
+          restore-keys: |
+            ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-base-
+            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
+            openwrt-toolchain-
+
+      - name: 验证源码完整性
+        run: |
+          if [ ! -f "/workdir/openwrt/Makefile" ]; then
+            echo "❌ 源码目录不完整，尝试恢复..."
+            exit 1
+          fi
+          echo "✅ 源码目录验证通过"
+
+      - name: 🚨 准备Pro配置
+        run: |
+          cd /workdir/openwrt
+          echo "⚙️ 加载Pro配置"
+          make distclean
+          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
+            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
+          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
+          [ -f "$GITHUB_WORKSPACE/configs/Pro.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/Pro.config" >> .config
+          make defconfig
+
+      - name: 🔍🔍🔍 Luci软件包完整性检查 - Pro变体 🔍🔍🔍
+        id: luci_check
+        run: |
+          cd /workdir/openwrt
+          
+          # 输出醒目的标题
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                    🔍 LUCI软件包检查报告 🔍                    ║"
+          echo "║                        Pro变体                            ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 获取配置中的所有Luci包
+          echo "📋 正在检查配置中的Luci软件包..."
+          CONFIG_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          
+          if [ -z "$CONFIG_LUCI" ]; then
+            echo "⚠️  未在配置中找到Luci软件包"
+            TOTAL_COUNT=0
+          else
+            echo "📦 配置中的Luci软件包列表："
+            echo "┌─────────────────────────────────────────────────────────┐"
+            echo "│ 序号 │ 软件包名称                                      │"
+            echo "├─────────────────────────────────────────────────────────┤"
+            index=1
+            echo "$CONFIG_LUCI" | while read pkg; do
+              if [ -n "$pkg" ]; then
+                printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+                index=$((index + 1))
+              fi
+            done
+            echo "└─────────────────────────────────────────────────────────┘"
+            TOTAL_COUNT=$(echo "$CONFIG_LUCI" | grep -c .)
+          fi
+          
+          echo ""
+          echo "🔍 开始检查软件包存在性..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "┌──────────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                    │ 状态     │ 位置      │"
+          echo "├──────────────────────────────────────────────────────────────┤"
+          
+          # 检查每个包是否存在
+          MISSING_COUNT=0
+          FOUND_COUNT=0
+          index=1
+          
+          for pkg in $CONFIG_LUCI; do
+            if [ -n "$pkg" ]; then
+              location=""
+              if [ -d "package/$pkg" ]; then
+                location="package/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              elif [ -d "feeds/packages/$pkg" ]; then
+                location="feeds/packages/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              elif [ -d "feeds/luci/$pkg" ]; then
+                location="feeds/luci/"
+                status="✅ 存在"
+                FOUND_COUNT=$((FOUND_COUNT + 1))
+              else
+                location="未找到"
+                status="❌ 缺失"
+                MISSING_COUNT=$((MISSING_COUNT + 1))
+              fi
+              printf "│ %4d │ %-30s │ %-8s │ %-10s │\n" "$index" "$pkg" "$status" "$location"
+              index=$((index + 1))
+            fi
+          done
+          
+          echo "└──────────────────────────────────────────────────────────────┘"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "📊 检查结果统计："
+          echo "┌─────────────┬──────────┬──────────┐"
+          echo "│    状态     │   数量   │  百分比  │"
+          echo "├─────────────┼──────────┼──────────┤"
+          if [ $TOTAL_COUNT -gt 0 ]; then
+            FOUND_PERCENT=$((FOUND_COUNT * 100 / TOTAL_COUNT))
+            MISSING_PERCENT=$((MISSING_COUNT * 100 / TOTAL_COUNT))
+          else
+            FOUND_PERCENT=0
+            MISSING_PERCENT=0
+          fi
+          echo "│ ✅ 存在     │ $FOUND_COUNT  │  $FOUND_PERCENT%  │"
+          echo "│ ❌ 缺失     │ $MISSING_COUNT  │  $MISSING_PERCENT%  │"
+          echo "│ 📦 总计     │ $TOTAL_COUNT  │  100%   │"
+          echo "└─────────────┴──────────┴──────────┘"
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo ""
+            echo "🚨 警告：发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能！"
+          else
+            echo ""
+            echo "🎉 恭喜！所有Luci软件包检查通过！"
+          fi
+          
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                      检查完成                             ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 保存到输出
+          echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
+          echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
+          echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
+
+      - name: 📄 生成检查报告文件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-check-report-pro
+          path: |
+            /workdir/openwrt/.config
+          retention-days: 30
+
+  # Max变体编译
+  build-max:
+    runs-on: ubuntu-22.04
+    needs: [prepare, build-base, check-max-luci]
+    if: always() && needs.build-base.result == 'success' && needs.check-max-luci.result == 'success'
+    
+    steps:
+      - name: 恢复编译环境
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt
+            ~/.cache/go-build
+            ~/.cache/pip
+          key: ${{ needs.prepare.outputs.cache_key_full }}
+          restore-keys: |
+            ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-base-
+            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
+            openwrt-toolchain-
+
+      - name: 验证源码完整性
+        run: |
+          if [ ! -f "/workdir/openwrt/Makefile" ]; then
+            echo "❌ 源码目录不完整，尝试恢复..."
+            exit 1
+          fi
+          echo "✅ 源码目录验证通过"
+
+      - name: 准备Max配置
+        run: |
+          cd /workdir/openwrt
+          echo "⚙️ 加载Max配置"
+          make distclean
+          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
+            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
+          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
+          [ -f "$GITHUB_WORKSPACE/configs/Max.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/Max.config" >> .config
+          make defconfig
+
+      - name: 编译Max固件
+        run: |
+          cd /workdir/openwrt
+          echo "🚀 开始编译Max变体"
           echo "使用 $(nproc) 个线程并行编译"
           
           # 多重编译策略
           make -j$(nproc) || make -j1 || make -j1 V=s
           
-          echo "✅ ${{ matrix.variant }}编译完成"
+          echo "✅ Max编译完成"
 
-      - name: 整理${{ matrix.variant }}固件
+      - name: 整理Max固件
         run: |
           cd /workdir/openwrt/bin/targets/*/*
-          echo "📦 整理${{ matrix.variant }}固件"
+          echo "📦 整理Max固件"
           
           # 创建输出目录
-          mkdir -p $GITHUB_WORKSPACE/firmware/${{ matrix.variant }}
+          mkdir -p $GITHUB_WORKSPACE/firmware/Max
           
           # 复制固件文件
           find . -name "*immortalwrt*" -type f ! -name "*manifest*" | \
-            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/${{ matrix.variant }}/
+            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/Max/
           
           # 重命名固件
-          cd $GITHUB_WORKSPACE/firmware/${{ matrix.variant }}
+          cd $GITHUB_WORKSPACE/firmware/Max
           for file in *; do
             if [ -f "$file" ]; then
-              mv "$file" "${{ matrix.variant }}-${{ needs.prepare.outputs.build_date }}-${file}"
+              mv "$file" "Max-${{ needs.prepare.outputs.build_date }}-${file}"
             fi
           done
           
-          echo "✅ ${{ matrix.variant }}固件整理完成"
+          echo "✅ Max固件整理完成"
+          ls -la
+
+  # Pro变体编译
+  build-pro:
+    runs-on: ubuntu-22.04
+    needs: [prepare, build-base, check-pro-luci]
+    if: always() && needs.build-base.result == 'success' && needs.check-pro-luci.result == 'success'
+    
+    steps:
+      - name: 恢复编译环境
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt
+            ~/.cache/go-build
+            ~/.cache/pip
+          key: ${{ needs.prepare.outputs.cache_key_full }}
+          restore-keys: |
+            ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-base-
+            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
+            openwrt-toolchain-
+
+      - name: 验证源码完整性
+        run: |
+          if [ ! -f "/workdir/openwrt/Makefile" ]; then
+            echo "❌ 源码目录不完整，尝试恢复..."
+            exit 1
+          fi
+          echo "✅ 源码目录验证通过"
+
+      - name: 准备Pro配置
+        run: |
+          cd /workdir/openwrt
+          echo "⚙️ 加载Pro配置"
+          make distclean
+          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
+            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
+          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
+          [ -f "$GITHUB_WORKSPACE/configs/Pro.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/Pro.config" >> .config
+          make defconfig
+
+      - name: 编译Pro固件
+        run: |
+          cd /workdir/openwrt
+          echo "🚀 开始编译Pro变体"
+          echo "使用 $(nproc) 个线程并行编译"
+          
+          # 多重编译策略
+          make -j$(nproc) || make -j1 || make -j1 V=s
+          
+          echo "✅ Pro编译完成"
+
+      - name: 整理Pro固件
+        run: |
+          cd /workdir/openwrt/bin/targets/*/*
+          echo "📦 整理Pro固件"
+          
+          # 创建输出目录
+          mkdir -p $GITHUB_WORKSPACE/firmware/Pro
+          
+          # 复制固件文件
+          find . -name "*immortalwrt*" -type f ! -name "*manifest*" | \
+            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/Pro/
+          
+          # 重命名固件
+          cd $GITHUB_WORKSPACE/firmware/Pro
+          for file in *; do
+            if [ -f "$file" ]; then
+              mv "$file" "Pro-${{ needs.prepare.outputs.build_date }}-${file}"
+            fi
+          done
+          
+          echo "✅ Pro固件整理完成"
           ls -la
 
   # 发布阶段
   release:
     runs-on: ubuntu-22.04
-    needs: [prepare, build-ultra, build-variants]
-    if: always() && (needs.build-ultra.result == 'success' || needs.build-variants.result == 'success')
+    needs: [prepare, build-ultra, build-max, build-pro]
+    if: always() && (needs.build-ultra.result == 'success' || needs.build-max.result == 'success' || needs.build-pro.result == 'success')
     
     steps:
       - name: 整理所有固件
