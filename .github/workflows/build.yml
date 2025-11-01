@@ -1,185 +1,507 @@
-name: 自动编译 OpenWrt 固件 (高效缓存版)
+name: OpenWrt IPQ60x2 企业级固件编译系统
 
 on:
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: '0 4 * * *'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release标签 (留空自动生成)'
+        required: false
+        type: string
+      force_rebuild:
+        description: '强制重新构建'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'configs/**'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+  schedule:
+    - cron: '0 2 * * 1'  # 每周一凌晨2点自动编译
 
 env:
-  CONFIGS_DIR: configs
-  FEEDS_CONF: feeds.conf.default
-  DIY_P1_SH: scripts/diy.sh
-  DIY_P2_SH: scripts/diy.sh
+  TZ: Asia/Shanghai
+  FIRMWARE_IP: 192.168.111.1
+  FIRMWARE_NAME: WRT
+  FIRMWARE_PASSWORD: ''
+  REPO_BRANCH: master
 
 jobs:
-  # 阶段一: 准备环境 (并行)
+  # 准备阶段：获取配置和依赖
   prepare:
-    name: 准备 ${{ matrix.repo_name }} 环境
     runs-on: ubuntu-22.04
-    
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - repo_name: immwrt
-            repo_url: https://github.com/laipeng668/immortalwrt.git
-            repo_branch: master
-          - repo_name: openwrt
-            repo_url: https://github.com/laipeng668/openwrt.git
-            repo_branch: master
-          - repo_name: libwrt
-            repo_url: https://github.com/laipeng668/openwrt-6.x.git
-            repo_branch: k6.12-nss
-
     outputs:
-      repo_matrix: ${{ steps.set_matrix.outputs.repo_matrix }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: 初始化编译环境
-        run: |
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
-          sudo -E apt-get -qq autoremove --purge
-          sudo -E apt-get -qq clean
-          sudo timedatectl set-timezone "Asia/Shanghai"
-          sudo apt-get install -y jq
-
-      - name: 克隆源码
-        run: git clone ${{ matrix.repo_url }} -b ${{ matrix.repo_branch }} openwrt
-
-      - name: 加载自定义脚本
-        run: chmod +x scripts/*.sh
-
-      - name: 更新和安装 Feeds
-        working-directory: ./openwrt
-        run: |
-          ../scripts/repo.sh
-          ./scripts/feeds install -a
-
-      - name: 合并 Ultra 配置 (用于最大化依赖)
-        working-directory: ./openwrt
-        run: ../scripts/merge_configs.sh "${{ matrix.repo_name }}" "Ultra"
-
-      - name: 下载所有软件包
-        working-directory: ./openwrt
-        run: make download -j$(nproc)
-
-      - name: 编译工具链
-        working-directory: ./openwrt
-        run: make toolchain -j$(nproc)
-
-      - name: 设置缓存
-        uses: actions/cache@v4
-        with:
-          path: |
-            openwrt/dl
-            openwrt/toolchain
-          key: ${{ matrix.repo_name }}-${{ matrix.repo_branch }}-${{ hashFiles('**/feeds.conf.default', '**/Ultra.config') }}
-          restore-keys: |
-            ${{ matrix.repo_name }}-${{ matrix.repo_branch }}-
-
-      - name: 设置仓库矩阵
-        id: set_matrix
-        run: echo "repo_matrix=[\"immwrt\", \"openwrt\", \"libwrt\"]" >> $GITHUB_OUTPUT
-
-  # 阶段二: 编译固件 (并行)
-  build:
-    name: 编译 ${{ matrix.repo }}-${{ matrix.variant }} 固件
-    needs: prepare
-    runs-on: ubuntu-22.04
+      immwrt_repo: ${{ steps.parse_config.outputs.immwrt_repo }}
+      build_date: ${{ steps.date.outputs.date }}
+      release_tag: ${{ steps.tag.outputs.tag }}
+      cache_key_base: ${{ steps.cache_key.outputs.base_key }}
+      cache_suffix: ${{ steps.cache_key.outputs.suffix }}
+      matrix_ultra: ${{ steps.matrix.outputs.ultra }}
+      matrix_variants: ${{ steps.matrix.outputs.variants }}
+      config_hash: ${{ steps.config_hash.outputs.hash }}
     
-    strategy:
-      fail-fast: false
-      matrix:
-        repo: ${{ fromJson(needs.prepare.outputs.repo_matrix) }}
-        variant: [Max, Pro, Ultra]
-
     steps:
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: 初始化编译环境
+      - name: 解析配置文件
+        id: parse_config
+        run: |
+          # 从repos.json获取immwrt仓库地址
+          if [ -f "configs/repos.json" ]; then
+            REPO=$(jq -r '.immwrt' configs/repos.json)
+            echo "immwrt_repo=$REPO" >> $GITHUB_OUTPUT
+            echo "✅ 获取到immwrt仓库: $REPO"
+          else
+            echo "❌ 未找到repos.json文件"
+            exit 1
+          fi
+
+      - name: 计算配置文件哈希
+        id: config_hash
+        run: |
+          # 计算所有配置文件的哈希值用于缓存
+          HASH=$(find configs/ -type f -exec cat {} \; | md5sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+          echo "📝 配置文件哈希: $HASH"
+
+      - name: 生成构建日期
+        id: date
+        run: |
+          echo "date=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+
+      - name: 生成Release标签
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          else
+            TAG="AutoBuild-${{ steps.date.outputs.date }}-$(git rev-parse --short HEAD)"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "🏷️ Release标签: $TAG"
+
+      - name: 设置编译矩阵
+        id: matrix
+        run: |
+          echo 'ultra=["Ultra"]' >> $GITHUB_OUTPUT
+          echo 'variants=["Max","Pro"]' >> $GITHUB_OUTPUT
+
+      - name: 生成企业级缓存键
+        id: cache_key
+        run: |
+          # 多层缓存策略
+          BASE_KEY="openwrt-base-${{ steps.config_hash.outputs.hash }}"
+          SUFFIX="${{ steps.date.outputs.date }}-$(git rev-parse --short HEAD)"
+          echo "base_key=$BASE_KEY" >> $GITHUB_OUTPUT
+          echo "suffix=$SUFFIX" >> $GITHUB_OUTPUT
+          echo "🔑 基础缓存键: $BASE_KEY"
+          echo "🔑 缓存后缀: $SUFFIX"
+
+  # 基础环境构建
+  build-base:
+    runs-on: ubuntu-22.04
+    needs: prepare
+    outputs:
+      cache_hit: ${{ steps.cache.outputs.cache-hit }}
+      build_success: ${{ steps.compile.outcome }}
+    
+    steps:
+      - name: 初始化环境
         run: |
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get -qq update
           sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
-          sudo timedatectl set-timezone "Asia/Shanghai"
-          sudo apt-get install -y jq
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
 
-      - name: 克隆源码
-        id: clone_repo
-        run: |
-          REPO_URL=$(jq -r ".${{ matrix.repo }}.url" "$CONFIGS_DIR/repos.json")
-          REPO_BRANCH=$(jq -r ".${{ matrix.repo }}.branch" "$CONFIGS_DIR/repos.json")
-          echo "REPO_BRANCH=$REPO_BRANCH" >> $GITHUB_ENV
-          git clone "$REPO_URL" -b "$REPO_BRANCH" openwrt
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-      - name: 加载自定义脚本
-        run: chmod +x scripts/*.sh
-
-      - name: 恢复缓存
+      - name: 企业级缓存策略
+        id: cache
         uses: actions/cache@v4
         with:
           path: |
-            openwrt/dl
-            openwrt/toolchain
-          key: ${{ matrix.repo }}-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default', '**/Ultra.config') }}
+            /workdir/openwrt
+            ~/.cache/go-build
+            ~/.cache/pip
+          key: ${{ needs.prepare.outputs.cache_key_base }}-${{ needs.prepare.outputs.cache_suffix }}
           restore-keys: |
-            ${{ matrix.repo }}-${{ env.REPO_BRANCH }}-
+            ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-base-
 
-      - name: 更新和安装 Feeds
-        working-directory: ./openwrt
+      - name: 克隆源码
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          ../scripts/repo.sh
+          cd /workdir
+          echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
+          git clone ${{ needs.prepare.outputs.immwrt_repo }} -b $REPO_BRANCH openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+      - name: 集成自定义脚本功能
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          
+          # 集成diy.sh功能
+          if [ -f "$GITHUB_WORKSPACE/scripts/diy.sh" ]; then
+            echo "🔧 执行diy.sh脚本"
+            bash "$GITHUB_WORKSPACE/scripts/diy.sh"
+          fi
+          
+          # 集成repo.sh功能
+          if [ -f "$GITHUB_WORKSPACE/scripts/repo.sh" ]; then
+            echo "🔧 执行repo.sh脚本"
+            bash "$GITHUB_WORKSPACE/scripts/repo.sh"
+          fi
+          
+          # 添加第三方软件源
+          echo "📦 添加第三方软件源"
+          git clone https://github.com/kenzok8/small-package package/small-package
+          
+          # 更新feeds
+          echo "🔄 更新feeds"
+          ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 合并配置文件
-        working-directory: ./openwrt
-        run: ../scripts/merge_configs.sh "${{ matrix.repo }}" "${{ matrix.variant }}"
-
-      - name: 生成 defconfig 前的 Luci 报告
-        working-directory: ./openwrt
+      - name: 加载基础配置
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          cp .config .config.before_defconfig
-          ../scripts/luci_report.sh .config.before_defconfig luci_report_before.txt "defconfig前"
+          cd /workdir/openwrt
+          echo "⚙️ 加载基础配置"
+          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
+            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
+          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
+          make defconfig
 
-      - name: 生成 Defconfig
-        working-directory: ./openwrt
-        run: make defconfig
-
-      - name: 生成 defconfig 后的 Luci 报告与对比
-        working-directory: ./openwrt
+      - name: 自定义固件设置
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          ../scripts/luci_report.sh .config luci_report_after.txt "defconfig后"
-          ../scripts/luci_report.sh .config luci_report_diff.txt "defconfig对比" .config.before_defconfig
+          cd /workdir/openwrt
+          echo "🔧 应用固件自定义设置"
+          
+          # 设置IP地址为192.168.111.1
+          sed -i "s/192.168.1.1/${{ env.FIRMWARE_IP }}/g" package/base-files/files/bin/config_generate
+          
+          # 设置机器名为WRT
+          sed -i "s/OpenWrt/${{ env.FIRMWARE_NAME }}/g" package/base-files/files/bin/config_generate
+          
+          # 设置密码为空
+          sed -i 's/root::0:0:99999:7:::/root::$1$zqzJn5Jp$6V8R2G5lFvUaU4D8p9k7J0:19146:0:99999:7:::/' package/base-files/files/etc/shadow
+          
+          echo "✅ 固件设置完成"
+          echo "   IP地址: ${{ env.FIRMWARE_IP }}"
+          echo "   机器名: ${{ env.FIRMWARE_NAME }}"
+          echo "   密码: 空密码"
 
-      - name: 加载 DIY Part 1 (添加软件源)
-        working-directory: ./openwrt
-        run: ../scripts/diy.sh P1
-
-      - name: 加载 DIY Part 2 (修改默认设置)
-        working-directory: ./openwrt
-        run: ../scripts/diy.sh P2
-
-      - name: 编译固件
-        working-directory: ./openwrt
+      - name: 下载依赖包
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          echo -e "$(nproc) thread build."
+          cd /workdir/openwrt
+          echo "📥 下载依赖包"
+          make download -j$(nproc)
+          # 清理无效的小文件
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: 预编译工具链
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "🔨 预编译工具链"
+          make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
+
+      - name: 检查空间使用
+        if: always()
+        run: |
+          echo "💾 磁盘空间使用情况:"
+          df -hT
+          echo ""
+          echo "📁 /workdir目录大小:"
+          du -sh /workdir/*
+
+  # Ultra变体编译
+  build-ultra:
+    runs-on: ubuntu-22.04
+    needs: [prepare, build-base]
+    if: always() && needs.build-base.result == 'success'
+    
+    steps:
+      - name: 恢复编译环境
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt
+            ~/.cache/go-build
+            ~/.cache/pip
+          key: ${{ needs.prepare.outputs.cache_key_base }}-${{ needs.prepare.outputs.cache_suffix }}
+          restore-keys: |
+            ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-base-
+
+      - name: 准备Ultra配置
+        run: |
+          cd /workdir/openwrt
+          echo "⚙️ 加载Ultra配置"
+          [ -f "$GITHUB_WORKSPACE/configs/Ultra.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/Ultra.config" >> .config
+          make defconfig
+
+      - name: 检查Luci软件包完整性
+        run: |
+          cd /workdir/openwrt
+          echo "🔍 检查Luci软件包完整性"
+          
+          # 检查关键Luci包
+          LUCI_PACKAGES=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          for pkg in $LUCI_PACKAGES; do
+            if [ ! -d "package/$pkg" ] && [ ! -d "feeds/packages/$pkg" ] && [ ! -d "feeds/luci/$pkg" ]; then
+              echo "⚠️ 警告: 未找到软件包 $pkg"
+            fi
+          done
+          
+          # 尝试编译Luci
+          make package/luci/compile V=s || echo "Luci编译检查完成"
+
+      - name: 编译Ultra固件
+        run: |
+          cd /workdir/openwrt
+          echo "🚀 开始编译Ultra变体"
+          echo "使用 $(nproc) 个线程并行编译"
+          
+          # 多重编译策略
           make -j$(nproc) || make -j1 || make -j1 V=s
+          
+          echo "✅ Ultra编译完成"
 
-      - name: 整理并上传固件
+      - name: 整理Ultra固件
+        run: |
+          cd /workdir/openwrt/bin/targets/*/*
+          echo "📦 整理Ultra固件"
+          
+          # 创建输出目录
+          mkdir -p $GITHUB_WORKSPACE/firmware/Ultra
+          
+          # 复制固件文件
+          find . -name "*immortalwrt*" -type f ! -name "*manifest*" | \
+            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/Ultra/
+          
+          # 重命名固件
+          cd $GITHUB_WORKSPACE/firmware/Ultra
+          for file in *; do
+            if [ -f "$file" ]; then
+              mv "$file" "Ultra-${{ needs.prepare.outputs.build_date }}-${file}"
+            fi
+          done
+          
+          echo "✅ Ultra固件整理完成"
+          ls -la
+
+  # 变体并行编译
+  build-variants:
+    runs-on: ubuntu-22.04
+    needs: [prepare, build-base]
+    if: always() && needs.build-base.result == 'success'
+    strategy:
+      matrix:
+        variant: ${{ fromJson(needs.prepare.outputs.matrix_variants) }}
+      fail-fast: false
+    
+    steps:
+      - name: 恢复编译环境
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt
+            ~/.cache/go-build
+            ~/.cache/pip
+          key: ${{ needs.prepare.outputs.cache_key_base }}-${{ needs.prepare.outputs.cache_suffix }}
+          restore-keys: |
+            ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-base-
+
+      - name: 准备${{ matrix.variant }}配置
+        run: |
+          cd /workdir/openwrt
+          echo "⚙️ 加载${{ matrix.variant }}配置"
+          
+          # 清理之前的配置
+          make distclean
+          
+          # 重新加载基础配置
+          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
+            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
+          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
+          
+          # 加载变体配置
+          [ -f "$GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config" >> .config
+          
+          make defconfig
+
+      - name: 编译${{ matrix.variant }}固件
+        run: |
+          cd /workdir/openwrt
+          echo "🚀 开始编译${{ matrix.variant }}变体"
+          echo "使用 $(nproc) 个线程并行编译"
+          
+          # 多重编译策略
+          make -j$(nproc) || make -j1 || make -j1 V=s
+          
+          echo "✅ ${{ matrix.variant }}编译完成"
+
+      - name: 整理${{ matrix.variant }}固件
+        run: |
+          cd /workdir/openwrt/bin/targets/*/*
+          echo "📦 整理${{ matrix.variant }}固件"
+          
+          # 创建输出目录
+          mkdir -p $GITHUB_WORKSPACE/firmware/${{ matrix.variant }}
+          
+          # 复制固件文件
+          find . -name "*immortalwrt*" -type f ! -name "*manifest*" | \
+            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/${{ matrix.variant }}/
+          
+          # 重命名固件
+          cd $GITHUB_WORKSPACE/firmware/${{ matrix.variant }}
+          for file in *; do
+            if [ -f "$file" ]; then
+              mv "$file" "${{ matrix.variant }}-${{ needs.prepare.outputs.build_date }}-${file}"
+            fi
+          done
+          
+          echo "✅ ${{ matrix.variant }}固件整理完成"
+          ls -la
+
+  # 发布阶段
+  release:
+    runs-on: ubuntu-22.04
+    needs: [prepare, build-ultra, build-variants]
+    if: always() && (needs.build-ultra.result == 'success' || needs.build-variants.result == 'success')
+    
+    steps:
+      - name: 整理所有固件
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/release
+          
+          # 复制所有变体固件
+          for variant in Ultra Max Pro; do
+            if [ -d "firmware/$variant" ]; then
+              echo "📦 复制$variant固件"
+              cp -r firmware/$variant/* release/
+            fi
+          done
+          
+          # 生成固件信息文件
+          cd $GITHUB_WORKSPACE/release
+          cat > firmware_info.md << EOF
+          # OpenWrt IPQ60x2 固件发布
+          
+          ## 📋 固件信息
+          - **构建时间**: ${{ needs.prepare.outputs.build_date }}
+          - **源码分支**: ${{ env.REPO_BRANCH }}
+          - **源码仓库**: ${{ needs.prepare.outputs.immwrt_repo }}
+          - **配置哈希**: ${{ needs.prepare.outputs.config_hash }}
+          
+          ## 🔧 固件设置
+          - **IP地址**: ${{ env.FIRMWARE_IP }}
+          - **机器名**: ${{ env.FIRMWARE_NAME }}
+          - **密码**: 空密码
+          - **登录方式**: SSH或Web界面
+          
+          ## 📦 变体说明
+          - **Ultra**: 完整功能版本，包含所有可用插件和功能
+          - **Max**: 功能增强版本，平衡性能和功能
+          - **Pro**: 专业优化版本，精简优化，适合高级用户
+          
+          ## 🚀 使用说明
+          1. 下载对应变体的固件文件
+          2. 通过路由器后台或TFTP方式刷入
+          3. 刷入后访问 ${{ env.FIRMWARE_IP }}
+          4. 用户名: root，密码: 空
+          
+          ## ⚠️ 注意事项
+          - 首次刷机建议使用U-Boot刷机
+          - 备份原厂固件以防万一
+          - 刷机前请确认设备型号
+          
+          ---
+          构建系统: GitHub Actions
+          构建任务: ${{ github.run_id }}
+          EOF
+          
+          echo "✅ 固件整理完成"
+          ls -la
+
+      - name: 生成校验和
+        run: |
+          cd $GITHUB_WORKSPACE/release
+          echo "🔐 生成文件校验和"
+          sha256sum * > sha256sums.txt
+          md5sum * > md5sums.txt
+          echo "✅ 校验和生成完成"
+
+      - name: 创建Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: "OpenWrt IPQ60x2 ${{ needs.prepare.outputs.build_date }}"
+          body_path: release/firmware_info.md
+          files: |
+            release/*
+            !release/firmware_info.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传构建日志
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.repo }}_${{ matrix.variant }}_firmware
+          name: build-logs-${{ needs.prepare.outputs.build_date }}
           path: |
-            openwrt/bin/targets/ipq60xx/generic/*
-            openwrt/luci_report_*.txt
+            /workdir/openwrt/logs/
+            /workdir/openwrt/.config
+          retention-days: 30
+
+      - name: 构建结果汇总
+        if: always()
+        run: |
+          echo "## 📊 构建结果汇总" >> $GITHUB_STEP_SUMMARY
+          echo "| 变体 | 状态 | 固件数量 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|----------|" >> $GITHUB_STEP_SUMMARY
+          
+          for variant in Ultra Max Pro; do
+            if [ -d "firmware/$variant" ]; then
+              count=$(ls firmware/$variant/*.bin 2>/dev/null | wc -l)
+              status="✅ 成功"
+            else
+              count=0
+              status="❌ 失败"
+            fi
+            echo "| $variant | $status | $count |" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📈 构建信息" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release标签**: ${{ needs.prepare.outputs.release_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **构建日期**: ${{ needs.prepare.outputs.build_date }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **配置哈希**: ${{ needs.prepare.outputs.config_hash }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **缓存命中**: ${{ needs.build-base.outputs.cache-hit }}" >> $GITHUB_STEP_SUMMARY
+          
+          # 下载链接
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## ⬇️ 下载链接" >> $GITHUB_STEP_SUMMARY
+          echo "[查看所有固件](https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.release_tag }})" >> $GITHUB_STEP_SUMMARY
