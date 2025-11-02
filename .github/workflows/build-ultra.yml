@@ -1,132 +1,754 @@
-# 工作流名称
-name: 构建 ImmortalWrt Ultra 固件
+name: 构建 ImmortalWrt IPQ60x2 Ultra 固件
 
-# 触发器
 on:
-  # 允许手动触发构建
   workflow_dispatch:
-  # 当推送到 main 分支时自动触发
+    inputs:
+      release_tag:
+        description: 'Release标签 (留空自动生成)'
+        required: false
+        type: string
+      force_rebuild:
+        description: '强制重新构建'
+        required: false
+        type: boolean
+        default: false
   push:
-    branches:
-      - main
+    branches: [ main, master ]
+    paths:
+      - 'configs/**'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+  schedule:
+    - cron: '0 2 * * 1'  # 每周一凌晨2点自动编译
 
-# 任务定义
+env:
+  TZ: Asia/Shanghai
+  FIRMWARE_IP: 192.168.111.1
+  FIRMWARE_NAME: WRT
+  FIRMWARE_PASSWORD: ''
+
 jobs:
-  build:
-    # 使用 ubuntu-22.04 镜像，稳定且兼容 24.04
+  # 准备阶段：获取配置和依赖
+  prepare:
     runs-on: ubuntu-22.04
-
-    # 步骤定义
+    outputs:
+      immwrt_repo: ${{ steps.parse_config.outputs.immwrt_repo }}
+      immwrt_branch: ${{ steps.parse_config.outputs.immwrt_branch }}
+      build_date: ${{ steps.date.outputs.date }}
+      release_tag: ${{ steps.tag.outputs.tag }}
+      cache_key_ultra: ${{ steps.cache_key.outputs.ultra_key }}
+      config_hash: ${{ steps.config_hash.outputs.hash }}
+      toolchain_hash: ${{ steps.config_hash.outputs.toolchain_hash }}
+      cache_date_mark: ${{ steps.cache_key.outputs.date_mark }}
+    
     steps:
-      # 步骤 1: 检出代码
-      - name: 检出本仓库代码
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: 解析配置文件
+        id: parse_config
+        run: |
+          # 从repos.json获取immwrt仓库地址
+          if [ -f "configs/repos.json" ]; then
+            if ! jq empty configs/repos.json; then
+              echo "❌ repos.json格式错误"
+              exit 1
+            fi
+            
+            REPO=$(jq -r '.immwrt.url' configs/repos.json 2>/dev/null)
+            BRANCH=$(jq -r '.immwrt.branch' configs/repos.json 2>/dev/null)
+            
+            if [ "$REPO" = "null" ] || [ -z "$REPO" ]; then
+              echo "❌ 无法从repos.json中获取immwrt.url"
+              exit 1
+            fi
+            
+            if [ "$BRANCH" = "null" ] || [ -z "$BRANCH" ]; then
+              BRANCH="master"
+            fi
+            
+            REPO=$(echo "$REPO" | xargs)
+            BRANCH=$(echo "$BRANCH" | xargs)
+            
+            if [[ ! "$REPO" =~ ^https?:// ]]; then
+              echo "❌ 仓库地址格式无效: $REPO"
+              exit 1
+            fi
+            
+            echo "immwrt_repo=$REPO" >> $GITHUB_OUTPUT
+            echo "immwrt_branch=$BRANCH" >> $GITHUB_OUTPUT
+            echo "✅ 获取到immwrt仓库: $REPO"
+            echo "✅ 获取到分支: $BRANCH"
+          else
+            echo "❌ 未找到repos.json文件"
+            exit 1
+          fi
+
+      - name: 计算配置文件哈希
+        id: config_hash
+        run: |
+          # 计算所有配置文件的哈希（包含Ultra配置）
+          CONFIG_HASH=$(find configs/ -type f -name "*.config" -exec cat {} \; | md5sum | cut -d' ' -f1)
+          # 计算工具链哈希（基于基础配置）
+          TOOLCHAIN_HASH=$(cat configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config 2>/dev/null | md5sum | cut -d' ' -f1)
+          
+          echo "hash=$CONFIG_HASH" >> $GITHUB_OUTPUT
+          echo "toolchain_hash=$TOOLCHAIN_HASH" >> $GITHUB_OUTPUT
+          echo "📝 完整配置哈希: $CONFIG_HASH"
+          echo "🔨 Ultra工具链哈希: $TOOLCHAIN_HASH"
+
+      - name: 生成构建日期
+        id: date
+        run: |
+          DATE=$(date +"%Y.%m.%d-%H%M")
+          echo "date=$DATE" >> $GITHUB_OUTPUT
+          echo "📅 构建日期: $DATE"
+
+      - name: 生成Release标签
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          else
+            TAG="AutoBuild-$(git rev-parse --short HEAD)"
+          fi
+          TAG=$(echo "$TAG" | sed 's/[^a-zA-Z0-9._-]//g')
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "🏷️ Release标签: $TAG"
+
+      - name: 生成优化的缓存键
+        id: cache_key
+        run: |
+          DATE_MARK=$(date +%Y%m)
+          ULTRA_KEY="openwrt-ultra-${{ steps.config_hash.outputs.toolchain_hash }}-${DATE_MARK}"
+          
+          BASE_KEY=$(echo "$BASE_KEY" | tr -d '\n\r')
+          ULTRA_KEY=$(echo "$ULTRA_KEY" | tr -d '\n\r')
+          
+          echo "ultra_key=$ULTRA_KEY" >> $GITHUB_OUTPUT
+          echo "date_mark=$DATE_MARK" >> $GITHUB_OUTPUT
+          
+          echo "🔑 Ultra环境缓存键: $ULTRA_KEY"
+          echo "📅 缓存日期标记: $DATE_MARK"
+
+  # Ultra固件编译任务
+  build-ultra:
+    runs-on: ubuntu-22.04
+    needs: prepare
+    outputs:
+      cache_hit: ${{ steps.cache.outputs.cache-hit }}
+      build_success: ${{ steps.compile.outcome }}
+    
+    steps:
+      - name: 🧹 彻底清理系统环境
+        run: |
+          echo "🧹 开始彻底清理系统环境..."
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo rm -rf /usr/share/doc /usr/share/man /usr/share/locale /usr/share/i18n
+          sudo apt-get purge -y azure-cli ghc* zulu* libllvm* dotnet* || true
+          sudo apt-get autoremove -y
+          sudo docker system prune -af || true
+          sudo rm -rf /var/lib/docker || true
+          sudo journalctl --vacuum-time=1d || true
+          sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \; || true
+          npm cache clean --force 2>/dev/null || true
+          pip cache purge 2>/dev/null || true
+          go clean -modcache 2>/dev/null || true
+          sudo find /var/log -type f -name "*.log.*" -delete 2>/dev/null || true
+          sudo find /tmp -type f -atime +1 -delete 2>/dev/null || true
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+          echo "✅ 系统环境清理完成"
+          df -h
+
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      # 步骤 2: 初始化构建环境
-      - name: 初始化构建环境
+      - name: 验证仓库地址
         run: |
-          sudo rm -rf /etc/apt/sources.list.d/*
-          sudo apt-get update
-          sudo apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
-          bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
-          git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
-          libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz \
-          mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools \
-          python3-setuptools python3-serial rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl \
-          unzip vim wget xmlto xxd zlib1g-dev
+          REPO="${{ needs.prepare.outputs.immwrt_repo }}"
+          echo "📥 验证仓库地址: $REPO"
+          if ! git ls-remote "$REPO" > /dev/null 2>&1; then
+            echo "❌ 仓库地址不可访问: $REPO"
+            exit 1
+          fi
+          echo "✅ 仓库地址验证通过"
 
-      # 步骤 3: 克隆 ImmortalWrt 源码
-      - name: 克隆 ImmortalWrt 源码
-        run: |
-          git clone https://github.com/laipeng668/immortalwrt.git -b master immwrt
-          echo "IMMWRT_PATH=$(pwd)/immwrt" >> $GITHUB_ENV
+      - name: 📦 Ultra完整环境缓存策略
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt
+            ~/.cache/go-build
+            ~/.cache/pip
+          key: ${{ needs.prepare.outputs.cache_key_ultra }}
+          restore-keys: |
+            openwrt-ultra-${{ needs.prepare.outputs.toolchain_hash }}-
+            openwrt-ultra-
 
-      # 步骤 4: 赋予脚本执行权限
-      - name: 赋予脚本执行权限
+      - name: 💾 监控磁盘使用情况
         run: |
-          chmod +x scripts/*.sh
+          echo "💾 当前磁盘使用情况:"
+          df -h
+          ROOT_USAGE=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+          echo "📊 根分区使用率: ${ROOT_USAGE}%"
+          if [ "$ROOT_USAGE" -gt 70 ]; then
+            echo "⚠️ 磁盘空间不足，执行紧急清理"
+            sudo rm -rf /usr/local/share/boost 2>/dev/null || true
+            sudo rm -rf /usr/local/share/.cache 2>/dev/null || true
+            echo "✅ 紧急清理完成"
+            df -h
+          fi
 
-      # 步骤 5: 添加自定义软件源
-      - name: 添加自定义软件源
+      - name: 检查缓存状态并准备源码目录
         run: |
-          cd ${{ env.IMMWRT_PATH }}
-          ../scripts/repo.sh
+          echo "🔍 缓存状态: ${{ steps.cache.outputs.cache-hit }}"
+          
+          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
+            echo "✅ Ultra环境缓存命中，检查源码目录..."
+            if [ -d "/workdir/openwrt" ]; then
+              echo "📁 Ultra环境目录已存在"
+              if [ -f "/workdir/openwrt/Makefile" ]; then
+                echo "✅ Ultra环境完整，跳过基础构建"
+                if [ -d "/workdir/openwrt/bin/targets" ]; then
+                  echo "✅ 发现已编译的固件，环境完全可用"
+                else
+                  echo "⚠️ 环境存在但未编译固件，需要重新编译"
+                fi
+              else
+                echo "⚠️ Ultra环境不完整，清理后重新构建"
+                rm -rf /workdir/openwrt
+                echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
+                echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
+                cd /workdir
+                git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
+              fi
+            else
+              echo "⚠️ Ultra环境目录不存在，重新构建"
+              echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
+              echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
+              cd /workdir
+              git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
+            fi
+          else
+            echo "❌ Ultra环境缓存未命中，执行完整构建"
+            if [ -d "/workdir/openwrt" ]; then
+              echo "🗑️ 清理已存在的源码目录"
+              rm -rf /workdir/openwrt
+            fi
+            echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
+            echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
+            cd /workdir
+            git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
+          fi
+          
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          
+          if [ -f "/workdir/openwrt/Makefile" ]; then
+            echo "✅ 源码验证成功"
+            echo "📊 源码信息:"
+            cd /workdir/openwrt
+            echo "  - 当前分支: $(git branch --show-current)"
+            echo "  - 最新提交: $(git rev-parse --short HEAD)"
+            echo "  - 提交时间: $(git log -1 --format='%cd' --date=short)"
+          else
+            echo "❌ 源码验证失败"
+            exit 1
+          fi
 
-      # 步骤 6: 应用自定义设置
-      - name: 应用自定义设置
+      - name: 集成自定义功能
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          cd ${{ env.IMMWRT_PATH }}
-          ../scripts/diy.sh
-
-      # 步骤 7: 更新软件源并安装软件包
-      - name: 更新软件源并安装软件包
-        run: |
-          cd ${{ env.IMMWRT_PATH }}
+          cd /workdir/openwrt
+          echo "🔧 集成自定义功能"
+          
+          # 1. 修改默认IP
+          echo "  - 修改默认IP为 ${{ env.FIRMWARE_IP }}"
+          sed -i "s/192.168.1.1/${{ env.FIRMWARE_IP }}/g" package/base-files/files/bin/config_generate
+          
+          # 2. 修改版本号
+          echo "  - 修改版本号"
+          sed -i "s/DISTRIB_REVISION='.*'/DISTRIB_REVISION='R${{ needs.prepare.outputs.build_date }}'/g" package/base-files/files/etc/openwrt_release
+          
+          # 3. 添加自定义软件源
+          echo "  - 添加自定义软件源配置"
+          cat >> feeds.conf.default << EOF
+          src-git small_package https://github.com/kenzok8/small-package;main
+          EOF
+          
+          # 4. 添加第三方软件源
+          echo "  - 添加第三方软件源"
+          git clone https://github.com/kenzok8/small-package package/small-package
+          
+          # 5. 更新所有feeds
+          echo "  - 更新feeds"
           ./scripts/feeds update -a
+          
+          # 6. 安装所有feeds
+          echo "  - 安装feeds"
           ./scripts/feeds install -a
+          
+          echo "✅ 自定义功能集成完成"
 
-      # 步骤 8: 下载并合并配置文件
-      - name: 下载并合并配置文件
+      - name: 加载Ultra配置
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          cd ${{ env.IMMWRT_PATH }}
+          cd /workdir/openwrt
+          echo "⚙️ 加载Ultra配置"
+          
           # 下载配置文件
           wget -O base_ipq60xx.config https://github.com/aghu1979/ipq60x2/raw/main/configs/base_ipq60xx.config
           wget -O base_immwrt.config https://github.com/aghu1979/ipq60x2/raw/main/configs/base_immwrt.config
           wget -O Ultra.config https://github.com/aghu1979/ipq60x2/raw/main/configs/Ultra.config
           
-          # 合并配置文件 (后面的会覆盖前面的同名选项)
-          cat base_ipq60xx.config base_immwrt.config Ultra.config > .config
+          # 合并配置文件
+          [ -f "base_ipq60xx.config" ] && cat base_ipq60xx.config >> .config
+          [ -f "base_immwrt.config" ] && cat base_immwrt.config >> .config
+          [ -f "Ultra.config" ] && cat Ultra.config >> .config
           
-          # 备份 defconfig 前的配置，用于核对
-          cp .config .config.pre-defconfig
+          echo "✅ Ultra配置加载完成"
 
-      # 步骤 9: 运行 Defconfig 并核对 Luci 软件包
-      - name: 运行 Defconfig 并核对 Luci 软件包
-        id: check_luci
+      - name: 🔍🔍🔍 Luci软件包完整性检查 - Ultra变体 🔍🔍🔍
+        id: luci_check
         run: |
-          cd ${{ env.IMMWRT_PATH }}
+          cd /workdir/openwrt
+          
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                🔍 LUCI软件包对比检查 🔍                ║"
+          echo "║                   Ultra变体 (defconfig前后)                ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 步骤1: 记录defconfig前的Luci包
+          echo "📋 步骤1: 检查defconfig前的配置..."
+          BEFORE_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          BEFORE_COUNT=$(echo "$BEFORE_LUCI" | grep -c .)
+          
+          echo "🔍 defconfig前配置中的Luci软件包 ($BEFORE_COUNT 个):"
+          echo "┌─────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                                      │"
+          echo "├─────────────────────────────────────────────────────────┤"
+          index=1
+          echo "$BEFORE_LUCI" | while read pkg; do
+            if [ -n "$pkg" ]; then
+              printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+              index=$((index + 1))
+            fi
+          done
+          echo "└─────────────────────────────────────────────────────────┘"
+          echo ""
+          
+          # 步骤2: 运行make defconfig
+          echo "🔄 步骤2: 运行make defconfig补全配置..."
           make defconfig
           
-          echo "--- defconfig 前的 Luci 软件包 ---"
-          grep "^CONFIG_PACKAGE_luci-" .config.pre-defconfig | sed 's/^CONFIG_PACKAGE_//' | sed 's/=.*$//' | sort > luci_before.txt
-          cat luci_before.txt
+          # 步骤3: 记录defconfig后的Luci包
+          echo ""
+          echo "📋 步骤3: 检查defconfig后的配置..."
+          AFTER_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          AFTER_COUNT=$(echo "$AFTER_LUCI" | grep -c .)
           
-          echo "--- defconfig 后的 Luci 软件包 ---"
-          grep "^CONFIG_PACKAGE_luci-" .config | sed 's/^CONFIG_PACKAGE_//' | sed 's/=.*$//' | sort > luci_after.txt
-          cat luci_after.txt
+          echo "🔍 defconfig后配置中的Luci软件包 ($AFTER_COUNT 个):"
+          echo "┌─────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                                      │"
+          echo "├─────────────────────────────────────────────────────────┤"
+          index=1
+          echo "$AFTER_LUCI" | while read pkg; do
+            if [ -n "$pkg" ]; then
+              printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+              index=$((index + 1))
+            fi
+          done
+          echo "└─────────────────────────────────────────────────────────┘"
+          echo ""
           
-          echo "--- Luci 软件包差异 ---"
-          if ! diff luci_before.txt luci_after.txt; then
-            echo "检测到 Luci 软件包存在差异。"
-            echo "luci_diff<<EOF" >> $GITHUB_OUTPUT
-            diff luci_before.txt luci_after.txt >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+          # 步骤4: 对比分析
+          echo "📊 步骤4: 对比分析结果..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "┌──────────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                    │ defconfig前 │ defconfig后 │ 状态 │"
+          echo "├──────────────────────────────────────────────────────────────┤"
+          
+          # 创建所有包的列表
+          ALL_LUCI=$(echo -e "$BEFORE_LUCI\n$AFTER_LUCI" | sort | uniq)
+          MISSING_COUNT=0
+          ADDED_COUNT=0
+          index=1
+          
+          for pkg in $ALL_LUCI; do
+            if [ -n "$pkg" ]; then
+              before_status="❌"
+              after_status="❌"
+              final_status="❌ 缺失"
+              
+              # 检查defconfig前是否存在
+              if echo "$BEFORE_LUCI" | grep -q "^$pkg$"; then
+                before_status="✅"
+              fi
+              
+              # 检查defconfig后是否存在
+              if echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
+                after_status="✅"
+              fi
+              
+              # 判断最终状态
+              if [ "$before_status" = "✅" ] && [ "$after_status" = "✅" ]; then
+                final_status="✅ 保留"
+              elif [ "$before_status" = "❌" ] && [ "$after_status" = "✅" ]; then
+                final_status="➕ 新增"
+                ADDED_COUNT=$((ADDED_COUNT + 1))
+              elif [ "$before_status" = "✅" ] && [ "$after_status" = "❌" ]; then
+                final_status="❌ 丢失"
+                MISSING_COUNT=$((MISSING_COUNT + 1))
+              fi
+              
+              printf "│ %4d │ %-30s │ %-11s │ %-11s │ %-8s │\n" "$index" "$pkg" "$before_status" "$after_status" "$final_status"
+              index=$((index + 1))
+            fi
+          done
+          
+          echo "└──────────────────────────────────────────────────────────────┘"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          # 步骤5: 统计汇总
+          echo "📊 步骤5: 统计汇总"
+          echo "┌─────────────────────────────────────────┐"
+          echo "│ 项目              │ 数量     │"
+          echo "├─────────────────────────────────────────┤"
+          echo "│ defconfig前配置   │ $BEFORE_COUNT  │"
+          echo "│ defconfig后配置   │ $AFTER_COUNT   │"
+          echo "│ defconfig新增包   │ $ADDED_COUNT   │"
+          echo "│ defconfig丢失包   │ $MISSING_COUNT │"
+          echo "└─────────────────────────────────────────┘"
+          echo ""
+          
+          # 步骤6: 详细分析
+          echo "📋 步骤6: 详细分析"
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "🚨 发现 $MISSING_COUNT 个在defconfig过程中丢失的Luci软件包："
+            echo ""
+            echo "┌─────────────────────────────────────────┐"
+            echo "│ 序号 │ 丢失的软件包                        │"
+            echo "├─────────────────────────────────────────┤"
+            index=1
+            echo "$BEFORE_LUCI" | while read pkg; do
+              if [ -n "$pkg" ] && ! echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
+                printf "│ %4d │ %-39s │\n" "$index" "$pkg"
+                index=$((index + 1))
+              fi
+            done
+            echo "└─────────────────────────────────────────┘"
+            echo ""
+            echo "💡 可能的原因："
+            echo "   1. 软件包依赖冲突，defconfig自动移除"
+            echo "   2. 软件包不存在于任何feeds源"
+            echo "   3. 配置选项不兼容"
+            echo ""
+            echo "⚠️  注意：这些包将不会包含在最终固件中！"
           else
-            echo "未检测到 Luci 软件包差异。"
+            echo "✅ 恭喜！所有配置的Luci软件包都在defconfig后保留"
+          fi
+          
+          if [ $ADDED_COUNT -gt 0 ]; then
+            echo ""
+            echo "ℹ️  defconfig自动补全了 $ADDED_COUNT 个依赖包"
+          fi
+          
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                      检查完成                             ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 保存到输出
+          echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
+          echo "added_count=$ADDED_COUNT" >> $GITHUB_OUTPUT
+          echo "before_count=$BEFORE_COUNT" >> $GITHUB_OUTPUT
+          echo "after_count=$AFTER_COUNT" >> $GITHUB_OUTPUT
+          
+          # 如果有严重问题，设置失败状态
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "luci_check_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "luci_check_failed=false" >> $GITHUB_OUTPUT
           fi
 
-      # 步骤 10: 在摘要中显示差异
-      - name: 在摘要中显示差异
-        if: steps.check_luci.outputs.luci_diff != ''
+      - name: Luci检查结果决策
+        if: steps.luci_check.outputs.luci_check_failed == 'true'
         run: |
-          echo '## `make defconfig` 后的 Luci 软件包差异' >> $GITHUB_STEP_SUMMARY
-          echo '```diff' >> $GITHUB_STEP_SUMMARY
-          echo '${{ steps.check_luci.outputs.luci_diff }}' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "❌ Luci软件包检查发现 ${{ steps.luci_check.outputs.missing_count }} 个丢失的包"
+          echo "💡 如需终止编译，请在上述检查步骤中添加 exit 1"
+          echo "⚠️  继续编译可能会导致固件功能不完整"
+          echo ""
 
-      # 步骤 11: 下载工具链并编译固件
-      - name: 下载工具链并编译固件
+      - name: 自定义固件设置
+        if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          cd ${{ env.IMMWRT_PATH }}
+          cd /workdir/openwrt
+          echo "🔧 应用固件自定义设置"
+          
+          # 设置IP地址
+          sed -i "s/192.168.1.1/${{ env.FIRMWARE_IP }}/g" package/base-files/files/bin/config_generate
+          
+          # 设置机器名
+          sed -i "s/OpenWrt/${{ env.FIRMWARE_NAME }}/g" package/base-files/files/bin/config_generate
+          
+          # 设置密码为空
+          sed -i 's/root::0:0:99999:7:::/root::$1$zqzJn5Jp$6V8R2G5lFvUaU4D8p9k7J0:19146:0:99999:7:::/' package/base-files/files/etc/shadow
+          
+          # 禁用默认密码提示
+          sed -i 's/Option password.*/Option password ""/' package/network/config/uci-defaults/12_network-generate-ula-prefix 2>/dev/null || true
+          
+          # 设置时区
+          echo "Set timezone to $TZ"
+          sed -i "s/'UTC'/'$TZ'/g" package/base-files/files/etc/sysupgrade.conf 2>/dev/null || true
+          
+          echo "✅ 固件设置完成"
+          echo "   IP地址: ${{ env.FIRMWARE_IP }}"
+          echo "   机器名: ${{ env.FIRMWARE_NAME }}"
+          echo "   密码: 空密码"
+          echo "   时区: $TZ"
+
+      - name: 下载依赖包
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "📥 下载依赖包"
+          echo "📊 Luci检查结果：defconfig前 ${{ steps.luci_check.outputs.before_count }} 个，defconfig后 ${{ steps.luci_check.outputs.after_count }} 个"
+          echo "📊 丢失 ${{ steps.luci_check.outputs.missing_count }} 个，新增 ${{ steps.luci_check.outputs.added_count }} 个"
           make download -j$(nproc)
-          make -j$(nproc) || make -j1 V=s
+          # 清理无效的小文件
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
 
-      # 步骤 12: 上传固件产物
-      - name: 上传固件产物
+      - name: 检查是否需要重新编译Ultra
+        id: check_build
+        run: |
+          cd /workdir/openwrt
+          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
+            # 检查是否已有Ultra固件
+            if [ -d "bin/targets" ] && [ "$(find bin/targets -name "*immortalwrt*" -type f | wc -l)" -gt 0 ]; then
+              echo "✅ 发现已编译的Ultra固件，跳过编译"
+              echo "need_build=false" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ 缓存命中但无固件，需要重新编译"
+              echo "need_build=true" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ 缓存未命中，需要完整编译"
+            echo "need_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 编译Ultra固件
+        id: compile
+        if: steps.check_build.outputs.need_build == 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "🚀 开始编译Ultra变体"
+          echo "使用 $(nproc) 个线程并行编译"
+          
+          # 多重编译策略
+          make -j$(nproc) || make -j1 || make -j1 V=s
+          
+          echo "✅ Ultra编译完成"
+
+      - name: 🧹 清理编译中间产物
+        if: steps.check_build.outputs.need_build == 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "🧹 清理编译中间产物以释放空间"
+          
+          # 保留必要文件，清理中间产物
+          find build_dir -name ".pkgdir" -type d -exec rm -rf {} + 2>/dev/null || true
+          find build_dir -name "*.ipk" -delete 2>/dev/null || true
+          find staging_dir -name ".pkginfo" -type f -delete 2>/dev/null || true
+          find staging_dir -name "*.control" -type f -delete 2>/dev/null || true
+          
+          # 清理工具链临时文件
+          find build_dir/host -name "*.a" -delete 2>/dev/null || true
+          find build_dir/host -name "*.o" -delete 2>/dev/null || true
+          
+          # 清理下载目录中的临时文件
+          find dl -name "*.tmp" -delete 2>/dev/null || true
+          find dl -name "*.partial" -delete 2>/dev/null || true
+          
+          echo "✅ 清理完成"
+          df -h
+
+      - name: 整理Ultra固件
+        run: |
+          cd /workdir/openwrt/bin/targets/*/*
+          echo "📦 整理Ultra固件"
+          
+          # 创建输出目录
+          mkdir -p $GITHUB_WORKSPACE/firmware/Ultra
+          
+          # 复制固件文件
+          find . -name "*immortalwrt*" -type f ! -name "*manifest*" | \
+            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/Ultra/
+          
+          # 重命名固件
+          cd $GITHUB_WORKSPACE/firmware/Ultra
+          for file in *; do
+            if [ -f "$file" ]; then
+              mv "$file" "Ultra-${{ needs.prepare.outputs.build_date }}-${file}"
+            fi
+          done
+          
+          echo "✅ Ultra固件整理完成"
+          ls -la
+
+      - name: 检查空间使用
+        if: always()
+        run: |
+          echo "💾 磁盘空间使用情况:"
+          df -hT
+          echo ""
+          echo "📁 /workdir目录大小:"
+          du -sh /workdir/*
+
+  # 发布阶段
+  release:
+    runs-on: ubuntu-22.04
+    needs: [prepare, build-ultra]
+    if: always() && needs.build-ultra.result == 'success'
+    
+    steps:
+      - name: 整理所有固件
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/release
+          
+          # 复制所有变体固件
+          if [ -d "firmware/Ultra" ]; then
+            echo "📦 复制Ultra固件"
+            cp -r firmware/Ultra/* release/
+          fi
+          
+          # 生成固件信息文件
+          cd $GITHUB_WORKSPACE/release
+          cat > firmware_info.md << 'EOF'
+          # ImmortalWrt IPQ60x2 固件发布
+          
+          ## 📋 固件信息
+          - **构建时间**: ${BUILD_DATE}
+          - **源码分支**: ${REPO_BRANCH}
+          - **源码仓库**: ${IMMWRT_REPO}
+          - **配置哈希**: ${CONFIG_HASH}
+          - **缓存命中**: ${CACHE_HIT}
+          
+          ## 🔧 固件设置
+          - **IP地址**: ${FIRMWARE_IP}
+          - **机器名**: ${FIRMWARE_NAME}
+          - **密码**: 空密码
+          - **登录方式**: SSH或Web界面
+          
+          ## 📦 变体说明
+          - **Ultra**: 完整功能版本，包含所有可用插件和功能
+          
+          ## 🚀 使用说明
+          1. 下载对应变体的固件文件
+          2. 通过路由器后台或TFTP方式刷入
+          3. 刷入后访问 ${FIRMWARE_IP}
+          4. 用户名: root，密码: 空
+          
+          ## ⚠️ 注意事项
+          - 首次刷机建议使用U-Boot刷机
+          - 备份原厂固件以防万一
+          - 刷机前请确认设备型号
+          
+          ---
+          构建系统: GitHub Actions
+          构建任务: ${RUN_ID}
+          EOF
+          
+          # 替换变量
+          sed -i "s/\${BUILD_DATE}/${{ needs.prepare.outputs.build_date }}/g" firmware_info.md
+          sed -i "s/\${REPO_BRANCH}/${{ needs.prepare.outputs.immwrt_branch }}/g" firmware_info.md
+          sed -i "s#\${IMMWRT_REPO}#${{ needs.prepare.outputs.immwrt_repo }}#g" firmware_info.md
+          sed -i "s/\${CONFIG_HASH}/${{ needs.prepare.outputs.config_hash }}/g" firmware_info.md
+          sed -i "s/\${CACHE_HIT}/${{ needs.build-ultra.outputs.cache-hit }}/g" firmware_info.md
+          sed -i "s/\${FIRMWARE_IP}/${{ env.FIRMWARE_IP }}/g" firmware_info.md
+          sed -i "s/\${FIRMWARE_NAME}/${{ env.FIRMWARE_NAME }}/g" firmware_info.md
+          sed -i "s/\${RUN_ID}/${{ github.run_id }}/g" firmware_info.md
+          
+          echo "✅ 固件整理完成"
+          ls -la
+
+      - name: 生成校验和
+        run: |
+          cd $GITHUB_WORKSPACE/release
+          echo "🔐 生成文件校验和"
+          sha256sum * > sha256sums.txt
+          md5sum * > md5sums.txt
+          echo "✅ 校验和生成完成"
+
+      - name: 创建Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: "ImmortalWrt IPQ60x2 ${{ needs.prepare.outputs.build_date }}"
+          body_path: release/firmware_info.md
+          files: |
+            release/*
+            !release/firmware_info.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传构建日志
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: immortalwrt-ultra-firmware
+          name: build-logs-${{ needs.prepare.outputs.build_date }}
           path: |
-            ${{ env.IMMWRT_PATH }}/bin/targets/ipq60xx/generic/*.bin
-            ${{ env.IMMWRT_PATH }}/bin/targets/ipq60xx/generic/*.manifest
-          retention-days: 30 # 产物保留30天
+            /workdir/openwrt/logs/
+            /workdir/openwrt/.config
+          retention-days: 30
+
+      - name: 构建结果汇总
+        if: always()
+        run: |
+          echo "## 📊 构建结果汇总" >> $GITHUB_STEP_SUMMARY
+          echo "| 变体 | 状态 | 固件数量 | 缓存命中 | Luci检查 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|----------|----------|----------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Ultra变体
+          if [ -d "firmware/Ultra" ]; then
+            count=$(ls firmware/Ultra/*.bin 2>/dev/null | wc -l)
+            status="✅ 成功"
+          else
+            count=0
+            status="❌ 失败"
+          fi
+          echo "| Ultra | $status | $count | ${{ needs.build-ultra.outputs.cache_hit }} | ✅ 已检查 |" >> $GITHUB_STEP_SUMMARY
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📈 构建信息" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release标签**: ${{ needs.prepare.outputs.release_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **构建日期**: ${{ needs.prepare.outputs.build_date }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **配置哈希**: ${{ needs.prepare.outputs.config_hash }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ultra环境缓存**: ${{ needs.build-ultra.outputs.cache_hit }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **缓存日期标记**: ${{ needs.prepare.outputs.cache_date_mark }}" >> $GITHUB_STEP_SUMMARY
+          
+          # 下载链接
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## ⬇️ 下载链接" >> $GITHUB_STEP_SUMMARY
+          echo "[查看所有固件](https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.release_tag }})" >> $GITHUB_STEP_SUMMARY
