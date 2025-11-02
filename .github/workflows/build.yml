@@ -336,51 +336,6 @@ jobs:
             cat "$GITHUB_WORKSPACE/configs/Ultra.config" >> .config
           make defconfig
 
-      - name: 自定义固件设置
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          cd /workdir/openwrt
-          echo "🔧 应用固件自定义设置"
-          
-          # 设置IP地址为192.168.111.1
-          sed -i "s/192.168.1.1/${{ env.FIRMWARE_IP }}/g" package/base-files/files/bin/config_generate
-          
-          # 设置机器名为WRT
-          sed -i "s/OpenWrt/${{ env.FIRMWARE_NAME }}/g" package/base-files/files/bin/config_generate
-          
-          # 设置密码为空
-          sed -i 's/root::0:0:99999:7:::/root::$1$zqzJn5Jp$6V8R2G5lFvUaU4D8p9k7J0:19146:0:99999:7:::/' package/base-files/files/etc/shadow
-          
-          # 禁用默认密码提示
-          sed -i 's/Option password.*/Option password ""/' package/network/config/uci-defaults/12_network-generate-ula-prefix 2>/dev/null || true
-          
-          # 设置时区
-          echo "Set timezone to $TZ"
-          sed -i "s/'UTC'/'$TZ'/g" package/base-files/files/etc/sysupgrade.conf 2>/dev/null || true
-          
-          echo "✅ 固件设置完成"
-          echo "   IP地址: ${{ env.FIRMWARE_IP }}"
-          echo "   机器名: ${{ env.FIRMWARE_NAME }}"
-          echo "   密码: 空密码"
-          echo "   时区: $TZ"
-
-      - name: 下载依赖包
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          cd /workdir/openwrt
-          echo "📥 下载依赖包"
-          make download -j$(nproc)
-          # 清理无效的小文件
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
-
-      - name: 预编译工具链
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          cd /workdir/openwrt
-          echo "🔨 预编译工具链"
-          make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
-
       - name: 🔍🔍🔍 Luci软件包完整性检查 - Ultra变体 🔍🔍🔍
         id: luci_check
         run: |
@@ -476,6 +431,13 @@ jobs:
           if [ $MISSING_COUNT -gt 0 ]; then
             echo ""
             echo "🚨 警告：发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能！"
+            echo ""
+            echo "💡 建议："
+            echo "   1. 检查配置文件中的软件包名称是否正确"
+            echo "   2. 确认feeds源是否包含所需的软件包"
+            echo "   3. 考虑移除缺失的软件包或添加相应的软件源"
+            echo ""
+            echo "⚠️  注意：继续编译可能会导致固件功能不完整"
           else
             echo ""
             echo "🎉 恭喜！所有Luci软件包检查通过！"
@@ -491,6 +453,66 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
+          
+          # 如果有严重问题，设置失败状态
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "luci_check_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "luci_check_failed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Luci检查结果决策
+        if: steps.luci_check.outputs.luci_check_failed == 'true'
+        run: |
+          echo "❌ Luci软件包检查发现问题，但继续编译..."
+          echo "💡 如需终止编译，请在上述检查步骤中添加 exit 1"
+          echo ""
+
+      - name: 自定义固件设置
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "🔧 应用固件自定义设置"
+          
+          # 设置IP地址为192.168.111.1
+          sed -i "s/192.168.1.1/${{ env.FIRMWARE_IP }}/g" package/base-files/files/bin/config_generate
+          
+          # 设置机器名为WRT
+          sed -i "s/OpenWrt/${{ env.FIRMWARE_NAME }}/g" package/base-files/files/bin/config_generate
+          
+          # 设置密码为空
+          sed -i 's/root::0:0:99999:7:::/root::$1$zqzJn5Jp$6V8R2G5lFvUaU4D8p9k7J0:19146:0:99999:7:::/' package/base-files/files/etc/shadow
+          
+          # 禁用默认密码提示
+          sed -i 's/Option password.*/Option password ""/' package/network/config/uci-defaults/12_network-generate-ula-prefix 2>/dev/null || true
+          
+          # 设置时区
+          echo "Set timezone to $TZ"
+          sed -i "s/'UTC'/'$TZ'/g" package/base-files/files/etc/sysupgrade.conf 2>/dev/null || true
+          
+          echo "✅ 固件设置完成"
+          echo "   IP地址: ${{ env.FIRMWARE_IP }}"
+          echo "   机器名: ${{ env.FIRMWARE_NAME }}"
+          echo "   密码: 空密码"
+          echo "   时区: $TZ"
+
+      - name: 下载依赖包
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "📥 下载依赖包"
+          echo "📊 Luci检查结果：存在 ${{ steps.luci_check.outputs.found_count }} 个，缺失 ${{ steps.luci_check.outputs.missing_count }} 个"
+          make download -j$(nproc)
+          # 清理无效的小文件
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: 预编译工具链
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "🔨 预编译工具链"
+          make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
 
       - name: 检查是否需要重新编译Ultra
         id: check_build
