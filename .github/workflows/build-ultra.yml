@@ -1,0 +1,132 @@
+# 工作流名称
+name: 构建 ImmortalWrt Ultra 固件
+
+# 触发器
+on:
+  # 允许手动触发构建
+  workflow_dispatch:
+  # 当推送到 main 分支时自动触发
+  push:
+    branches:
+      - main
+
+# 任务定义
+jobs:
+  build:
+    # 使用 ubuntu-22.04 镜像，稳定且兼容 24.04
+    runs-on: ubuntu-22.04
+
+    # 步骤定义
+    steps:
+      # 步骤 1: 检出代码
+      - name: 检出本仓库代码
+        uses: actions/checkout@v4
+
+      # 步骤 2: 初始化构建环境
+      - name: 初始化构建环境
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/*
+          sudo apt-get update
+          sudo apt-get install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
+          git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+          libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool lrzsz \
+          mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools \
+          python3-setuptools python3-serial rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl \
+          unzip vim wget xmlto xxd zlib1g-dev
+
+      # 步骤 3: 克隆 ImmortalWrt 源码
+      - name: 克隆 ImmortalWrt 源码
+        run: |
+          git clone https://github.com/laipeng668/immortalwrt.git -b master immwrt
+          echo "IMMWRT_PATH=$(pwd)/immwrt" >> $GITHUB_ENV
+
+      # 步骤 4: 赋予脚本执行权限
+      - name: 赋予脚本执行权限
+        run: |
+          chmod +x scripts/*.sh
+
+      # 步骤 5: 添加自定义软件源
+      - name: 添加自定义软件源
+        run: |
+          cd ${{ env.IMMWRT_PATH }}
+          ../scripts/repo.sh
+
+      # 步骤 6: 应用自定义设置
+      - name: 应用自定义设置
+        run: |
+          cd ${{ env.IMMWRT_PATH }}
+          ../scripts/diy.sh
+
+      # 步骤 7: 更新软件源并安装软件包
+      - name: 更新软件源并安装软件包
+        run: |
+          cd ${{ env.IMMWRT_PATH }}
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # 步骤 8: 下载并合并配置文件
+      - name: 下载并合并配置文件
+        run: |
+          cd ${{ env.IMMWRT_PATH }}
+          # 下载配置文件
+          wget -O base_ipq60xx.config https://github.com/aghu1979/ipq60x2/raw/main/configs/base_ipq60xx.config
+          wget -O base_immwrt.config https://github.com/aghu1979/ipq60x2/raw/main/configs/base_immwrt.config
+          wget -O Ultra.config https://github.com/aghu1979/ipq60x2/raw/main/configs/Ultra.config
+          
+          # 合并配置文件 (后面的会覆盖前面的同名选项)
+          cat base_ipq60xx.config base_immwrt.config Ultra.config > .config
+          
+          # 备份 defconfig 前的配置，用于核对
+          cp .config .config.pre-defconfig
+
+      # 步骤 9: 运行 Defconfig 并核对 Luci 软件包
+      - name: 运行 Defconfig 并核对 Luci 软件包
+        id: check_luci
+        run: |
+          cd ${{ env.IMMWRT_PATH }}
+          make defconfig
+          
+          echo "--- defconfig 前的 Luci 软件包 ---"
+          grep "^CONFIG_PACKAGE_luci-" .config.pre-defconfig | sed 's/^CONFIG_PACKAGE_//' | sed 's/=.*$//' | sort > luci_before.txt
+          cat luci_before.txt
+          
+          echo "--- defconfig 后的 Luci 软件包 ---"
+          grep "^CONFIG_PACKAGE_luci-" .config | sed 's/^CONFIG_PACKAGE_//' | sed 's/=.*$//' | sort > luci_after.txt
+          cat luci_after.txt
+          
+          echo "--- Luci 软件包差异 ---"
+          if ! diff luci_before.txt luci_after.txt; then
+            echo "检测到 Luci 软件包存在差异。"
+            echo "luci_diff<<EOF" >> $GITHUB_OUTPUT
+            diff luci_before.txt luci_after.txt >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "未检测到 Luci 软件包差异。"
+          fi
+
+      # 步骤 10: 在摘要中显示差异
+      - name: 在摘要中显示差异
+        if: steps.check_luci.outputs.luci_diff != ''
+        run: |
+          echo '## `make defconfig` 后的 Luci 软件包差异' >> $GITHUB_STEP_SUMMARY
+          echo '```diff' >> $GITHUB_STEP_SUMMARY
+          echo '${{ steps.check_luci.outputs.luci_diff }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      # 步骤 11: 下载工具链并编译固件
+      - name: 下载工具链并编译固件
+        run: |
+          cd ${{ env.IMMWRT_PATH }}
+          make download -j$(nproc)
+          make -j$(nproc) || make -j1 V=s
+
+      # 步骤 12: 上传固件产物
+      - name: 上传固件产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-ultra-firmware
+          path: |
+            ${{ env.IMMWRT_PATH }}/bin/targets/ipq60xx/generic/*.bin
+            ${{ env.IMMWRT_PATH }}/bin/targets/ipq60xx/generic/*.manifest
+          retention-days: 30 # 产物保留30天
