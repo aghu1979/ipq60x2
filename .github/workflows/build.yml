@@ -388,8 +388,8 @@ jobs:
           echo "📁 /workdir目录大小:"
           du -sh /workdir/*
 
-  # 🔍 Ultra变体Luci软件包检查
-  check-ultra-luci:
+  # Ultra变体编译
+  build-ultra:
     runs-on: ubuntu-22.04
     needs: [prepare, build-base]
     if: always() && needs.build-base.result == 'success'
@@ -413,7 +413,10 @@ jobs:
         run: |
           if [ ! -f "/workdir/openwrt/Makefile" ]; then
             echo "❌ 源码目录不完整，尝试恢复..."
-            exit 1
+            # 如果缓存有问题，重新克隆
+            cd /workdir
+            rm -rf openwrt
+            git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
           fi
           echo "✅ 源码目录验证通过"
 
@@ -539,56 +542,26 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
-
-      - name: 📄 生成检查报告文件
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: luci-check-report-ultra
-          path: |
-            /workdir/openwrt/.config
-          retention-days: 30
-
-  # Ultra变体编译
-  build-ultra:
-    runs-on: ubuntu-22.04
-    needs: [prepare, build-base, check-ultra-luci]
-    if: always() && needs.build-base.result == 'success'
-    
-    steps:
-      - name: 恢复编译环境
-        uses: actions/cache@v4
-        with:
-          path: |
-            /workdir/openwrt
-            ~/.cache/go-build
-            ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_full }}
-          restore-keys: |
-            ${{ needs.prepare.outputs.cache_key_base }}-
-            openwrt-base-
-            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
-            openwrt-toolchain-
-
-      - name: 验证源码完整性
-        run: |
-          if [ ! -f "/workdir/openwrt/Makefile" ]; then
-            echo "❌ 源码目录不完整，尝试恢复..."
-            exit 1
+          
+          # 添加到Step Summary
+          echo "# 🔍 Luci软件包检查报告 - Ultra变体" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
+          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ⚠️ 注意" >> $GITHUB_STEP_SUMMARY
+            echo "发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能。" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 🎉 检查结果" >> $GITHUB_STEP_SUMMARY
+            echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "✅ 源码目录验证通过"
-
-      - name: 准备Ultra配置
-        run: |
-          cd /workdir/openwrt
-          echo "⚙️ 加载Ultra配置"
-          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
-            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
-          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
-          [ -f "$GITHUB_WORKSPACE/configs/Ultra.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/Ultra.config" >> .config
-          make defconfig
 
       - name: 编译Ultra固件
         run: |
@@ -624,11 +597,11 @@ jobs:
           echo "✅ Ultra固件整理完成"
           ls -la
 
-  # 🔍 Max变体Luci软件包检查（Ultra成功后）
-  check-max-luci:
+  # Max变体编译
+  build-max:
     runs-on: ubuntu-22.04
     needs: [prepare, build-base, build-ultra]
-    if: always() && needs.build-ultra.result == 'success'
+    if: always() && needs.build-base.result == 'success' && needs.build-ultra.result == 'success'
     
     steps:
       - name: 恢复编译环境
@@ -649,7 +622,10 @@ jobs:
         run: |
           if [ ! -f "/workdir/openwrt/Makefile" ]; then
             echo "❌ 源码目录不完整，尝试恢复..."
-            exit 1
+            # 如果缓存有问题，重新克隆
+            cd /workdir
+            rm -rf openwrt
+            git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
           fi
           echo "✅ 源码目录验证通过"
 
@@ -776,21 +752,66 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
+          
+          # 添加到Step Summary
+          echo "# 🔍 Luci软件包检查报告 - Max变体" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
+          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ⚠️ 注意" >> $GITHUB_STEP_SUMMARY
+            echo "发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能。" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 🎉 检查结果" >> $GITHUB_STEP_SUMMARY
+            echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
+          fi
 
-      - name: 📄 生成检查报告文件
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: luci-check-report-max
-          path: |
-            /workdir/openwrt/.config
-          retention-days: 30
+      - name: 编译Max固件
+        run: |
+          cd /workdir/openwrt
+          echo "🚀 开始编译Max变体"
+          echo "使用 $(nproc) 个线程并行编译"
+          
+          # 多重编译策略
+          make -j$(nproc) || make -j1 || make -j1 V=s
+          
+          echo "✅ Max编译完成"
 
-  # 🔍 Pro变体Luci软件包检查（Ultra成功后）
-  check-pro-luci:
+      - name: 整理Max固件
+        run: |
+          cd /workdir/openwrt/bin/targets/*/*
+          echo "📦 整理Max固件"
+          
+          # 创建输出目录
+          mkdir -p $GITHUB_WORKSPACE/firmware/Max
+          
+          # 复制固件文件
+          find . -name "*immortalwrt*" -type f ! -name "*manifest*" | \
+            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/Max/
+          
+          # 重命名固件
+          cd $GITHUB_WORKSPACE/firmware/Max
+          for file in *; do
+            if [ -f "$file" ]; then
+              mv "$file" "Max-${{ needs.prepare.outputs.build_date }}-${file}"
+            fi
+          done
+          
+          echo "✅ Max固件整理完成"
+          ls -la
+
+  # Pro变体编译
+  build-pro:
     runs-on: ubuntu-22.04
     needs: [prepare, build-base, build-ultra]
-    if: always() && needs.build-ultra.result == 'success'
+    if: always() && needs.build-base.result == 'success' && needs.build-ultra.result == 'success'
     
     steps:
       - name: 恢复编译环境
@@ -811,7 +832,10 @@ jobs:
         run: |
           if [ ! -f "/workdir/openwrt/Makefile" ]; then
             echo "❌ 源码目录不完整，尝试恢复..."
-            exit 1
+            # 如果缓存有问题，重新克隆
+            cd /workdir
+            rm -rf openwrt
+            git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
           fi
           echo "✅ 源码目录验证通过"
 
@@ -938,133 +962,26 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
-
-      - name: 📄 生成检查报告文件
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: luci-check-report-pro
-          path: |
-            /workdir/openwrt/.config
-          retention-days: 30
-
-  # Max变体编译
-  build-max:
-    runs-on: ubuntu-22.04
-    needs: [prepare, build-base, check-max-luci]
-    if: always() && needs.build-base.result == 'success' && needs.check-max-luci.result == 'success'
-    
-    steps:
-      - name: 恢复编译环境
-        uses: actions/cache@v4
-        with:
-          path: |
-            /workdir/openwrt
-            ~/.cache/go-build
-            ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_full }}
-          restore-keys: |
-            ${{ needs.prepare.outputs.cache_key_base }}-
-            openwrt-base-
-            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
-            openwrt-toolchain-
-
-      - name: 验证源码完整性
-        run: |
-          if [ ! -f "/workdir/openwrt/Makefile" ]; then
-            echo "❌ 源码目录不完整，尝试恢复..."
-            exit 1
+          
+          # 添加到Step Summary
+          echo "# 🔍 Luci软件包检查报告 - Pro变体" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
+          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
+          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ⚠️ 注意" >> $GITHUB_STEP_SUMMARY
+            echo "发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能。" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 🎉 检查结果" >> $GITHUB_STEP_SUMMARY
+            echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "✅ 源码目录验证通过"
-
-      - name: 准备Max配置
-        run: |
-          cd /workdir/openwrt
-          echo "⚙️ 加载Max配置"
-          make distclean
-          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
-            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
-          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
-          [ -f "$GITHUB_WORKSPACE/configs/Max.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/Max.config" >> .config
-          make defconfig
-
-      - name: 编译Max固件
-        run: |
-          cd /workdir/openwrt
-          echo "🚀 开始编译Max变体"
-          echo "使用 $(nproc) 个线程并行编译"
-          
-          # 多重编译策略
-          make -j$(nproc) || make -j1 || make -j1 V=s
-          
-          echo "✅ Max编译完成"
-
-      - name: 整理Max固件
-        run: |
-          cd /workdir/openwrt/bin/targets/*/*
-          echo "📦 整理Max固件"
-          
-          # 创建输出目录
-          mkdir -p $GITHUB_WORKSPACE/firmware/Max
-          
-          # 复制固件文件
-          find . -name "*immortalwrt*" -type f ! -name "*manifest*" | \
-            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/Max/
-          
-          # 重命名固件
-          cd $GITHUB_WORKSPACE/firmware/Max
-          for file in *; do
-            if [ -f "$file" ]; then
-              mv "$file" "Max-${{ needs.prepare.outputs.build_date }}-${file}"
-            fi
-          done
-          
-          echo "✅ Max固件整理完成"
-          ls -la
-
-  # Pro变体编译
-  build-pro:
-    runs-on: ubuntu-22.04
-    needs: [prepare, build-base, check-pro-luci]
-    if: always() && needs.build-base.result == 'success' && needs.check-pro-luci.result == 'success'
-    
-    steps:
-      - name: 恢复编译环境
-        uses: actions/cache@v4
-        with:
-          path: |
-            /workdir/openwrt
-            ~/.cache/go-build
-            ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_full }}
-          restore-keys: |
-            ${{ needs.prepare.outputs.cache_key_base }}-
-            openwrt-base-
-            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
-            openwrt-toolchain-
-
-      - name: 验证源码完整性
-        run: |
-          if [ ! -f "/workdir/openwrt/Makefile" ]; then
-            echo "❌ 源码目录不完整，尝试恢复..."
-            exit 1
-          fi
-          echo "✅ 源码目录验证通过"
-
-      - name: 准备Pro配置
-        run: |
-          cd /workdir/openwrt
-          echo "⚙️ 加载Pro配置"
-          make distclean
-          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
-            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
-          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
-          [ -f "$GITHUB_WORKSPACE/configs/Pro.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/Pro.config" >> .config
-          make defconfig
 
       - name: 编译Pro固件
         run: |
@@ -1219,7 +1136,7 @@ jobs:
               count=0
               status="❌ 失败"
             fi
-            echo "| $variant | $status | $count | ${{ needs.build-base.outputs.cache-hit }} | [查看报告](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) |" >> $GITHUB_STEP_SUMMARY
+            echo "| $variant | $status | $count | ${{ needs.build-base.outputs.cache-hit }} | ✅ 已检查 |" >> $GITHUB_STEP_SUMMARY
           done
           
           echo "" >> $GITHUB_STEP_SUMMARY
