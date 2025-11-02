@@ -40,6 +40,7 @@ jobs:
       cache_key_ultra: ${{ steps.cache_key.outputs.ultra_key }}
       config_hash: ${{ steps.config_hash.outputs.hash }}
       toolchain_hash: ${{ steps.config_hash.outputs.toolchain_hash }}
+      cache_date_mark: ${{ steps.cache_key.outputs.date_mark }}
     
     steps:
       - name: 检出代码
@@ -131,10 +132,13 @@ jobs:
       - name: 生成优化的缓存键
         id: cache_key
         run: |
+          # 添加日期标记，确保缓存不会无限增长（每月一个缓存）
+          DATE_MARK=$(date +%Y%m)
+          
           # 基础缓存键（基于完整配置哈希）
-          BASE_KEY="openwrt-base-${{ steps.config_hash.outputs.hash }}"
+          BASE_KEY="openwrt-base-${{ steps.config_hash.outputs.hash }}-${DATE_MARK}"
           # Ultra完整环境缓存键（包含工具链和下载）
-          ULTRA_KEY="openwrt-ultra-${{ steps.config_hash.outputs.toolchain_hash }}"
+          ULTRA_KEY="openwrt-ultra-${{ steps.config_hash.outputs.toolchain_hash }}-${DATE_MARK}"
           
           # 清理特殊字符
           BASE_KEY=$(echo "$BASE_KEY" | tr -d '\n\r')
@@ -142,9 +146,11 @@ jobs:
           
           echo "base_key=$BASE_KEY" >> $GITHUB_OUTPUT
           echo "ultra_key=$ULTRA_KEY" >> $GITHUB_OUTPUT
+          echo "date_mark=$DATE_MARK" >> $GITHUB_OUTPUT
           
           echo "🔑 基础缓存键: $BASE_KEY"
           echo "🔑 Ultra环境缓存键: $ULTRA_KEY"
+          echo "📅 缓存日期标记: $DATE_MARK"
 
   # 基础环境构建 + Ultra完整编译
   build-base-ultra:
@@ -155,16 +161,51 @@ jobs:
       build_success: ${{ steps.compile.outcome }}
     
     steps:
-      - name: 初始化环境
+      - name: 🧹 彻底清理系统环境
         run: |
+          echo "🧹 开始彻底清理系统环境..."
+          
+          # 清理系统包
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get -qq update
           sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
+          
+          # 额外清理不必要的系统组件
+          sudo rm -rf /usr/share/doc /usr/share/man /usr/share/locale /usr/share/i18n
+          sudo apt-get purge -y azure-cli ghc* zulu* libllvm* dotnet* || true
+          sudo apt-get autoremove -y
+          
+          # 清理Docker和容器相关（如果存在）
+          sudo docker system prune -af || true
+          sudo rm -rf /var/lib/docker || true
+          
+          # 清理日志文件
+          sudo journalctl --vacuum-time=1d || true
+          sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \; || true
+          
+          # 清理npm缓存
+          npm cache clean --force 2>/dev/null || true
+          
+          # 清理pip缓存
+          pip cache purge 2>/dev/null || true
+          
+          # 清理Go缓存
+          go clean -modcache 2>/dev/null || true
+          
+          # 清理旧的日志
+          sudo find /var/log -type f -name "*.log.*" -delete 2>/dev/null || true
+          
+          # 清理临时文件
+          sudo find /tmp -type f -atime +1 -delete 2>/dev/null || true
+          
           sudo timedatectl set-timezone "$TZ"
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
+          
+          echo "✅ 系统环境清理完成"
+          df -h
 
       - name: 检出代码
         uses: actions/checkout@v4
@@ -180,7 +221,7 @@ jobs:
           fi
           echo "✅ 仓库地址验证通过"
 
-      - name: Ultra完整环境缓存策略
+      - name: 📦 Ultra完整环境缓存策略
         id: cache
         uses: actions/cache@v4
         with:
@@ -190,9 +231,31 @@ jobs:
             ~/.cache/pip
           key: ${{ needs.prepare.outputs.cache_key_ultra }}
           restore-keys: |
-            ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-ultra-${{ needs.prepare.outputs.toolchain_hash }}-
+            openwrt-base-${{ needs.prepare.outputs.config_hash }}-
             openwrt-ultra-
             openwrt-base-
+
+      - name: 💾 监控磁盘使用情况
+        run: |
+          echo "💾 当前磁盘使用情况:"
+          df -h
+          
+          # 检查根分区使用率
+          ROOT_USAGE=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+          echo "📊 根分区使用率: ${ROOT_USAGE}%"
+          
+          # 如果使用率超过70%，执行紧急清理
+          if [ "$ROOT_USAGE" -gt 70 ]; then
+            echo "⚠️ 磁盘空间不足，执行紧急清理"
+            
+            # 清理更多缓存
+            sudo rm -rf /usr/local/share/boost 2>/dev/null || true
+            sudo rm -rf /usr/local/share/.cache 2>/dev/null || true
+            
+            echo "✅ 紧急清理完成"
+            df -h
+          fi
 
       - name: 检查缓存状态并准备源码目录
         run: |
@@ -253,6 +316,30 @@ jobs:
             echo "❌ 源码验证失败"
             exit 1
           fi
+
+      - name: ⚙️ 设置编译优化选项
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "⚙️ 设置编译优化选项"
+          
+          # 创建临时配置文件
+          cat > build_opt.config << 'EOF'
+          # 编译优化选项
+          CONFIG_USE_MKLIBS=y
+          CONFIG_USE_SSTRIP=y
+          CONFIG_USE_USTRIP=y
+          CONFIG_USE_XZ=y
+          
+          # 减少调试信息
+          CONFIG_DEBUG=y
+          CONFIG_NO_STRIP=y
+          
+          # 优化并行编译
+          CONFIG_JLEVEL=$(nproc)
+          EOF
+          
+          echo "✅ 编译优化选项设置完成"
 
       - name: 集成diy.sh功能（P1部分）
         if: steps.cache.outputs.cache-hit != 'true'
@@ -334,6 +421,9 @@ jobs:
             cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
           [ -f "$GITHUB_WORKSPACE/configs/Ultra.config" ] && \
             cat "$GITHUB_WORKSPACE/configs/Ultra.config" >> .config
+          
+          # 应用编译优化选项
+          [ -f build_opt.config ] && cat build_opt.config >> .config
 
       - name: 🔍🔍🔍 Luci软件包完整性检查 - Ultra变体 🔍🔍🔍
         id: luci_check
@@ -559,6 +649,29 @@ jobs:
           echo "🔨 预编译工具链"
           make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
 
+      - name: 🧹 清理工具链编译中间产物
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "🧹 清理工具链编译中间产物以释放空间"
+          
+          # 保留必要文件，清理中间产物
+          find build_dir -name ".pkgdir" -type d -exec rm -rf {} + 2>/dev/null || true
+          find build_dir -name "*.ipk" -delete 2>/dev/null || true
+          find staging_dir -name ".pkginfo" -type f -delete 2>/dev/null || true
+          find staging_dir -name "*.control" -type f -delete 2>/dev/null || true
+          
+          # 清理工具链临时文件
+          find build_dir/host -name "*.a" -delete 2>/dev/null || true
+          find build_dir/host -name "*.o" -delete 2>/dev/null || true
+          
+          # 清理下载目录中的临时文件
+          find dl -name "*.tmp" -delete 2>/dev/null || true
+          find dl -name "*.partial" -delete 2>/dev/null || true
+          
+          echo "✅ 工具链清理完成"
+          df -h
+
       - name: 检查是否需要重新编译Ultra
         id: check_build
         run: |
@@ -578,6 +691,7 @@ jobs:
           fi
 
       - name: 编译Ultra固件
+        id: compile
         if: steps.check_build.outputs.need_build == 'true'
         run: |
           cd /workdir/openwrt
@@ -588,6 +702,29 @@ jobs:
           make -j$(nproc) || make -j1 || make -j1 V=s
           
           echo "✅ Ultra编译完成"
+
+      - name: 🧹 清理编译中间产物
+        if: steps.check_build.outputs.need_build == 'true'
+        run: |
+          cd /workdir/openwrt
+          echo "🧹 清理编译中间产物以释放空间"
+          
+          # 保留必要文件，清理中间产物
+          find build_dir -name ".pkgdir" -type d -exec rm -rf {} + 2>/dev/null || true
+          find build_dir -name "*.ipk" -delete 2>/dev/null || true
+          find staging_dir -name ".pkginfo" -type f -delete 2>/dev/null || true
+          find staging_dir -name "*.control" -type f -delete 2>/dev/null || true
+          
+          # 清理工具链临时文件
+          find build_dir/host -name "*.a" -delete 2>/dev/null || true
+          find build_dir/host -name "*.o" -delete 2>/dev/null || true
+          
+          # 清理下载目录中的临时文件
+          find dl -name "*.tmp" -delete 2>/dev/null || true
+          find dl -name "*.partial" -delete 2>/dev/null || true
+          
+          echo "✅ 清理完成"
+          df -h
 
       - name: 整理Ultra固件
         run: |
@@ -621,11 +758,15 @@ jobs:
           echo "📁 /workdir目录大小:"
           du -sh /workdir/*
 
-  # Max变体编译（基于Ultra环境）
-  build-max:
+  # 多变体编译任务（使用矩阵策略）
+  build-variants:
     runs-on: ubuntu-22.04
     needs: [prepare, build-base-ultra]
     if: always() && needs.build-base-ultra.result == 'success'
+    strategy:
+      matrix:
+        variant: [Max, Pro]
+      fail-fast: false
     
     steps:
       - name: 恢复Ultra完整环境
@@ -637,7 +778,8 @@ jobs:
             ~/.cache/pip
           key: ${{ needs.prepare.outputs.cache_key_ultra }}
           restore-keys: |
-            ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-ultra-${{ needs.prepare.outputs.toolchain_hash }}-
+            openwrt-base-${{ needs.prepare.outputs.config_hash }}-
             openwrt-ultra-
             openwrt-base-
 
@@ -654,19 +796,36 @@ jobs:
           echo "  - 下载包状态: $(ls -la dl/ 2>/dev/null | wc -l) 个包"
           echo "  - 编译产物: $(du -sh build_dir/ 2>/dev/null || echo '未知')"
 
-      - name: 🚨 准备Max配置
+      - name: 🚨 准备${{ matrix.variant }}配置
         run: |
           cd /workdir/openwrt
-          echo "⚙️ 加载Max配置（基于Ultra环境）"
+          echo "⚙️ 加载${{ matrix.variant }}配置（基于Ultra环境）"
           make distclean
           [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
             cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
           [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
             cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
-          [ -f "$GITHUB_WORKSPACE/configs/Max.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/Max.config" >> .config
+          [ -f "$GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config" >> .config
+          
+          # 应用编译优化选项
+          cat > build_opt.config << 'EOF'
+          # 编译优化选项
+          CONFIG_USE_MKLIBS=y
+          CONFIG_USE_SSTRIP=y
+          CONFIG_USE_USTRIP=y
+          CONFIG_USE_XZ=y
+          
+          # 减少调试信息
+          CONFIG_DEBUG=y
+          CONFIG_NO_STRIP=y
+          
+          # 优化并行编译
+          CONFIG_JLEVEL=$(nproc)
+          EOF
+          cat build_opt.config >> .config
 
-      - name: 🔍🔍🔍 Luci软件包完整性检查 - Max变体 🔍🔍🔍
+      - name: 🔍🔍🔍 Luci软件包完整性检查 - ${{ matrix.variant }}变体 🔍🔍🔍
         id: luci_check
         run: |
           cd /workdir/openwrt
@@ -675,7 +834,7 @@ jobs:
           echo ""
           echo "╔══════════════════════════════════════════════════════════════╗"
           echo "║                🔍 LUCI软件包对比检查 🔍                ║"
-          echo "║                    Max变体 (defconfig前后)                 ║"
+          echo "║                 ${{ matrix.variant }}变体 (defconfig前后)               ║"
           echo "╚══════════════════════════════════════════════════════════════╝"
           echo ""
           
@@ -843,10 +1002,10 @@ jobs:
           echo "⚠️  继续编译可能会导致固件功能不完整"
           echo ""
 
-      - name: 编译Max固件
+      - name: 编译${{ matrix.variant }}固件
         run: |
           cd /workdir/openwrt
-          echo "🚀 开始编译Max变体（基于Ultra环境）"
+          echo "🚀 开始编译${{ matrix.variant }}变体（基于Ultra环境）"
           echo "使用 $(nproc) 个线程并行编译"
           echo "📊 环境状态："
           echo "  - 工具链: 已就绪（来自Ultra环境）"
@@ -856,296 +1015,58 @@ jobs:
           # 多重编译策略
           make -j$(nproc) || make -j1 || make -j1 V=s
           
-          echo "✅ Max编译完成"
+          echo "✅ ${{ matrix.variant }}编译完成"
 
-      - name: 整理Max固件
+      - name: 🧹 清理${{ matrix.variant }}编译中间产物
+        run: |
+          cd /workdir/openwrt
+          echo "🧹 清理${{ matrix.variant }}编译中间产物以释放空间"
+          
+          # 保留必要文件，清理中间产物
+          find build_dir -name ".pkgdir" -type d -exec rm -rf {} + 2>/dev/null || true
+          find build_dir -name "*.ipk" -delete 2>/dev/null || true
+          find staging_dir -name ".pkginfo" -type f -delete 2>/dev/null || true
+          find staging_dir -name "*.control" -type f -delete 2>/dev/null || true
+          
+          # 清理工具链临时文件
+          find build_dir/host -name "*.a" -delete 2>/dev/null || true
+          find build_dir/host -name "*.o" -delete 2>/dev/null || true
+          
+          # 清理下载目录中的临时文件
+          find dl -name "*.tmp" -delete 2>/dev/null || true
+          find dl -name "*.partial" -delete 2>/dev/null || true
+          
+          echo "✅ 清理完成"
+          df -h
+
+      - name: 整理${{ matrix.variant }}固件
         run: |
           cd /workdir/openwrt/bin/targets/*/*
-          echo "📦 整理Max固件"
+          echo "📦 整理${{ matrix.variant }}固件"
           
           # 创建输出目录
-          mkdir -p $GITHUB_WORKSPACE/firmware/Max
+          mkdir -p $GITHUB_WORKSPACE/firmware/${{ matrix.variant }}
           
           # 复制固件文件
           find . -name "*immortalwrt*" -type f ! -name "*manifest*" | \
-            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/Max/
+            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/${{ matrix.variant }}/
           
           # 重命名固件
-          cd $GITHUB_WORKSPACE/firmware/Max
+          cd $GITHUB_WORKSPACE/firmware/${{ matrix.variant }}
           for file in *; do
             if [ -f "$file" ]; then
-              mv "$file" "Max-${{ needs.prepare.outputs.build_date }}-${file}"
+              mv "$file" "${{ matrix.variant }}-${{ needs.prepare.outputs.build_date }}-${file}"
             fi
           done
           
-          echo "✅ Max固件整理完成"
-          ls -la
-
-  # Pro变体编译（基于Ultra环境）
-  build-pro:
-    runs-on: ubuntu-22.04
-    needs: [prepare, build-base-ultra]
-    if: always() && needs.build-base-ultra.result == 'success'
-    
-    steps:
-      - name: 恢复Ultra完整环境
-        uses: actions/cache@v4
-        with:
-          path: |
-            /workdir/openwrt
-            ~/.cache/go-build
-            ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_ultra }}
-          restore-keys: |
-            ${{ needs.prepare.outputs.cache_key_base }}-
-            openwrt-ultra-
-            openwrt-base-
-
-      - name: 验证Ultra环境完整性
-        run: |
-          if [ ! -f "/workdir/openwrt/Makefile" ]; then
-            echo "❌ Ultra环境不完整，尝试恢复..."
-            exit 1
-          fi
-          echo "✅ Ultra环境验证通过"
-          echo "📊 Ultra环境信息:"
-          cd /workdir/openwrt
-          echo "  - 工具链状态: $(ls -la build_dir/host/ 2>/dev/null | wc -l) 个工具"
-          echo "  - 下载包状态: $(ls -la dl/ 2>/dev/null | wc -l) 个包"
-          echo "  - 编译产物: $(du -sh build_dir/ 2>/dev/null || echo '未知')"
-
-      - name: 🚨 准备Pro配置
-        run: |
-          cd /workdir/openwrt
-          echo "⚙️ 加载Pro配置（基于Ultra环境）"
-          make distclean
-          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
-            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
-          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
-          [ -f "$GITHUB_WORKSPACE/configs/Pro.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/Pro.config" >> .config
-
-      - name: 🔍🔍🔍 Luci软件包完整性检查 - Pro变体 🔍🔍🔍
-        id: luci_check
-        run: |
-          cd /workdir/openwrt
-          
-          # 输出醒目的标题
-          echo ""
-          echo "╔══════════════════════════════════════════════════════════════╗"
-          echo "║                🔍 LUCI软件包对比检查 🔍                ║"
-          echo "║                    Pro变体 (defconfig前后)                  ║"
-          echo "╚══════════════════════════════════════════════════════════════╝"
-          echo ""
-          
-          # 步骤1: 记录defconfig前的Luci包
-          echo "📋 步骤1: 检查defconfig前的配置..."
-          BEFORE_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
-          BEFORE_COUNT=$(echo "$BEFORE_LUCI" | grep -c .)
-          
-          echo "🔍 defconfig前配置中的Luci软件包 ($BEFORE_COUNT 个):"
-          echo "┌─────────────────────────────────────────────────────────┐"
-          echo "│ 序号 │ 软件包名称                                      │"
-          echo "├─────────────────────────────────────────────────────────┤"
-          index=1
-          echo "$BEFORE_LUCI" | while read pkg; do
-            if [ -n "$pkg" ]; then
-              printf "│ %4d │ %-47s │\n" "$index" "$pkg"
-              index=$((index + 1))
-            fi
-          done
-          echo "└─────────────────────────────────────────────────────────┘"
-          echo ""
-          
-          # 步骤2: 运行make defconfig
-          echo "🔄 步骤2: 运行make defconfig补全配置..."
-          make defconfig
-          
-          # 步骤3: 记录defconfig后的Luci包
-          echo ""
-          echo "📋 步骤3: 检查defconfig后的配置..."
-          AFTER_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
-          AFTER_COUNT=$(echo "$AFTER_LUCI" | grep -c .)
-          
-          echo "🔍 defconfig后配置中的Luci软件包 ($AFTER_COUNT 个):"
-          echo "┌─────────────────────────────────────────────────────────┐"
-          echo "│ 序号 │ 软件包名称                                      │"
-          echo "├─────────────────────────────────────────────────────────┤"
-          index=1
-          echo "$AFTER_LUCI" | while read pkg; do
-            if [ -n "$pkg" ]; then
-              printf "│ %4d │ %-47s │\n" "$index" "$pkg"
-              index=$((index + 1))
-            fi
-          done
-          echo "└─────────────────────────────────────────────────────────┘"
-          echo ""
-          
-          # 步骤4: 对比分析
-          echo "📊 步骤4: 对比分析结果..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "┌──────────────────────────────────────────────────────────────┐"
-          echo "│ 序号 │ 软件包名称                    │ defconfig前 │ defconfig后 │ 状态 │"
-          echo "├──────────────────────────────────────────────────────────────┤"
-          
-          # 创建所有包的列表
-          ALL_LUCI=$(echo -e "$BEFORE_LUCI\n$AFTER_LUCI" | sort | uniq)
-          MISSING_COUNT=0
-          ADDED_COUNT=0
-          index=1
-          
-          for pkg in $ALL_LUCI; do
-            if [ -n "$pkg" ]; then
-              before_status="❌"
-              after_status="❌"
-              final_status="❌ 缺失"
-              
-              # 检查defconfig前是否存在
-              if echo "$BEFORE_LUCI" | grep -q "^$pkg$"; then
-                before_status="✅"
-              fi
-              
-              # 检查defconfig后是否存在
-              if echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
-                after_status="✅"
-              fi
-              
-              # 判断最终状态
-              if [ "$before_status" = "✅" ] && [ "$after_status" = "✅" ]; then
-                final_status="✅ 保留"
-              elif [ "$before_status" = "❌" ] && [ "$after_status" = "✅" ]; then
-                final_status="➕ 新增"
-                ADDED_COUNT=$((ADDED_COUNT + 1))
-              elif [ "$before_status" = "✅" ] && [ "$after_status" = "❌" ]; then
-                final_status="❌ 丢失"
-                MISSING_COUNT=$((MISSING_COUNT + 1))
-              fi
-              
-              printf "│ %4d │ %-30s │ %-11s │ %-11s │ %-8s │\n" "$index" "$pkg" "$before_status" "$after_status" "$final_status"
-              index=$((index + 1))
-            fi
-          done
-          
-          echo "└──────────────────────────────────────────────────────────────┘"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          
-          # 步骤5: 统计汇总
-          echo "📊 步骤5: 统计汇总"
-          echo "┌─────────────────────────────────────────┐"
-          echo "│ 项目              │ 数量     │"
-          echo "├─────────────────────────────────────────┤"
-          echo "│ defconfig前配置   │ $BEFORE_COUNT  │"
-          echo "│ defconfig后配置   │ $AFTER_COUNT   │"
-          echo "│ defconfig新增包   │ $ADDED_COUNT   │"
-          echo "│ defconfig丢失包   │ $MISSING_COUNT │"
-          echo "└─────────────────────────────────────────┘"
-          echo ""
-          
-          # 步骤6: 详细分析
-          echo "📋 步骤6: 详细分析"
-          
-          if [ $MISSING_COUNT -gt 0 ]; then
-            echo "🚨 发现 $MISSING_COUNT 个在defconfig过程中丢失的Luci软件包："
-            echo ""
-            echo "┌─────────────────────────────────────────┐"
-            echo "│ 序号 │ 丢失的软件包                        │"
-            echo "├─────────────────────────────────────────┤"
-            index=1
-            echo "$BEFORE_LUCI" | while read pkg; do
-              if [ -n "$pkg" ] && ! echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
-                printf "│ %4d │ %-39s │\n" "$index" "$pkg"
-                index=$((index + 1))
-              fi
-            done
-            echo "└─────────────────────────────────────────┘"
-            echo ""
-            echo "💡 可能的原因："
-            echo "   1. 软件包依赖冲突，defconfig自动移除"
-            echo "   2. 软件包不存在于任何feeds源"
-            echo "   3. 配置选项不兼容"
-            echo ""
-            echo "⚠️  注意：这些包将不会包含在最终固件中！"
-          else
-            echo "✅ 恭喜！所有配置的Luci软件包都在defconfig后保留"
-          fi
-          
-          if [ $ADDED_COUNT -gt 0 ]; then
-            echo ""
-            echo "ℹ️  defconfig自动补全了 $ADDED_COUNT 个依赖包"
-          fi
-          
-          echo ""
-          echo "╔══════════════════════════════════════════════════════════════╗"
-          echo "║                      检查完成                             ║"
-          echo "╚══════════════════════════════════════════════════════════════╝"
-          echo ""
-          
-          # 保存到输出
-          echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
-          echo "added_count=$ADDED_COUNT" >> $GITHUB_OUTPUT
-          echo "before_count=$BEFORE_COUNT" >> $GITHUB_OUTPUT
-          echo "after_count=$AFTER_COUNT" >> $GITHUB_OUTPUT
-          
-          # 如果有严重问题，设置失败状态
-          if [ $MISSING_COUNT -gt 0 ]; then
-            echo "luci_check_failed=true" >> $GITHUB_OUTPUT
-          else
-            echo "luci_check_failed=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Luci检查结果决策
-        if: steps.luci_check.outputs.luci_check_failed == 'true'
-        run: |
-          echo "❌ Luci软件包检查发现 ${{ steps.luci_check.outputs.missing_count }} 个丢失的包"
-          echo "💡 如需终止编译，请在上述检查步骤中添加 exit 1"
-          echo "⚠️  继续编译可能会导致固件功能不完整"
-          echo ""
-
-      - name: 编译Pro固件
-        run: |
-          cd /workdir/openwrt
-          echo "🚀 开始编译Pro变体（基于Ultra环境）"
-          echo "使用 $(nproc) 个线程并行编译"
-          echo "📊 环境状态："
-          echo "  - 工具链: 已就绪（来自Ultra环境）"
-          echo "  - 依赖包: 已下载（来自Ultra环境）"
-          echo "  - 只需编译差异部分"
-          
-          # 多重编译策略
-          make -j$(nproc) || make -j1 || make -j1 V=s
-          
-          echo "✅ Pro编译完成"
-
-      - name: 整理Pro固件
-        run: |
-          cd /workdir/openwrt/bin/targets/*/*
-          echo "📦 整理Pro固件"
-          
-          # 创建输出目录
-          mkdir -p $GITHUB_WORKSPACE/firmware/Pro
-          
-          # 复制固件文件
-          find . -name "*immortalwrt*" -type f ! -name "*manifest*" | \
-            xargs -I {} cp {} $GITHUB_WORKSPACE/firmware/Pro/
-          
-          # 重命名固件
-          cd $GITHUB_WORKSPACE/firmware/Pro
-          for file in *; do
-            if [ -f "$file" ]; then
-              mv "$file" "Pro-${{ needs.prepare.outputs.build_date }}-${file}"
-            fi
-          done
-          
-          echo "✅ Pro固件整理完成"
+          echo "✅ ${{ matrix.variant }}固件整理完成"
           ls -la
 
   # 发布阶段
   release:
     runs-on: ubuntu-22.04
-    needs: [prepare, build-base-ultra, build-max, build-pro]
-    if: always() && (needs.build-base-ultra.result == 'success' || needs.build-max.result == 'success' || needs.build-pro.result == 'success')
+    needs: [prepare, build-base-ultra, build-variants]
+    if: always() && (needs.build-base-ultra.result == 'success' || needs.build-variants.result == 'success')
     
     steps:
       - name: 整理所有固件
@@ -1252,7 +1173,18 @@ jobs:
           echo "| 变体 | 状态 | 固件数量 | 缓存命中 | Luci检查 |" >> $GITHUB_STEP_SUMMARY
           echo "|------|------|----------|----------|----------|" >> $GITHUB_STEP_SUMMARY
           
-          for variant in Ultra Max Pro; do
+          # Ultra变体
+          if [ -d "firmware/Ultra" ]; then
+            count=$(ls firmware/Ultra/*.bin 2>/dev/null | wc -l)
+            status="✅ 成功"
+          else
+            count=0
+            status="❌ 失败"
+          fi
+          echo "| Ultra | $status | $count | ${{ needs.build-base-ultra.outputs.cache_hit }} | ✅ 已检查 |" >> $GITHUB_STEP_SUMMARY
+          
+          # Max和Pro变体
+          for variant in Max Pro; do
             if [ -d "firmware/$variant" ]; then
               count=$(ls firmware/$variant/*.bin 2>/dev/null | wc -l)
               status="✅ 成功"
@@ -1269,6 +1201,7 @@ jobs:
           echo "- **构建日期**: ${{ needs.prepare.outputs.build_date }}" >> $GITHUB_STEP_SUMMARY
           echo "- **配置哈希**: ${{ needs.prepare.outputs.config_hash }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Ultra环境缓存**: ${{ needs.build-base-ultra.outputs.cache_hit }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **缓存日期标记**: ${{ needs.prepare.outputs.cache_date_mark }}" >> $GITHUB_STEP_SUMMARY
           
           # 下载链接
           echo "" >> $GITHUB_STEP_SUMMARY
