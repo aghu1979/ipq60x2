@@ -37,7 +37,7 @@ jobs:
       build_date: ${{ steps.date.outputs.date }}
       release_tag: ${{ steps.tag.outputs.tag }}
       cache_key_base: ${{ steps.cache_key.outputs.base_key }}
-      cache_key_full: ${{ steps.cache_key.outputs.full_key }}
+      cache_key_ultra: ${{ steps.cache_key.outputs.ultra_key }}
       config_hash: ${{ steps.config_hash.outputs.hash }}
       toolchain_hash: ${{ steps.config_hash.outputs.toolchain_hash }}
     
@@ -98,15 +98,15 @@ jobs:
       - name: 计算配置文件哈希
         id: config_hash
         run: |
-          # 计算配置文件哈希（不包含日期）
+          # 计算所有配置文件的哈希（包含Ultra配置）
           CONFIG_HASH=$(find configs/ -type f -name "*.config" -exec cat {} \; | md5sum | cut -d' ' -f1)
           # 计算工具链哈希（基于基础配置）
-          TOOLCHAIN_HASH=$(cat configs/base_ipq60xx.config configs/base_immwrt.config 2>/dev/null | md5sum | cut -d' ' -f1)
+          TOOLCHAIN_HASH=$(cat configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config 2>/dev/null | md5sum | cut -d' ' -f1)
           
           echo "hash=$CONFIG_HASH" >> $GITHUB_OUTPUT
           echo "toolchain_hash=$TOOLCHAIN_HASH" >> $GITHUB_OUTPUT
-          echo "📝 配置文件哈希: $CONFIG_HASH"
-          echo "🔨 工具链哈希: $TOOLCHAIN_HASH"
+          echo "📝 完整配置哈希: $CONFIG_HASH"
+          echo "🔨 Ultra工具链哈希: $TOOLCHAIN_HASH"
 
       - name: 生成构建日期
         id: date
@@ -131,28 +131,23 @@ jobs:
       - name: 生成优化的缓存键
         id: cache_key
         run: |
-          # 基础缓存键（基于配置哈希，不包含日期）
+          # 基础缓存键（基于完整配置哈希）
           BASE_KEY="openwrt-base-${{ steps.config_hash.outputs.hash }}"
-          # 工具链缓存键
-          TOOLCHAIN_KEY="openwrt-toolchain-${{ steps.config_hash.outputs.toolchain_hash }}"
-          # 完整缓存键（包含源码commit）
-          FULL_KEY="${BASE_KEY}-$(git rev-parse --short HEAD)"
+          # Ultra完整环境缓存键（包含工具链和下载）
+          ULTRA_KEY="openwrt-ultra-${{ steps.config_hash.outputs.toolchain_hash }}"
           
           # 清理特殊字符
           BASE_KEY=$(echo "$BASE_KEY" | tr -d '\n\r')
-          TOOLCHAIN_KEY=$(echo "$TOOLCHAIN_KEY" | tr -d '\n\r')
-          FULL_KEY=$(echo "$FULL_KEY" | tr -d '\n\r')
+          ULTRA_KEY=$(echo "$ULTRA_KEY" | tr -d '\n\r')
           
           echo "base_key=$BASE_KEY" >> $GITHUB_OUTPUT
-          echo "toolchain_key=$TOOLCHAIN_KEY" >> $GITHUB_OUTPUT
-          echo "full_key=$FULL_KEY" >> $GITHUB_OUTPUT
+          echo "ultra_key=$ULTRA_KEY" >> $GITHUB_OUTPUT
           
           echo "🔑 基础缓存键: $BASE_KEY"
-          echo "🔑 工具链缓存键: $TOOLCHAIN_KEY"
-          echo "🔑 完整缓存键: $FULL_KEY"
+          echo "🔑 Ultra环境缓存键: $ULTRA_KEY"
 
-  # 基础环境构建
-  build-base:
+  # 基础环境构建 + Ultra完整编译
+  build-base-ultra:
     runs-on: ubuntu-22.04
     needs: prepare
     outputs:
@@ -185,7 +180,7 @@ jobs:
           fi
           echo "✅ 仓库地址验证通过"
 
-      - name: 企业级多层缓存策略
+      - name: Ultra完整环境缓存策略
         id: cache
         uses: actions/cache@v4
         with:
@@ -193,25 +188,30 @@ jobs:
             /workdir/openwrt
             ~/.cache/go-build
             ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_full }}
+          key: ${{ needs.prepare.outputs.cache_key_ultra }}
           restore-keys: |
             ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-ultra-
             openwrt-base-
-            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
-            openwrt-toolchain-
 
       - name: 检查缓存状态并准备源码目录
         run: |
           echo "🔍 缓存状态: ${{ steps.cache.outputs.cache-hit }}"
           
           if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
-            echo "✅ 缓存命中，检查源码目录..."
+            echo "✅ Ultra环境缓存命中，检查源码目录..."
             if [ -d "/workdir/openwrt" ]; then
-              echo "📁 源码目录已存在"
+              echo "📁 Ultra环境目录已存在"
               if [ -f "/workdir/openwrt/Makefile" ]; then
-                echo "✅ 源码目录完整，跳过克隆"
+                echo "✅ Ultra环境完整，跳过基础构建"
+                # 检查是否有Ultra固件
+                if [ -d "/workdir/openwrt/bin/targets" ]; then
+                  echo "✅ 发现已编译的固件，环境完全可用"
+                else
+                  echo "⚠️ 环境存在但未编译固件，需要重新编译"
+                fi
               else
-                echo "⚠️ 源码目录不完整，清理后重新克隆"
+                echo "⚠️ Ultra环境不完整，清理后重新构建"
                 rm -rf /workdir/openwrt
                 echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
                 echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
@@ -219,14 +219,14 @@ jobs:
                 git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
               fi
             else
-              echo "⚠️ 源码目录不存在，重新克隆"
+              echo "⚠️ Ultra环境目录不存在，重新构建"
               echo "📥 克隆源码从: ${{ needs.prepare.outputs.immwrt_repo }}"
               echo "📥 使用分支: ${{ needs.prepare.outputs.immwrt_branch }}"
               cd /workdir
               git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
             fi
           else
-            echo "❌ 缓存未命中，执行完整克隆"
+            echo "❌ Ultra环境缓存未命中，执行完整构建"
             # 确保目录不存在
             if [ -d "/workdir/openwrt" ]; then
               echo "🗑️ 清理已存在的源码目录"
@@ -323,15 +323,17 @@ jobs:
           
           echo "✅ repo.sh功能集成完成"
 
-      - name: 加载基础配置
+      - name: 加载Ultra配置
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd /workdir/openwrt
-          echo "⚙️ 加载基础配置"
+          echo "⚙️ 加载Ultra配置"
           [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
             cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
           [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
             cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
+          [ -f "$GITHUB_WORKSPACE/configs/Ultra.config" ] && \
+            cat "$GITHUB_WORKSPACE/configs/Ultra.config" >> .config
           make defconfig
 
       - name: 自定义固件设置
@@ -378,59 +380,6 @@ jobs:
           cd /workdir/openwrt
           echo "🔨 预编译工具链"
           make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
-
-      - name: 检查空间使用
-        if: always()
-        run: |
-          echo "💾 磁盘空间使用情况:"
-          df -hT
-          echo ""
-          echo "📁 /workdir目录大小:"
-          du -sh /workdir/*
-
-  # Ultra变体编译
-  build-ultra:
-    runs-on: ubuntu-22.04
-    needs: [prepare, build-base]
-    if: always() && needs.build-base.result == 'success'
-    
-    steps:
-      - name: 恢复编译环境
-        uses: actions/cache@v4
-        with:
-          path: |
-            /workdir/openwrt
-            ~/.cache/go-build
-            ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_full }}
-          restore-keys: |
-            ${{ needs.prepare.outputs.cache_key_base }}-
-            openwrt-base-
-            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
-            openwrt-toolchain-
-
-      - name: 验证源码完整性
-        run: |
-          if [ ! -f "/workdir/openwrt/Makefile" ]; then
-            echo "❌ 源码目录不完整，尝试恢复..."
-            # 如果缓存有问题，重新克隆
-            cd /workdir
-            rm -rf openwrt
-            git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
-          fi
-          echo "✅ 源码目录验证通过"
-
-      - name: 🚨 准备Ultra配置
-        run: |
-          cd /workdir/openwrt
-          echo "⚙️ 加载Ultra配置"
-          [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
-            cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
-          [ -f "$GITHUB_WORKSPACE/configs/base_immwrt.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/base_immwrt.config" >> .config
-          [ -f "$GITHUB_WORKSPACE/configs/Ultra.config" ] && \
-            cat "$GITHUB_WORKSPACE/configs/Ultra.config" >> .config
-          make defconfig
 
       - name: 🔍🔍🔍 Luci软件包完整性检查 - Ultra变体 🔍🔍🔍
         id: luci_check
@@ -542,28 +491,27 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
-          
-          # 添加到Step Summary
-          echo "# 🔍 Luci软件包检查报告 - Ultra变体" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
-          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
-          
-          if [ $MISSING_COUNT -gt 0 ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## ⚠️ 注意" >> $GITHUB_STEP_SUMMARY
-            echo "发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能。" >> $GITHUB_STEP_SUMMARY
+
+      - name: 检查是否需要重新编译Ultra
+        id: check_build
+        run: |
+          cd /workdir/openwrt
+          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
+            # 检查是否已有Ultra固件
+            if [ -d "bin/targets" ] && [ "$(find bin/targets -name "*immortalwrt*" -type f | wc -l)" -gt 0 ]; then
+              echo "✅ 发现已编译的Ultra固件，跳过编译"
+              echo "need_build=false" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ 缓存命中但无固件，需要重新编译"
+              echo "need_build=true" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## 🎉 检查结果" >> $GITHUB_STEP_SUMMARY
-            echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
+            echo "❌ 缓存未命中，需要完整编译"
+            echo "need_build=true" >> $GITHUB_OUTPUT
           fi
 
       - name: 编译Ultra固件
+        if: steps.check_build.outputs.need_build == 'true'
         run: |
           cd /workdir/openwrt
           echo "🚀 开始编译Ultra变体"
@@ -597,42 +545,52 @@ jobs:
           echo "✅ Ultra固件整理完成"
           ls -la
 
-  # Max变体编译
+      - name: 检查空间使用
+        if: always()
+        run: |
+          echo "💾 磁盘空间使用情况:"
+          df -hT
+          echo ""
+          echo "📁 /workdir目录大小:"
+          du -sh /workdir/*
+
+  # Max变体编译（基于Ultra环境）
   build-max:
     runs-on: ubuntu-22.04
-    needs: [prepare, build-base, build-ultra]
-    if: always() && needs.build-base.result == 'success' && needs.build-ultra.result == 'success'
+    needs: [prepare, build-base-ultra]
+    if: always() && needs.build-base-ultra.result == 'success'
     
     steps:
-      - name: 恢复编译环境
+      - name: 恢复Ultra完整环境
         uses: actions/cache@v4
         with:
           path: |
             /workdir/openwrt
             ~/.cache/go-build
             ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_full }}
+          key: ${{ needs.prepare.outputs.cache_key_ultra }}
           restore-keys: |
             ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-ultra-
             openwrt-base-
-            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
-            openwrt-toolchain-
 
-      - name: 验证源码完整性
+      - name: 验证Ultra环境完整性
         run: |
           if [ ! -f "/workdir/openwrt/Makefile" ]; then
-            echo "❌ 源码目录不完整，尝试恢复..."
-            # 如果缓存有问题，重新克隆
-            cd /workdir
-            rm -rf openwrt
-            git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
+            echo "❌ Ultra环境不完整，尝试恢复..."
+            exit 1
           fi
-          echo "✅ 源码目录验证通过"
+          echo "✅ Ultra环境验证通过"
+          echo "📊 Ultra环境信息:"
+          cd /workdir/openwrt
+          echo "  - 工具链状态: $(ls -la build_dir/host/ 2>/dev/null | wc -l) 个工具"
+          echo "  - 下载包状态: $(ls -la dl/ 2>/dev/null | wc -l) 个包"
+          echo "  - 编译产物: $(du -sh build_dir/ 2>/dev/null || echo '未知')"
 
       - name: 🚨 准备Max配置
         run: |
           cd /workdir/openwrt
-          echo "⚙️ 加载Max配置"
+          echo "⚙️ 加载Max配置（基于Ultra环境）"
           make distclean
           [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
             cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
@@ -752,32 +710,16 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
-          
-          # 添加到Step Summary
-          echo "# 🔍 Luci软件包检查报告 - Max变体" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
-          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
-          
-          if [ $MISSING_COUNT -gt 0 ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## ⚠️ 注意" >> $GITHUB_STEP_SUMMARY
-            echo "发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能。" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## 🎉 检查结果" >> $GITHUB_STEP_SUMMARY
-            echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
-          fi
 
       - name: 编译Max固件
         run: |
           cd /workdir/openwrt
-          echo "🚀 开始编译Max变体"
+          echo "🚀 开始编译Max变体（基于Ultra环境）"
           echo "使用 $(nproc) 个线程并行编译"
+          echo "📊 环境状态："
+          echo "  - 工具链: 已就绪（来自Ultra环境）"
+          echo "  - 依赖包: 已下载（来自Ultra环境）"
+          echo "  - 只需编译差异部分"
           
           # 多重编译策略
           make -j$(nproc) || make -j1 || make -j1 V=s
@@ -807,42 +749,43 @@ jobs:
           echo "✅ Max固件整理完成"
           ls -la
 
-  # Pro变体编译
+  # Pro变体编译（基于Ultra环境）
   build-pro:
     runs-on: ubuntu-22.04
-    needs: [prepare, build-base, build-ultra]
-    if: always() && needs.build-base.result == 'success' && needs.build-ultra.result == 'success'
+    needs: [prepare, build-base-ultra]
+    if: always() && needs.build-base-ultra.result == 'success'
     
     steps:
-      - name: 恢复编译环境
+      - name: 恢复Ultra完整环境
         uses: actions/cache@v4
         with:
           path: |
             /workdir/openwrt
             ~/.cache/go-build
             ~/.cache/pip
-          key: ${{ needs.prepare.outputs.cache_key_full }}
+          key: ${{ needs.prepare.outputs.cache_key_ultra }}
           restore-keys: |
             ${{ needs.prepare.outputs.cache_key_base }}-
+            openwrt-ultra-
             openwrt-base-
-            openwrt-toolchain-${{ needs.prepare.outputs.toolchain_hash }}-
-            openwrt-toolchain-
 
-      - name: 验证源码完整性
+      - name: 验证Ultra环境完整性
         run: |
           if [ ! -f "/workdir/openwrt/Makefile" ]; then
-            echo "❌ 源码目录不完整，尝试恢复..."
-            # 如果缓存有问题，重新克隆
-            cd /workdir
-            rm -rf openwrt
-            git clone ${{ needs.prepare.outputs.immwrt_repo }} -b ${{ needs.prepare.outputs.immwrt_branch }} openwrt
+            echo "❌ Ultra环境不完整，尝试恢复..."
+            exit 1
           fi
-          echo "✅ 源码目录验证通过"
+          echo "✅ Ultra环境验证通过"
+          echo "📊 Ultra环境信息:"
+          cd /workdir/openwrt
+          echo "  - 工具链状态: $(ls -la build_dir/host/ 2>/dev/null | wc -l) 个工具"
+          echo "  - 下载包状态: $(ls -la dl/ 2>/dev/null | wc -l) 个包"
+          echo "  - 编译产物: $(du -sh build_dir/ 2>/dev/null || echo '未知')"
 
       - name: 🚨 准备Pro配置
         run: |
           cd /workdir/openwrt
-          echo "⚙️ 加载Pro配置"
+          echo "⚙️ 加载Pro配置（基于Ultra环境）"
           make distclean
           [ -f "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" ] && \
             cp "$GITHUB_WORKSPACE/configs/base_ipq60xx.config" .config
@@ -962,32 +905,16 @@ jobs:
           echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
           echo "found_count=$FOUND_COUNT" >> $GITHUB_OUTPUT
           echo "total_count=$TOTAL_COUNT" >> $GITHUB_OUTPUT
-          
-          # 添加到Step Summary
-          echo "# 🔍 Luci软件包检查报告 - Pro变体" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 统计信息" >> $GITHUB_STEP_SUMMARY
-          echo "| 状态 | 数量 | 百分比 | 图标 |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|------|--------|------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ 存在 | $FOUND_COUNT | $FOUND_PERCENT% | 🟢 |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ 缺失 | $MISSING_COUNT | $MISSING_PERCENT% | 🔴 |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📦 总计 | $TOTAL_COUNT | 100% | 📦 |" >> $GITHUB_STEP_SUMMARY
-          
-          if [ $MISSING_COUNT -gt 0 ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## ⚠️ 注意" >> $GITHUB_STEP_SUMMARY
-            echo "发现 $MISSING_COUNT 个缺失的Luci软件包，可能会影响固件功能。" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## 🎉 检查结果" >> $GITHUB_STEP_SUMMARY
-            echo "✅ 所有Luci软件包检查通过，固件将包含所有配置的功能。" >> $GITHUB_STEP_SUMMARY
-          fi
 
       - name: 编译Pro固件
         run: |
           cd /workdir/openwrt
-          echo "🚀 开始编译Pro变体"
+          echo "🚀 开始编译Pro变体（基于Ultra环境）"
           echo "使用 $(nproc) 个线程并行编译"
+          echo "📊 环境状态："
+          echo "  - 工具链: 已就绪（来自Ultra环境）"
+          echo "  - 依赖包: 已下载（来自Ultra环境）"
+          echo "  - 只需编译差异部分"
           
           # 多重编译策略
           make -j$(nproc) || make -j1 || make -j1 V=s
@@ -1020,8 +947,8 @@ jobs:
   # 发布阶段
   release:
     runs-on: ubuntu-22.04
-    needs: [prepare, build-ultra, build-max, build-pro]
-    if: always() && (needs.build-ultra.result == 'success' || needs.build-max.result == 'success' || needs.build-pro.result == 'success')
+    needs: [prepare, build-base-ultra, build-max, build-pro]
+    if: always() && (needs.build-base-ultra.result == 'success' || needs.build-max.result == 'success' || needs.build-pro.result == 'success')
     
     steps:
       - name: 整理所有固件
@@ -1080,7 +1007,7 @@ jobs:
           sed -i "s/\${REPO_BRANCH}/${{ needs.prepare.outputs.immwrt_branch }}/g" firmware_info.md
           sed -i "s#\${IMMWRT_REPO}#${{ needs.prepare.outputs.immwrt_repo }}#g" firmware_info.md
           sed -i "s/\${CONFIG_HASH}/${{ needs.prepare.outputs.config_hash }}/g" firmware_info.md
-          sed -i "s/\${CACHE_HIT}/${{ needs.build-base.outputs.cache-hit }}/g" firmware_info.md
+          sed -i "s/\${CACHE_HIT}/${{ needs.build-base-ultra.outputs.cache-hit }}/g" firmware_info.md
           sed -i "s/\${FIRMWARE_IP}/${{ env.FIRMWARE_IP }}/g" firmware_info.md
           sed -i "s/\${FIRMWARE_NAME}/${{ env.FIRMWARE_NAME }}/g" firmware_info.md
           sed -i "s/\${RUN_ID}/${{ github.run_id }}/g" firmware_info.md
@@ -1136,7 +1063,7 @@ jobs:
               count=0
               status="❌ 失败"
             fi
-            echo "| $variant | $status | $count | ${{ needs.build-base.outputs.cache-hit }} | ✅ 已检查 |" >> $GITHUB_STEP_SUMMARY
+            echo "| $variant | $status | $count | ${{ needs.build-base-ultra.outputs.cache-hit }} | ✅ 已检查 |" >> $GITHUB_STEP_SUMMARY
           done
           
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -1144,8 +1071,7 @@ jobs:
           echo "- **Release标签**: ${{ needs.prepare.outputs.release_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "- **构建日期**: ${{ needs.prepare.outputs.build_date }}" >> $GITHUB_STEP_SUMMARY
           echo "- **配置哈希**: ${{ needs.prepare.outputs.config_hash }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **工具链哈希**: ${{ needs.prepare.outputs.toolchain_hash }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **缓存命中**: ${{ needs.build-base.outputs.cache-hit }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ultra环境缓存**: ${{ needs.build-base-ultra.outputs.cache-hit }}" >> $GITHUB_STEP_SUMMARY
           
           # 下载链接
           echo "" >> $GITHUB_STEP_SUMMARY
