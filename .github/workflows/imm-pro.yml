@@ -1,4 +1,4 @@
-name: ImmortalWrt-Ultra
+name: ImmortalWrt-Pro
 
 on:
   workflow_dispatch:
