@@ -6,19 +6,26 @@ on:
       chip:
         required: true
         type: string
+        default: 'ipq60xx'
         description: "目标芯片架构"
       branch:
         required: true
-        type: string
-        description: "源码分支 (openwrt/immwrt/libwrt)"
+        type: choice
+        default: 'immwrt'
+        description: "源码分支"
+        options:
+          - 'openwrt'
+          - 'immwrt'
+          - 'libwrt'
+          - 'all'
       release_tag:
         required: false
         type: string
-        description: "发布标签 (可选)"
+        description: "发布标签 (可选，留空自动生成)"
       create_release:
         required: false
         type: boolean
-        default: false
+        default: true
         description: "是否创建发布"
 
 env:
@@ -26,9 +33,34 @@ env:
   LOG_LEVEL: "info"
 
 jobs:
+  # 确定构建策略
+  determine-strategy:
+    runs-on: ubuntu-22.04
+    outputs:
+      build-matrix: ${{ steps.set-matrix.outputs.matrix }}
+      is-multiple-branches: ${{ steps.set-matrix.outputs.is-multiple }}
+    steps:
+      - name: 📋 确定构建策略
+        id: set-matrix
+        run: |
+          if [ "${{ inputs.branch }}" == "all" ]; then
+            echo "is-multiple=true" >> $GITHUB_OUTPUT
+            echo 'matrix=["openwrt", "immwrt", "libwrt"]' >> $GITHUB_OUTPUT
+            echo "🔧 将并行构建所有分支: openwrt, immwrt, libwrt"
+          else
+            echo "is-multiple=false" >> $GITHUB_OUTPUT
+            echo 'matrix=["${{ inputs.branch }}"]' >> $GITHUB_OUTPUT
+            echo "🔧 将构建单个分支: ${{ inputs.branch }}"
+          fi
+
   # 基础环境构建
   build-base:
+    needs: determine-strategy
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        branch: ${{ fromJson(needs.determine-strategy.outputs.build-matrix) }}
+      fail-fast: false
     outputs:
       cache-key: ${{ steps.cache-key.outputs.key }}
       build-path: ${{ steps.cache-key.outputs.path }}
@@ -64,18 +96,18 @@ jobs:
           echo ""
           echo "📋 输入参数:"
           echo "  - chip: '${{ inputs.chip }}'"
-          echo "  - branch: '${{ inputs.branch }}'"
+          echo "  - branch: '${{ matrix.branch }}'"
 
       - name: 🔑 生成缓存键
         id: cache-key
         run: |
           echo "📋 开始生成缓存键..."
           echo "  - chip: '${{ inputs.chip }}'"
-          echo "  - branch: '${{ inputs.branch }}'"
+          echo "  - branch: '${{ matrix.branch }}'"
           
           # 检查配置文件是否存在
           CHIP_CONFIG_FILE="base_${{ inputs.chip }}.config"
-          BRANCH_CONFIG_FILE="base_${{ inputs.branch }}.config"
+          BRANCH_CONFIG_FILE="base_${{ matrix.branch }}.config"
           
           echo "📋 查找配置文件:"
           echo "  - 芯片配置文件: $CHIP_CONFIG_FILE"
@@ -112,8 +144,8 @@ jobs:
           # 生成基于配置的缓存键
           CHIP_HASH=$(sha256sum "$CHIP_CONFIG" | cut -d' ' -f1)
           BRANCH_HASH=$(sha256sum "$BRANCH_CONFIG" | cut -d' ' -f1)
-          CACHE_KEY="base-${{ inputs.chip }}-${{ inputs.branch }}-${CHIP_HASH:0:8}-${BRANCH_HASH:0:8}"
-          BUILD_PATH="build-base-${{ inputs.chip }}-${{ inputs.branch }}"
+          CACHE_KEY="base-${{ inputs.chip }}-${{ matrix.branch }}-${CHIP_HASH:0:8}-${BRANCH_HASH:0:8}"
+          BUILD_PATH="build-base-${{ inputs.chip }}-${{ matrix.branch }}"
           
           echo "key=$CACHE_KEY" >> $GITHUB_OUTPUT
           echo "path=$BUILD_PATH" >> $GITHUB_OUTPUT
@@ -128,7 +160,7 @@ jobs:
           path: ${{ steps.cache-key.outputs.path }}
           key: ${{ steps.cache-key.outputs.key }}
           restore-keys: |
-            base-${{ inputs.chip }}-${{ inputs.branch }}-
+            base-${{ inputs.chip }}-${{ matrix.branch }}-
 
       - name: 🌱 准备基础环境
         if: steps.cache.outputs.cache-hit != 'true'
@@ -136,7 +168,7 @@ jobs:
           echo "🔧 准备基础编译环境..."
           echo "📌 当前工作目录: $(pwd)"
           echo "📌 芯片: ${{ inputs.chip }}"
-          echo "📌 分支: ${{ inputs.branch }}"
+          echo "📌 分支: ${{ matrix.branch }}"
           echo "📌 芯片配置文件: ${{ steps.cache-key.outputs.chip-config }}"
           echo "📌 分支配置文件: ${{ steps.cache-key.outputs.branch-config }}"
           
@@ -144,7 +176,7 @@ jobs:
           mkdir -p ${{ steps.cache-key.outputs.path }}
           
           # 设置源码仓库URL和分支
-          case "${{ inputs.branch }}" in
+          case "${{ matrix.branch }}" in
             "openwrt")
               REPO_URL="https://github.com/laipeng668/openwrt.git"
               REPO_BRANCH="master"
@@ -158,7 +190,7 @@ jobs:
               REPO_BRANCH="k6.12-nss"
               ;;
             *)
-              echo "❌ 不支持的分支: ${{ inputs.branch }}"
+              echo "❌ 不支持的分支: ${{ matrix.branch }}"
               echo "💡 支持的分支: openwrt, immwrt, libwrt"
               exit 1
               ;;
@@ -234,8 +266,12 @@ jobs:
 
   # Ultra变体构建
   build-ultra:
-    needs: build-base
+    needs: [determine-strategy, build-base]
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        branch: ${{ fromJson(needs.determine-strategy.outputs.build-matrix) }}
+      fail-fast: false
     outputs:
       cache-key: ${{ steps.cache-key.outputs.key }}
       build-path: ${{ steps.cache-key.outputs.path }}
@@ -263,8 +299,8 @@ jobs:
         run: |
           ULTRA_CONFIG="configs/Ultra.config"
           ULTRA_HASH=$(sha256sum "$ULTRA_CONFIG" | cut -d' ' -f1)
-          CACHE_KEY="ultra-${{ inputs.chip }}-${{ inputs.branch }}-${ULTRA_HASH:0:8}-${{ needs.build-base.outputs.base-hash }}"
-          BUILD_PATH="build-ultra-${{ inputs.chip }}-${{ inputs.branch }}"
+          CACHE_KEY="ultra-${{ inputs.chip }}-${{ matrix.branch }}-${ULTRA_HASH:0:8}-${{ needs.build-base.outputs.base-hash }}"
+          BUILD_PATH="build-ultra-${{ inputs.chip }}-${{ matrix.branch }}"
           
           echo "key=$CACHE_KEY" >> $GITHUB_OUTPUT
           echo "path=$BUILD_PATH" >> $GITHUB_OUTPUT
@@ -277,7 +313,7 @@ jobs:
           path: ${{ steps.cache-key.outputs.path }}
           key: ${{ steps.cache-key.outputs.key }}
           restore-keys: |
-            ultra-${{ inputs.chip }}-${{ inputs.branch }}-
+            ultra-${{ inputs.chip }}-${{ matrix.branch }}-
 
       - name: 🌱 准备Ultra环境
         if: steps.cache.outputs.cache-hit != 'true'
@@ -475,8 +511,8 @@ jobs:
           fi
           
           # 生成报告文件
-          cat > luci-check-ultra.md << EOF
-          # Ultra变体 Luci软件包检查报告
+          cat > luci-check-ultra-${{ matrix.branch }}.md << EOF
+          # Ultra变体 Luci软件包检查报告 - ${{ matrix.branch }}
           
           ## 检查时间
           $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -493,11 +529,11 @@ jobs:
           if [ $MISSING_COUNT -gt 0 ]; then
             echo "$BEFORE_LUCI" | while read pkg; do
               if [ -n "$pkg" ] && ! echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
-                echo "- $pkg" >> luci-check-ultra.md
+                echo "- $pkg" >> luci-check-ultra-${{ matrix.branch }}.md
               fi
             done
           else
-            echo "无" >> luci-check-ultra.md
+            echo "无" >> luci-check-ultra-${{ matrix.branch }}.md
           fi
 
       - name: 🔨 编译Ultra固件
@@ -531,17 +567,18 @@ jobs:
       - name: 📤 上传Ultra构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: ultra-build-${{ inputs.chip }}-${{ inputs.branch }}
+          name: ultra-build-${{ inputs.chip }}-${{ matrix.branch }}
           path: ${{ steps.cache-key.outputs.path }}
           retention-days: 7
           if-no-files-found: warn
 
   # Max和Pro变体并行构建
   build-variants:
-    needs: [build-base, build-ultra]
+    needs: [determine-strategy, build-base, build-ultra]
     runs-on: ubuntu-22.04
     strategy:
       matrix:
+        branch: ${{ fromJson(needs.determine-strategy.outputs.build-matrix) }}
         variant: [Max, Pro]
       fail-fast: false
     outputs:
@@ -563,26 +600,26 @@ jobs:
       - name: 📦 恢复Ultra环境缓存
         uses: actions/cache@v4
         with:
-          path: build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          path: build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           key: ${{ needs.build-ultra.outputs.cache-key }}
           restore-keys: |
-            ultra-${{ inputs.chip }}-${{ inputs.branch }}-
+            ultra-${{ inputs.chip }}-${{ matrix.branch }}-
 
       - name: 🌱 准备${{ matrix.variant }}环境
         run: |
           # 创建构建目录
-          mkdir -p build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          mkdir -p build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           
           # 解压Ultra环境
-          if [ -f "build-ultra-${{ inputs.chip }}-${{ inputs.branch }}/ultra-env.tar.gz" ]; then
-            tar -xzf "build-ultra-${{ inputs.chip }}-${{ inputs.branch }}/ultra-env.tar.gz" -C build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          if [ -f "build-ultra-${{ inputs.chip }}-${{ matrix.branch }}/ultra-env.tar.gz" ]; then
+            tar -xzf "build-ultra-${{ inputs.chip }}-${{ matrix.branch }}/ultra-env.tar.gz" -C build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           else
             # 如果Ultra缓存不可用，使用基础环境
-            tar -xzf ${{ needs.build-base.outputs.build-path }}/base.tar.gz -C build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+            tar -xzf ${{ needs.build-base.outputs.build-path }}/base.tar.gz -C build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           fi
           
           # 进入构建目录
-          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           
           # 应用变体配置
           cp "../configs/${{ matrix.variant }}.config" .config.variant
@@ -598,7 +635,7 @@ jobs:
       - name: 🔍🔍🔍 Luci软件包完整性检查 - ${{ matrix.variant }}变体 🔍🔍🔍
         id: luci_check
         run: |
-          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           
           # 保存当前配置
           cp .config .config.before
@@ -767,8 +804,8 @@ jobs:
           fi
           
           # 生成报告文件
-          cat > luci-check-${{ matrix.variant }}.md << EOF
-          # ${{ matrix.variant }}变体 Luci软件包检查报告
+          cat > luci-check-${{ matrix.variant }}-${{ matrix.branch }}.md << EOF
+          # ${{ matrix.variant }}变体 Luci软件包检查报告 - ${{ matrix.branch }}
           
           ## 检查时间
           $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -785,16 +822,16 @@ jobs:
           if [ $MISSING_COUNT -gt 0 ]; then
             echo "$BEFORE_LUCI" | while read pkg; do
               if [ -n "$pkg" ] && ! echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
-                echo "- $pkg" >> luci-check-${{ matrix.variant }}.md
+                echo "- $pkg" >> luci-check-${{ matrix.variant }}-${{ matrix.branch }}.md
               fi
             done
           else
-            echo "无" >> luci-check-${{ matrix.variant }}.md
+            echo "无" >> luci-check-${{ matrix.variant }}-${{ matrix.branch }}.md
           fi
 
       - name: 🔨 编译${{ matrix.variant }}固件
         run: |
-          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           
           # 下载软件包
           make -j$(nproc) IGNORE_ERRORS=1 download
@@ -805,14 +842,14 @@ jobs:
       - name: 📤 上传${{ matrix.variant }}构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.variant }}-build-${{ inputs.chip }}-${{ inputs.branch }}
-          path: build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          name: ${{ matrix.variant }}-build-${{ inputs.chip }}-${{ matrix.branch }}
+          path: build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           retention-days: 7
           if-no-files-found: warn
 
   # 发布管理
   release:
-    needs: [build-ultra, build-variants]
+    needs: [determine-strategy, build-ultra, build-variants]
     if: inputs.create_release == 'true'
     runs-on: ubuntu-22.04
     steps:
@@ -826,18 +863,29 @@ jobs:
           mkdir -p release
           
           # 创建目录结构
-          mkdir -p "release/Ultra-${{ inputs.chip }}"
-          mkdir -p "release/Max-${{ inputs.chip }}"
-          mkdir -p "release/Pro-${{ inputs.chip }}"
-          
-          # 复制Ultra产物
-          find artifacts/ultra-build-* -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} "release/Ultra-${{ inputs.chip }}/"
-          
-          # 复制Max产物
-          find artifacts/Max-build-* -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} "release/Max-${{ inputs.chip }}/"
-          
-          # 复制Pro产物
-          find artifacts/Pro-build-* -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} "release/Pro-${{ inputs.chip }}/"
+          if [ "${{ needs.determine-strategy.outputs.is-multiple-branches }}" == "true" ]; then
+            # 多分支构建
+            for branch in openwrt immwrt libwrt; do
+              mkdir -p "release/${branch}/Ultra-${{ inputs.chip }}"
+              mkdir -p "release/${branch}/Max-${{ inputs.chip }}"
+              mkdir -p "release/${branch}/Pro-${{ inputs.chip }}"
+              
+              # 复制产物
+              find artifacts/ultra-build-${{ inputs.chip }}-${branch} -name "*.bin" -o -name "*.img" -o -name "*.manifest" 2>/dev/null | xargs -I {} cp {} "release/${branch}/Ultra-${{ inputs.chip }}/" || true
+              find artifacts/Max-build-${{ inputs.chip }}-${branch} -name "*.bin" -o -name "*.img" -o -name "*.manifest" 2>/dev/null | xargs -I {} cp {} "release/${branch}/Max-${{ inputs.chip }}/" || true
+              find artifacts/Pro-build-${{ inputs.chip }}-${branch} -name "*.bin" -o -name "*.img" -o -name "*.manifest" 2>/dev/null | xargs -I {} cp {} "release/${branch}/Pro-${{ inputs.chip }}/" || true
+            done
+          else
+            # 单分支构建
+            mkdir -p "release/Ultra-${{ inputs.chip }}"
+            mkdir -p "release/Max-${{ inputs.chip }}"
+            mkdir -p "release/Pro-${{ inputs.chip }}"
+            
+            # 复制产物
+            find artifacts/ultra-build-* -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} "release/Ultra-${{ inputs.chip }}/"
+            find artifacts/Max-build-* -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} "release/Max-${{ inputs.chip }}/"
+            find artifacts/Pro-build-* -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} "release/Pro-${{ inputs.chip }}/"
+          fi
           
           # 复制检查报告
           find artifacts -name "luci-check-*.md" | xargs -I {} cp {} release/
@@ -848,6 +896,7 @@ jobs:
             "chip": "${{ inputs.chip }}",
             "branch": "${{ inputs.branch }}",
             "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "is_multiple_branches": ${{ needs.determine-strategy.outputs.is-multiple-branches }},
             "variants": {
               "ultra": {
                 "hash": "${{ needs.build-ultra.outputs.ultra-hash }}",
@@ -874,24 +923,44 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ inputs.release_tag || format('v{0}-{1}', inputs.chip, github.run_number) }}
-          name: OpenWrt ${{ inputs.branch }} for ${{ inputs.chip }}
+          name: OpenWrt ${{ inputs.branch == 'all' && 'All Branches' || inputs.branch }} for ${{ inputs.chip }}
           body: |
-            ## OpenWrt ${{ inputs.branch }} 多变体构建
+            ## OpenWrt ${{ inputs.branch == 'all' && 'All Branches' || inputs.branch }} 多变体构建
             
             ### 构建信息
             - 芯片架构: `${{ inputs.chip }}`
-            - 源码分支: `${{ inputs.branch }}`
+            - 源码分支: `${{ inputs.branch == 'all' && 'openwrt, immwrt, libwrt' || inputs.branch }}`
             - 构建日期: $(date -u +%Y-%m-%dT%H:%M:%SZ)
             
             ### 变体版本
-            - Ultra: `${{ needs.build-ultra.outputs.ultra-version }}`
-            - Max: `${{ needs.build-variants.outputs.max-version }}`
-            - Pro: `${{ needs.build-variants.outputs.pro-version }}`
+            ${{ inputs.branch == 'all' && format('
+            #### OpenWrt 分支
+            - Ultra: {0}
+            - Max: {1}
+            - Pro: {2}
+            
+            #### ImmortalWrt 分支
+            - Ultra: {3}
+            - Max: {4}
+            - Pro: {5}
+            
+            #### LibWrt 分支
+            - Ultra: {6}
+            - Max: {7}
+            - Pro: {8}', needs.build-ultra.outputs.ultra-version, needs.build-variants.outputs.max-version, needs.build-variants.outputs.pro-version, needs.build-ultra.outputs.ultra-version, needs.build-variants.outputs.max-version, needs.build-variants.outputs.pro-version, needs.build-ultra.outputs.ultra-version, needs.build-variants.outputs.max-version, needs.build-variants.outputs.pro-version) || format('
+            - Ultra: {0}
+            - Max: {1}
+            - Pro: {2}', needs.build-ultra.outputs.ultra-version, needs.build-variants.outputs.max-version, needs.build-variants.outputs.pro-version) }}
             
             ### 下载说明
             - Ultra: 完整功能版本，包含所有可用软件包
             - Max: 平衡版本，包含常用软件包
             - Pro: 精简版本，仅包含核心功能
+            
+            ${{ inputs.branch == 'all' && '### 分支说明
+            - OpenWrt: 官方稳定版本
+            - ImmortalWrt: 增强功能版本
+            - LibWrt: 实验性版本' || '' }}
             
             ### Luci软件包检查报告
             各变体的Luci软件包完整性检查报告已包含在发布文件中。
