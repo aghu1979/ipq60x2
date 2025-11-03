@@ -78,6 +78,11 @@ chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app
 # git clone --depth=1 https://github.com/tty228/luci-app-wechatpush package/luci-app-wechatpush
 # git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac package/openwrt-gecoosac
 
+# 添加 nikki & momo
+echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
+echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main" >> "feeds.conf.default"
+
+
 # 最后添加 kenzok8软件包
 sed -i '$a src-git smpackage https://github.com/kenzok8/small-package' feeds.conf.default
 
