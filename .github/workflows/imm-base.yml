@@ -16,7 +16,7 @@ env:
   CLASH_KERNEL: amd64
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
-  FIRMWARE_TAG: ipq60xx-imm-Ultra
+  FIRMWARE_TAG: ipq60xx-imm-Base
   TZ: Asia/Shanghai
 
 jobs:
