@@ -1,87 +1,86 @@
-#!/bin/bash
-# 作者: AI Assistant
-# 描述: 为固件镜像应用自定义默认设置。
+# 修改默认IP & 固件名称 & 编译署名
+sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/bin/config_generate
+sed -i "s/hostname='.*'/hostname='WRT'/g" package/base-files/files/bin/config_generate
+sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ Built by Mary')/g" feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
 
-# --- 配置 ---
-DEFAULT_IP="192.168.111.1"
-DEFAULT_HOSTNAME="WRT"
-# --- 配置结束 ---
+# 调整在Argon主题下，概览页面显示/隐藏按钮的样式
+sed -i '/^\.td\.cbi-section-actions {$/,/^}$/ {
+    /^}$/a\
+.cbi-section.fade-in .cbi-title {\
+  position: relative;\
+  min-height: 2.765rem;\
+  display: flex;\
+  align-items: center\
+}\
+.cbi-section.fade-in .cbi-title>div:last-child {\
+  position: absolute;\
+  right: 1rem\
+}\
+.cbi-section.fade-in .cbi-title>div:last-child span {\
+  display: inline-block;\
+  position: relative;\
+  font-size: 0\
+}\
+.cbi-section.fade-in .cbi-title>div:last-child span::after {\
+  content: "\\e90f";\
+  font-family: '\''argon'\'' !important;\
+  font-size: 1.1rem;\
+  display: inline-block;\
+  transition: transform 0.3s ease;\
+  -webkit-font-smoothing: antialiased;\
+  line-height: 1\
+}\
+.cbi-section.fade-in .cbi-title>div:last-child span[data-style='\''inactive'\'']::after {\
+  transform: rotate(90deg);\
+}
+}' feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
 
-# 获取脚本所在目录的绝对路径
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# 脚本预期在 immwrt 源码根目录中运行
-IMMWRT_ROOT="$(pwd)"
+sed -i -e '/btn\.setAttribute(\x27class\x27, include\.hide ? \x27label notice\x27 : \x27label\x27);/d' \
+      -e "/\x27class\x27: includes\[i\]\.hide ? \x27label notice\x27 : \x27label\x27,/d" \
+         feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/index.js
 
-# 创建目录结构以覆盖基础文件
-FILES_DIR="$IMMWRT_ROOT/package/base-files/files"
-mkdir -p "$FILES_DIR/etc/config"
+# 移除要替换的包
+rm -rf feeds/luci/applications/luci-app-wechatpush
+rm -rf feeds/luci/applications/luci-app-appfilter
+rm -rf feeds/luci/applications/luci-app-frpc
+rm -rf feeds/luci/applications/luci-app-frps
+rm -rf feeds/packages/net/open-app-filter
+rm -rf feeds/packages/net/adguardhome
+rm -rf feeds/packages/net/ariang
+rm -rf feeds/packages/net/frp
+rm -rf feeds/packages/lang/golang
 
-echo "正在应用自定义网络设置..."
+# Git稀疏克隆，只克隆指定目录到本地
+function git_sparse_clone() {
+  branch="$1" repourl="$2" && shift 2
+  git clone --depth=1 -b $branch --single-branch --filter=blob:none --sparse $repourl
+  repodir=$(echo $repourl | awk -F '/' '{print $(NF)}')
+  cd $repodir && git sparse-checkout set $@
+  mv -f $@ ../package
+  cd .. && rm -rf $repodir
+}
 
-# 设置 LAN IP 地址
-cat > "$FILES_DIR/etc/config/network" <<EOF
-config interface 'loopback'
-    option ifname 'lo'
-    option proto 'static'
-    option ipaddr '127.0.0.1'
-    option netmask '255.0.0.0'
+# Go & OpenList & ariang & frp & AdGuardHome & WolPlus & Lucky & wechatpush & OpenAppFilter & 集客无线AC控制器 & 雅典娜LED控制
+git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
+git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist
+git_sparse_clone frp https://github.com/laipeng668/packages net/frp
+mv -f package/frp feeds/packages/net/frp
+git_sparse_clone frp https://github.com/laipeng668/luci applications/luci-app-frpc applications/luci-app-frps
+mv -f package/luci-app-frpc feeds/luci/applications/luci-app-frpc
+mv -f package/luci-app-frps feeds/luci/applications/luci-app-frps
+git_sparse_clone master https://github.com/kenzok8/openwrt-packages adguardhome luci-app-adguardhome
+git_sparse_clone main https://github.com/VIKINGYFY/packages luci-app-wolplus
+git clone --depth=1 https://github.com/gdy666/luci-app-lucky package/luci-app-lucky
+git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
+git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
+chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
+# git_sparse_clone ariang https://github.com/laipeng668/packages net/ariang
+# git clone --depth=1 https://github.com/tty228/luci-app-wechatpush package/luci-app-wechatpush
+# git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac package/openwrt-gecoosac
 
-config globals 'globals'
-    option ula_prefix 'fd12:3456:789a::/48'
+# 最后添加 kenzok8软件包
+sed -i '$a src-git smpackage https://github.com/kenzok8/small-package' feeds.conf.default
 
-config interface 'lan'
-    option type 'bridge'
-    option ifname 'eth0'
-    option proto 'static'
-    option ipaddr '$DEFAULT_IP'
-    option netmask '255.255.255.0'
-    option ip6assign '60'
+./scripts/feeds update -a
+./scripts/feeds install -a
 
-config device 'lan_dev'
-    option name 'br-lan'
-    option type 'bridge'
-
-config interface 'wan'
-    option ifname 'eth1'
-    option proto 'dhcp'
-
-config interface 'wan6'
-    option ifname 'eth1'
-    option proto 'dhcpv6'
-EOF
-
-echo "正在将默认主机名设置为 '$DEFAULT_HOSTNAME'..."
-
-# 设置系统主机名
-# 注意：这可能会被其他配置文件覆盖，但这是一个标准位置。
-mkdir -p "$FILES_DIR/etc"
-cat > "$FILES_DIR/etc/sysinfo" <<EOF
-board.name=ipq60xx
-board.model=ImmortalWrt
-hostname=$DEFAULT_HOSTNAME
-EOF
-
-# 一种更健壮的方式是直接修改系统配置
-mkdir -p "$FILES_DIR/etc/uci-defaults"
-cat > "$FILES_DIR/etc/uci-defaults/99-set-hostname" <<'EOF'
-#!/bin/sh
-uci set system.@system[0].hostname='WRT'
-uci commit system
-EOF
-chmod +x "$FILES_DIR/etc/uci-defaults/99-set-hostname"
-
-
-echo "正在为 root 用户设置空密码..."
-
-# 要设置空密码，我们需要修改最终 rootfs 中的 /etc/shadow 文件。
-# 密码字段中的 '!' 会锁定账户。空字段允许无密码登录。
-# 我们创建一个 uci-defaults 脚本在首次启动时处理此操作。
-cat > "$FILES_DIR/etc/uci-defaults/99-set-empty-password" <<'EOF'
-#!/bin/sh
-# 此脚本在首次启动时运行，以设置空的 root 密码。
-# 它用密码字段为空的行替换 /etc/shadow 中的 root 行。
-sed -i 's|^root:[^:]*:|root::|' /etc/shadow
-EOF
-chmod +x "$FILES_DIR/etc/uci-defaults/99-set-empty-password"
-
-echo "DIY 脚本执行完毕。IP: $DEFAULT_IP, 主机名: $DEFAULT_HOSTNAME, 密码: 空。"
