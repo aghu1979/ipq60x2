@@ -1,0 +1,906 @@
+name: OpenWrt Multi-Variant Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      chip:
+        required: true
+        type: string
+        description: "目标芯片架构"
+      branch:
+        required: true
+        type: string
+        description: "源码分支 (openwrt/immwrt/libwrt)"
+      release_tag:
+        required: false
+        type: string
+        description: "发布标签 (可选)"
+      create_release:
+        required: false
+        type: boolean
+        default: false
+        description: "是否创建发布"
+
+env:
+  CACHE_VERSION: "v2"
+  LOG_LEVEL: "info"
+
+jobs:
+  # 基础环境构建
+  build-base:
+    runs-on: ubuntu-22.04
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.key }}
+      build-path: ${{ steps.cache-key.outputs.path }}
+      base-hash: ${{ steps.build-info.outputs.hash }}
+    steps:
+      - name: 🛠️ 初始化环境
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔍 检查目录结构
+        run: |
+          echo "📌 当前工作目录: $(pwd)"
+          echo "📌 根目录内容:"
+          ls -la
+          echo ""
+          echo "📌 检查.github目录:"
+          ls -la .github/ 2>/dev/null || echo "❌ .github目录不存在"
+          echo ""
+          echo "📌 查找configs目录:"
+          find . -name "configs" -type d 2>/dev/null
+          echo ""
+          echo "📌 查找scripts目录:"
+          find . -name "scripts" -type d 2>/dev/null
+          echo ""
+          echo "📌 查找base配置文件:"
+          find . -name "base_*.config" -type f 2>/dev/null
+          echo ""
+          echo "📋 输入参数:"
+          echo "  - chip: '${{ inputs.chip }}'"
+          echo "  - branch: '${{ inputs.branch }}'"
+
+      - name: 🔑 生成缓存键
+        id: cache-key
+        run: |
+          echo "📋 开始生成缓存键..."
+          echo "  - chip: '${{ inputs.chip }}'"
+          echo "  - branch: '${{ inputs.branch }}'"
+          
+          # 检查配置文件是否存在
+          CHIP_CONFIG_FILE="base_${{ inputs.chip }}.config"
+          BRANCH_CONFIG_FILE="base_${{ inputs.branch }}.config"
+          
+          echo "📋 查找配置文件:"
+          echo "  - 芯片配置文件: $CHIP_CONFIG_FILE"
+          echo "  - 分支配置文件: $BRANCH_CONFIG_FILE"
+          
+          # 查找芯片配置文件
+          if [ -f "configs/$CHIP_CONFIG_FILE" ]; then
+            CHIP_CONFIG="configs/$CHIP_CONFIG_FILE"
+            echo "  ✅ 找到芯片配置: $CHIP_CONFIG"
+          elif [ -f ".github/configs/$CHIP_CONFIG_FILE" ]; then
+            CHIP_CONFIG=".github/configs/$CHIP_CONFIG_FILE"
+            echo "  ✅ 找到芯片配置: $CHIP_CONFIG"
+          else
+            echo "  ❌ 找不到芯片配置文件: $CHIP_CONFIG_FILE"
+            echo "📋 可用的芯片配置文件:"
+            find . -name "base_*.config" -type f 2>/dev/null | sed 's/^/    /'
+            exit 1
+          fi
+          
+          # 查找分支配置文件
+          if [ -f "configs/$BRANCH_CONFIG_FILE" ]; then
+            BRANCH_CONFIG="configs/$BRANCH_CONFIG_FILE"
+            echo "  ✅ 找到分支配置: $BRANCH_CONFIG"
+          elif [ -f ".github/configs/$BRANCH_CONFIG_FILE" ]; then
+            BRANCH_CONFIG=".github/configs/$BRANCH_CONFIG_FILE"
+            echo "  ✅ 找到分支配置: $BRANCH_CONFIG"
+          else
+            echo "  ❌ 找不到分支配置文件: $BRANCH_CONFIG_FILE"
+            echo "📋 可用的分支配置文件:"
+            find . -name "base_*.config" -type f 2>/dev/null | grep "base_openwrt\|base_immwrt\|base_libwrt" | sed 's/^/    /'
+            exit 1
+          fi
+          
+          # 生成基于配置的缓存键
+          CHIP_HASH=$(sha256sum "$CHIP_CONFIG" | cut -d' ' -f1)
+          BRANCH_HASH=$(sha256sum "$BRANCH_CONFIG" | cut -d' ' -f1)
+          CACHE_KEY="base-${{ inputs.chip }}-${{ inputs.branch }}-${CHIP_HASH:0:8}-${BRANCH_HASH:0:8}"
+          BUILD_PATH="build-base-${{ inputs.chip }}-${{ inputs.branch }}"
+          
+          echo "key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          echo "path=$BUILD_PATH" >> $GITHUB_OUTPUT
+          echo "chip-config=$CHIP_CONFIG" >> $GITHUB_OUTPUT
+          echo "branch-config=$BRANCH_CONFIG" >> $GITHUB_OUTPUT
+          echo "✅ 缓存键生成完成: $CACHE_KEY"
+
+      - name: 📦 恢复基础环境缓存
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-key.outputs.path }}
+          key: ${{ steps.cache-key.outputs.key }}
+          restore-keys: |
+            base-${{ inputs.chip }}-${{ inputs.branch }}-
+
+      - name: 🌱 准备基础环境
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "🔧 准备基础编译环境..."
+          echo "📌 当前工作目录: $(pwd)"
+          echo "📌 芯片: ${{ inputs.chip }}"
+          echo "📌 分支: ${{ inputs.branch }}"
+          echo "📌 芯片配置文件: ${{ steps.cache-key.outputs.chip-config }}"
+          echo "📌 分支配置文件: ${{ steps.cache-key.outputs.branch-config }}"
+          
+          # 创建构建目录
+          mkdir -p ${{ steps.cache-key.outputs.path }}
+          
+          # 设置源码仓库URL和分支
+          case "${{ inputs.branch }}" in
+            "openwrt")
+              REPO_URL="https://github.com/laipeng668/openwrt.git"
+              REPO_BRANCH="master"
+              ;;
+            "immwrt")
+              REPO_URL="https://github.com/laipeng668/immortalwrt.git"
+              REPO_BRANCH="master"
+              ;;
+            "libwrt")
+              REPO_URL="https://github.com/laipeng668/openwrt-6.x.git"
+              REPO_BRANCH="k6.12-nss"
+              ;;
+            *)
+              echo "❌ 不支持的分支: ${{ inputs.branch }}"
+              echo "💡 支持的分支: openwrt, immwrt, libwrt"
+              exit 1
+              ;;
+          esac
+          
+          echo "🔽 克隆源码: $REPO_URL"
+          echo "📋 使用分支: $REPO_BRANCH"
+          
+          # 克隆指定分支
+          git clone --depth=1 -b $REPO_BRANCH $REPO_URL openwrt-src
+          
+          # 进入源码目录
+          cd openwrt-src
+          
+          # 应用配置
+          cp "../${{ steps.cache-key.outputs.chip-config }}" .config.chip
+          cp "../${{ steps.cache-key.outputs.branch-config }}" .config.branch
+          
+          cp .config.chip .config
+          cat .config.branch >> .config
+          
+          # 第一次 make defconfig
+          make defconfig
+          
+          # 复制脚本文件
+          if [ -d "../scripts" ]; then
+            SCRIPT_DIR="../scripts"
+          elif [ -d "../.github/scripts" ]; then
+            SCRIPT_DIR="../.github/scripts"
+          else
+            echo "❌ 找不到scripts目录"
+            exit 1
+          fi
+          
+          cp "$SCRIPT_DIR/diy.sh" ./
+          cp "$SCRIPT_DIR/repo.sh" ./
+          chmod +x diy.sh repo.sh
+          
+          # 执行初始化脚本
+          ./diy.sh
+          ./repo.sh
+          
+          # 更新feeds
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          
+          # 第二次 make defconfig
+          make defconfig
+          
+          # 准备编译环境
+          make -j$(nproc) IGNORE_ERRORS=1 download
+          make -j$(nproc) IGNORE_ERRORS=1 tools/compile
+          make -j$(nproc) IGNORE_ERRORS=1 toolchain/compile
+          
+          # 返回上级目录
+          cd ..
+          
+          # 打包基础环境
+          tar -czf ${{ steps.cache-key.outputs.path }}/base.tar.gz -C openwrt-src .
+          echo "✅ 基础环境准备完成"
+
+      - name: 🔑 保存构建信息
+        id: build-info
+        run: |
+          if [ -d "${{ steps.cache-key.outputs.path }}/openwrt-src" ]; then
+            cd "${{ steps.cache-key.outputs.path }}/openwrt-src"
+            echo "hash=$(sha256sum .config | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+            echo "version=$(grep 'CONFIG_VERSION_NUMBER=' .config | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+          else
+            echo "hash=unknown" >> $GITHUB_OUTPUT
+            echo "version=unknown" >> $GITHUB_OUTPUT
+          fi
+
+  # Ultra变体构建
+  build-ultra:
+    needs: build-base
+    runs-on: ubuntu-22.04
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.key }}
+      build-path: ${{ steps.cache-key.outputs.path }}
+      ultra-hash: ${{ steps.build-info.outputs.hash }}
+      ultra-version: ${{ steps.build-info.outputs.version }}
+    steps:
+      - name: 🛠️ 初始化环境
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📦 恢复基础环境缓存
+        uses: actions/cache@v4
+        with:
+          path: ${{ needs.build-base.outputs.build-path }}
+          key: ${{ needs.build-base.outputs.cache-key }}
+
+      - name: 🔑 生成Ultra缓存键
+        id: cache-key
+        run: |
+          ULTRA_CONFIG="configs/Ultra.config"
+          ULTRA_HASH=$(sha256sum "$ULTRA_CONFIG" | cut -d' ' -f1)
+          CACHE_KEY="ultra-${{ inputs.chip }}-${{ inputs.branch }}-${ULTRA_HASH:0:8}-${{ needs.build-base.outputs.base-hash }}"
+          BUILD_PATH="build-ultra-${{ inputs.chip }}-${{ inputs.branch }}"
+          
+          echo "key=$CACHE_KEY" >> $GITHUB_OUTPUT
+          echo "path=$BUILD_PATH" >> $GITHUB_OUTPUT
+          echo "ultra-config=$ULTRA_CONFIG" >> $GITHUB_OUTPUT
+
+      - name: 📦 检查Ultra缓存
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.cache-key.outputs.path }}
+          key: ${{ steps.cache-key.outputs.key }}
+          restore-keys: |
+            ultra-${{ inputs.chip }}-${{ inputs.branch }}-
+
+      - name: 🌱 准备Ultra环境
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          # 创建构建目录
+          mkdir -p ${{ steps.cache-key.outputs.path }}
+          
+          # 解压基础环境
+          tar -xzf ${{ needs.build-base.outputs.build-path }}/base.tar.gz -C ${{ steps.cache-key.outputs.path }}
+          
+          # 进入构建目录
+          cd ${{ steps.cache-key.outputs.path }}
+          
+          # 应用Ultra配置
+          cp "../${{ steps.cache-key.outputs.ultra-config }}" .config.ultra
+          cat .config.ultra >> .config
+          
+          # 运行defconfig
+          make defconfig
+          
+          # 保存配置信息
+          echo "hash=$(sha256sum .config | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "version=$(grep 'CONFIG_VERSION_NUMBER=' .config | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+
+      - name: 🔍🔍🔍 Luci软件包完整性检查 - Ultra变体 🔍🔍🔍
+        id: luci_check
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd ${{ steps.cache-key.outputs.path }}
+          
+          # 保存当前配置
+          cp .config .config.before
+          
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                🔍 LUCI软件包对比检查 🔍                ║"
+          echo "║                   Ultra变体 (defconfig前后)                ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 步骤1: 记录defconfig前的Luci包
+          echo "📋 步骤1: 检查defconfig前的配置..."
+          BEFORE_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-.*=y$" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          BEFORE_COUNT=$(echo "$BEFORE_LUCI" | grep -c .)
+          
+          echo "🔍 defconfig前配置中的Luci软件包 ($BEFORE_COUNT 个):"
+          echo "┌─────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                                      │"
+          echo "├─────────────────────────────────────────────────────────┤"
+          index=1
+          echo "$BEFORE_LUCI" | while read pkg; do
+            if [ -n "$pkg" ]; then
+              printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+              index=$((index + 1))
+            fi
+          done
+          echo "└─────────────────────────────────────────────────────────┘"
+          echo ""
+          
+          # 步骤2: 运行make defconfig
+          echo "🔄 步骤2: 运行make defconfig补全配置..."
+          make defconfig
+          
+          # 步骤3: 记录defconfig后的Luci包
+          echo ""
+          echo "📋 步骤3: 检查defconfig后的配置..."
+          AFTER_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-.*=y$" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          AFTER_COUNT=$(echo "$AFTER_LUCI" | grep -c .)
+          
+          echo "🔍 defconfig后配置中的Luci软件包 ($AFTER_COUNT 个):"
+          echo "┌─────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                                      │"
+          echo "├─────────────────────────────────────────────────────────┤"
+          index=1
+          echo "$AFTER_LUCI" | while read pkg; do
+            if [ -n "$pkg" ]; then
+              printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+              index=$((index + 1))
+            fi
+          done
+          echo "└─────────────────────────────────────────────────────────┘"
+          echo ""
+          
+          # 步骤4: 对比分析
+          echo "📊 步骤4: 对比分析结果..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "┌──────────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                    │ defconfig前 │ defconfig后 │ 状态 │"
+          echo "├──────────────────────────────────────────────────────────────┤"
+          
+          # 创建所有包的列表
+          ALL_LUCI=$(echo -e "$BEFORE_LUCI\n$AFTER_LUCI" | sort | uniq)
+          MISSING_COUNT=0
+          ADDED_COUNT=0
+          index=1
+          
+          for pkg in $ALL_LUCI; do
+            if [ -n "$pkg" ]; then
+              before_status="❌"
+              after_status="❌"
+              final_status="❌ 缺失"
+              
+              # 检查defconfig前是否存在
+              if echo "$BEFORE_LUCI" | grep -q "^$pkg$"; then
+                before_status="✅"
+              fi
+              
+              # 检查defconfig后是否存在
+              if echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
+                after_status="✅"
+              fi
+              
+              # 判断最终状态
+              if [ "$before_status" = "✅" ] && [ "$after_status" = "✅" ]; then
+                final_status="✅ 保留"
+              elif [ "$before_status" = "❌" ] && [ "$after_status" = "✅" ]; then
+                final_status="➕ 新增"
+                ADDED_COUNT=$((ADDED_COUNT + 1))
+              elif [ "$before_status" = "✅" ] && [ "$after_status" = "❌" ]; then
+                final_status="❌ 丢失"
+                MISSING_COUNT=$((MISSING_COUNT + 1))
+              fi
+              
+              printf "│ %4d │ %-30s │ %-11s │ %-11s │ %-8s │\n" "$index" "$pkg" "$before_status" "$after_status" "$final_status"
+              index=$((index + 1))
+            fi
+          done
+          
+          echo "└──────────────────────────────────────────────────────────────┘"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          # 步骤5: 统计汇总
+          echo "📊 步骤5: 统计汇总"
+          echo "┌─────────────────────────────────────────┐"
+          echo "│ 项目              │ 数量     │"
+          echo "├─────────────────────────────────────────┤"
+          echo "│ defconfig前配置   │ $BEFORE_COUNT  │"
+          echo "│ defconfig后配置   │ $AFTER_COUNT   │"
+          echo "│ defconfig新增包   │ $ADDED_COUNT   │"
+          echo "│ defconfig丢失包   │ $MISSING_COUNT │"
+          echo "└─────────────────────────────────────────┘"
+          echo ""
+          
+          # 步骤6: 详细分析
+          echo "📋 步骤6: 详细分析"
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "🚨 发现 $MISSING_COUNT 个在defconfig过程中丢失的Luci软件包："
+            echo ""
+            echo "┌─────────────────────────────────────────┐"
+            echo "│ 序号 │ 丢失的软件包                        │"
+            echo "├─────────────────────────────────────────┤"
+            index=1
+            echo "$BEFORE_LUCI" | while read pkg; do
+              if [ -n "$pkg" ] && ! echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
+                printf "│ %4d │ %-39s │\n" "$index" "$pkg"
+                index=$((index + 1))
+              fi
+            done
+            echo "└─────────────────────────────────────────┘"
+            echo ""
+            echo "💡 可能的原因："
+            echo "   1. 软件包依赖冲突，defconfig自动移除"
+            echo "   2. 软件包不存在于任何feeds源"
+            echo "   3. 配置选项不兼容"
+            echo ""
+            echo "⚠️  注意：这些包将不会包含在最终固件中！"
+          else
+            echo "✅ 恭喜！所有配置的Luci软件包都在defconfig后保留"
+          fi
+          
+          if [ $ADDED_COUNT -gt 0 ]; then
+            echo ""
+            echo "ℹ️  defconfig自动补全了 $ADDED_COUNT 个依赖包"
+          fi
+          
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                      检查完成                             ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 保存到输出
+          echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
+          echo "added_count=$ADDED_COUNT" >> $GITHUB_OUTPUT
+          echo "before_count=$BEFORE_COUNT" >> $GITHUB_OUTPUT
+          echo "after_count=$AFTER_COUNT" >> $GITHUB_OUTPUT
+          
+          # 如果有严重问题，设置失败状态
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "luci_check_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "luci_check_failed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # 生成报告文件
+          cat > luci-check-ultra.md << EOF
+          # Ultra变体 Luci软件包检查报告
+          
+          ## 检查时间
+          $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          
+          ## 统计信息
+          - defconfig前配置: $BEFORE_COUNT 个
+          - defconfig后配置: $AFTER_COUNT 个
+          - defconfig新增包: $ADDED_COUNT 个
+          - defconfig丢失包: $MISSING_COUNT 个
+          
+          ## 丢失的软件包
+          EOF
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "$BEFORE_LUCI" | while read pkg; do
+              if [ -n "$pkg" ] && ! echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
+                echo "- $pkg" >> luci-check-ultra.md
+              fi
+            done
+          else
+            echo "无" >> luci-check-ultra.md
+          fi
+
+      - name: 🔨 编译Ultra固件
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd ${{ steps.cache-key.outputs.path }}
+          
+          # 下载软件包
+          make -j$(nproc) IGNORE_ERRORS=1 download
+          
+          # 编译固件
+          make -j$(nproc) IGNORE_ERRORS=1
+
+      - name: 📦 缓存Ultra环境
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd ${{ steps.cache-key.outputs.path }}
+          
+          # 清理编译产物但保留环境
+          find . -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} ../
+          make clean
+          
+          # 打包环境
+          tar -czf ${{ steps.cache-key.outputs.path }}/ultra-env.tar.gz .
+          
+          # 恢复编译产物
+          cp ../*.bin ./
+          cp ../*.img ./
+          cp ../*.manifest ./
+
+      - name: 📤 上传Ultra构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ultra-build-${{ inputs.chip }}-${{ inputs.branch }}
+          path: ${{ steps.cache-key.outputs.path }}
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Max和Pro变体并行构建
+  build-variants:
+    needs: [build-base, build-ultra]
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        variant: [Max, Pro]
+      fail-fast: false
+    outputs:
+      max-hash: ${{ steps.build-info.outputs.hash }}
+      max-version: ${{ steps.build-info.outputs.version }}
+      pro-hash: ${{ steps.build-info.outputs.hash }}
+      pro-version: ${{ steps.build-info.outputs.version }}
+    steps:
+      - name: 🛠️ 初始化环境
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 📦 恢复Ultra环境缓存
+        uses: actions/cache@v4
+        with:
+          path: build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          key: ${{ needs.build-ultra.outputs.cache-key }}
+          restore-keys: |
+            ultra-${{ inputs.chip }}-${{ inputs.branch }}-
+
+      - name: 🌱 准备${{ matrix.variant }}环境
+        run: |
+          # 创建构建目录
+          mkdir -p build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          
+          # 解压Ultra环境
+          if [ -f "build-ultra-${{ inputs.chip }}-${{ inputs.branch }}/ultra-env.tar.gz" ]; then
+            tar -xzf "build-ultra-${{ inputs.chip }}-${{ inputs.branch }}/ultra-env.tar.gz" -C build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          else
+            # 如果Ultra缓存不可用，使用基础环境
+            tar -xzf ${{ needs.build-base.outputs.build-path }}/base.tar.gz -C build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          fi
+          
+          # 进入构建目录
+          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          
+          # 应用变体配置
+          cp "../configs/${{ matrix.variant }}.config" .config.variant
+          cat .config.variant >> .config
+          
+          # 运行defconfig
+          make defconfig
+          
+          # 保存配置信息
+          echo "hash=$(sha256sum .config | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "version=$(grep 'CONFIG_VERSION_NUMBER=' .config | cut -d'=' -f2 | tr -d '"')" >> $GITHUB_OUTPUT
+
+      - name: 🔍🔍🔍 Luci软件包完整性检查 - ${{ matrix.variant }}变体 🔍🔍🔍
+        id: luci_check
+        run: |
+          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          
+          # 保存当前配置
+          cp .config .config.before
+          
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                🔍 LUCI软件包对比检查 🔍                ║"
+          echo "║                   ${{ matrix.variant }}变体 (defconfig前后)                ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 步骤1: 记录defconfig前的Luci包
+          echo "📋 步骤1: 检查defconfig前的配置..."
+          BEFORE_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-.*=y$" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          BEFORE_COUNT=$(echo "$BEFORE_LUCI" | grep -c .)
+          
+          echo "🔍 defconfig前配置中的Luci软件包 ($BEFORE_COUNT 个):"
+          echo "┌─────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                                      │"
+          echo "├─────────────────────────────────────────────────────────┤"
+          index=1
+          echo "$BEFORE_LUCI" | while read pkg; do
+            if [ -n "$pkg" ]; then
+              printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+              index=$((index + 1))
+            fi
+          done
+          echo "└─────────────────────────────────────────────────────────┘"
+          echo ""
+          
+          # 步骤2: 运行make defconfig
+          echo "🔄 步骤2: 运行make defconfig补全配置..."
+          make defconfig
+          
+          # 步骤3: 记录defconfig后的Luci包
+          echo ""
+          echo "📋 步骤3: 检查defconfig后的配置..."
+          AFTER_LUCI=$(cat .config | grep "^CONFIG_PACKAGE_luci-.*=y$" | cut -d'=' -f1 | sed 's/CONFIG_PACKAGE_//')
+          AFTER_COUNT=$(echo "$AFTER_LUCI" | grep -c .)
+          
+          echo "🔍 defconfig后配置中的Luci软件包 ($AFTER_COUNT 个):"
+          echo "┌─────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                                      │"
+          echo "├─────────────────────────────────────────────────────────┤"
+          index=1
+          echo "$AFTER_LUCI" | while read pkg; do
+            if [ -n "$pkg" ]; then
+              printf "│ %4d │ %-47s │\n" "$index" "$pkg"
+              index=$((index + 1))
+            fi
+          done
+          echo "└─────────────────────────────────────────────────────────┘"
+          echo ""
+          
+          # 步骤4: 对比分析
+          echo "📊 步骤4: 对比分析结果..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "┌──────────────────────────────────────────────────────────────┐"
+          echo "│ 序号 │ 软件包名称                    │ defconfig前 │ defconfig后 │ 状态 │"
+          echo "├──────────────────────────────────────────────────────────────┤"
+          
+          # 创建所有包的列表
+          ALL_LUCI=$(echo -e "$BEFORE_LUCI\n$AFTER_LUCI" | sort | uniq)
+          MISSING_COUNT=0
+          ADDED_COUNT=0
+          index=1
+          
+          for pkg in $ALL_LUCI; do
+            if [ -n "$pkg" ]; then
+              before_status="❌"
+              after_status="❌"
+              final_status="❌ 缺失"
+              
+              # 检查defconfig前是否存在
+              if echo "$BEFORE_LUCI" | grep -q "^$pkg$"; then
+                before_status="✅"
+              fi
+              
+              # 检查defconfig后是否存在
+              if echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
+                after_status="✅"
+              fi
+              
+              # 判断最终状态
+              if [ "$before_status" = "✅" ] && [ "$after_status" = "✅" ]; then
+                final_status="✅ 保留"
+              elif [ "$before_status" = "❌" ] && [ "$after_status" = "✅" ]; then
+                final_status="➕ 新增"
+                ADDED_COUNT=$((ADDED_COUNT + 1))
+              elif [ "$before_status" = "✅" ] && [ "$after_status" = "❌" ]; then
+                final_status="❌ 丢失"
+                MISSING_COUNT=$((MISSING_COUNT + 1))
+              fi
+              
+              printf "│ %4d │ %-30s │ %-11s │ %-11s │ %-8s │\n" "$index" "$pkg" "$before_status" "$after_status" "$final_status"
+              index=$((index + 1))
+            fi
+          done
+          
+          echo "└──────────────────────────────────────────────────────────────┘"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          # 步骤5: 统计汇总
+          echo "📊 步骤5: 统计汇总"
+          echo "┌─────────────────────────────────────────┐"
+          echo "│ 项目              │ 数量     │"
+          echo "├─────────────────────────────────────────┤"
+          echo "│ defconfig前配置   │ $BEFORE_COUNT  │"
+          echo "│ defconfig后配置   │ $AFTER_COUNT   │"
+          echo "│ defconfig新增包   │ $ADDED_COUNT   │"
+          echo "│ defconfig丢失包   │ $MISSING_COUNT │"
+          echo "└─────────────────────────────────────────┘"
+          echo ""
+          
+          # 步骤6: 详细分析
+          echo "📋 步骤6: 详细分析"
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "🚨 发现 $MISSING_COUNT 个在defconfig过程中丢失的Luci软件包："
+            echo ""
+            echo "┌─────────────────────────────────────────┐"
+            echo "│ 序号 │ 丢失的软件包                        │"
+            echo "├─────────────────────────────────────────┤"
+            index=1
+            echo "$BEFORE_LUCI" | while read pkg; do
+              if [ -n "$pkg" ] && ! echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
+                printf "│ %4d │ %-39s │\n" "$index" "$pkg"
+                index=$((index + 1))
+              fi
+            done
+            echo "└─────────────────────────────────────────┘"
+            echo ""
+            echo "💡 可能的原因："
+            echo "   1. 软件包依赖冲突，defconfig自动移除"
+            echo "   2. 软件包不存在于任何feeds源"
+            echo "   3. 配置选项不兼容"
+            echo ""
+            echo "⚠️  注意：这些包将不会包含在最终固件中！"
+          else
+            echo "✅ 恭喜！所有配置的Luci软件包都在defconfig后保留"
+          fi
+          
+          if [ $ADDED_COUNT -gt 0 ]; then
+            echo ""
+            echo "ℹ️  defconfig自动补全了 $ADDED_COUNT 个依赖包"
+          fi
+          
+          echo ""
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║                      检查完成                             ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
+          echo ""
+          
+          # 保存到输出
+          echo "missing_count=$MISSING_COUNT" >> $GITHUB_OUTPUT
+          echo "added_count=$ADDED_COUNT" >> $GITHUB_OUTPUT
+          echo "before_count=$BEFORE_COUNT" >> $GITHUB_OUTPUT
+          echo "after_count=$AFTER_COUNT" >> $GITHUB_OUTPUT
+          
+          # 如果有严重问题，设置失败状态
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "luci_check_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "luci_check_failed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # 生成报告文件
+          cat > luci-check-${{ matrix.variant }}.md << EOF
+          # ${{ matrix.variant }}变体 Luci软件包检查报告
+          
+          ## 检查时间
+          $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          
+          ## 统计信息
+          - defconfig前配置: $BEFORE_COUNT 个
+          - defconfig后配置: $AFTER_COUNT 个
+          - defconfig新增包: $ADDED_COUNT 个
+          - defconfig丢失包: $MISSING_COUNT 个
+          
+          ## 丢失的软件包
+          EOF
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo "$BEFORE_LUCI" | while read pkg; do
+              if [ -n "$pkg" ] && ! echo "$AFTER_LUCI" | grep -q "^$pkg$"; then
+                echo "- $pkg" >> luci-check-${{ matrix.variant }}.md
+              fi
+            done
+          else
+            echo "无" >> luci-check-${{ matrix.variant }}.md
+          fi
+
+      - name: 🔨 编译${{ matrix.variant }}固件
+        run: |
+          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          
+          # 下载软件包
+          make -j$(nproc) IGNORE_ERRORS=1 download
+          
+          # 编译固件
+          make -j$(nproc) IGNORE_ERRORS=1
+
+      - name: 📤 上传${{ matrix.variant }}构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant }}-build-${{ inputs.chip }}-${{ inputs.branch }}
+          path: build-${{ matrix.variant }}-${{ inputs.chip }}-${{ inputs.branch }}
+          retention-days: 7
+          if-no-files-found: warn
+
+  # 发布管理
+  release:
+    needs: [build-ultra, build-variants]
+    if: inputs.create_release == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 📥 下载所有构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 📋 整理构建产物
+        run: |
+          mkdir -p release
+          
+          # 创建目录结构
+          mkdir -p "release/Ultra-${{ inputs.chip }}"
+          mkdir -p "release/Max-${{ inputs.chip }}"
+          mkdir -p "release/Pro-${{ inputs.chip }}"
+          
+          # 复制Ultra产物
+          find artifacts/ultra-build-* -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} "release/Ultra-${{ inputs.chip }}/"
+          
+          # 复制Max产物
+          find artifacts/Max-build-* -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} "release/Max-${{ inputs.chip }}/"
+          
+          # 复制Pro产物
+          find artifacts/Pro-build-* -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} "release/Pro-${{ inputs.chip }}/"
+          
+          # 复制检查报告
+          find artifacts -name "luci-check-*.md" | xargs -I {} cp {} release/
+          
+          # 生成构建信息
+          cat > release/build-info.json << EOF
+          {
+            "chip": "${{ inputs.chip }}",
+            "branch": "${{ inputs.branch }}",
+            "build_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "variants": {
+              "ultra": {
+                "hash": "${{ needs.build-ultra.outputs.ultra-hash }}",
+                "version": "${{ needs.build-ultra.outputs.ultra-version }}"
+              },
+              "max": {
+                "hash": "${{ needs.build-variants.outputs.max-hash }}",
+                "version": "${{ needs.build-variants.outputs.max-version }}"
+              },
+              "pro": {
+                "hash": "${{ needs.build-variants.outputs.pro-hash }}",
+                "version": "${{ needs.build-variants.outputs.pro-version }}"
+              }
+            }
+          }
+          EOF
+          
+          # 生成SHA256校验和
+          cd release
+          find . -type f -not -name "sha256sums" -exec sha256sum {} \; > sha256sums
+          cd ..
+
+      - name: 📤 创建发布
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ inputs.release_tag || format('v{0}-{1}', inputs.chip, github.run_number) }}
+          name: OpenWrt ${{ inputs.branch }} for ${{ inputs.chip }}
+          body: |
+            ## OpenWrt ${{ inputs.branch }} 多变体构建
+            
+            ### 构建信息
+            - 芯片架构: `${{ inputs.chip }}`
+            - 源码分支: `${{ inputs.branch }}`
+            - 构建日期: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+            
+            ### 变体版本
+            - Ultra: `${{ needs.build-ultra.outputs.ultra-version }}`
+            - Max: `${{ needs.build-variants.outputs.max-version }}`
+            - Pro: `${{ needs.build-variants.outputs.pro-version }}`
+            
+            ### 下载说明
+            - Ultra: 完整功能版本，包含所有可用软件包
+            - Max: 平衡版本，包含常用软件包
+            - Pro: 精简版本，仅包含核心功能
+            
+            ### Luci软件包检查报告
+            各变体的Luci软件包完整性检查报告已包含在发布文件中。
+            
+            ### 校验和
+            请使用提供的 `sha256sums` 文件验证下载文件的完整性。
+          files: |
+            release/**
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
