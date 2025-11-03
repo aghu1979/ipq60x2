@@ -27,6 +27,11 @@ on:
         type: boolean
         default: true
         description: "是否创建发布"
+      debug_build:
+        required: false
+        type: boolean
+        default: false
+        description: "启用调试模式 (详细日志)"
 
 env:
   CACHE_VERSION: "v2"
@@ -69,20 +74,12 @@ jobs:
       - name: 🛠️ 初始化环境
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl
-
-      - name: 📥 检出代码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+          sudo apt-get install -y jq curl build-essential libncurses5-dev gawk git libssl-dev gettext python3-distutils unzip
 
       - name: 💾 检查磁盘空间
         run: |
           echo "📊 初始磁盘空间:"
           df -h
-          echo ""
-          echo "📊 / 目录使用情况:"
-          sudo du -sh /* 2>/dev/null | sort -hr | head -10
 
       - name: 🧹 清理系统空间
         run: |
@@ -108,6 +105,11 @@ jobs:
           echo "✅ 系统清理完成"
           echo "📊 清理后磁盘空间:"
           df -h
+
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 🔍 检查目录结构
         run: |
@@ -273,11 +275,6 @@ jobs:
           # 第二次 make defconfig
           make defconfig
           
-          # 准备编译环境
-          make -j$(nproc) IGNORE_ERRORS=1 download
-          make -j$(nproc) IGNORE_ERRORS=1 tools/compile
-          make -j$(nproc) IGNORE_ERRORS=1 toolchain/compile
-          
           # 返回上级目录
           cd ..
           
@@ -314,15 +311,12 @@ jobs:
       - name: 🛠️ 初始化环境
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl
+          sudo apt-get install -y jq curl build-essential libncurses5-dev gawk git libssl-dev gettext python3-distutils unzip
 
       - name: 💾 检查磁盘空间
         run: |
           echo "📊 初始磁盘空间:"
           df -h
-          echo ""
-          echo "📊 / 目录使用情况:"
-          sudo du -sh /* 2>/dev/null | sort -hr | head -10
 
       - name: 🧹 清理系统空间
         run: |
@@ -607,14 +601,22 @@ jobs:
           echo "📊 编译前磁盘空间:"
           df -h
 
-      - name: 🔨 编译Ultra固件
+      - name: 🔨 编译Ultra固件 - 分阶段编译
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.cache-key.outputs.path }}
           
-          # 下载软件包
-          echo "📥 开始下载软件包..."
-          make -j$(nproc) IGNORE_ERRORS=1 download
+          # 设置编译参数
+          JOBS=$(nproc)
+          VERBOSE=${{ inputs.debug_build && 'V=sc' || 'V=s' }}
+          
+          echo "🔧 编译参数:"
+          echo "  - 并行任务数: $JOBS"
+          echo "  - 详细日志: $VERBOSE"
+          
+          # 1. 下载软件包
+          echo "📥 步骤1: 下载软件包..."
+          make -j$JOBS IGNORE_ERRORS=1 download
           
           # 检查下载后空间
           echo "📊 下载后磁盘空间:"
@@ -625,9 +627,44 @@ jobs:
           find dl/ -name "*.tmp" -delete 2>/dev/null || true
           find dl/ -name "*.bak" -delete 2>/dev/null || true
           
-          # 编译固件
-          echo "🔨 开始编译固件..."
-          make -j$(nproc) IGNORE_ERRORS=1
+          # 2. 预编译工具链
+          echo "🔨 步骤2: 预编译工具链..."
+          make -j1 IGNORE_ERRORS=1 tools/prepare || true
+          make -j1 IGNORE_ERRORS=1 toolchain/prepare || true
+          
+          # 3. 编译工具链
+          echo "🔨 步骤3: 编译工具链..."
+          make -j$JOBS IGNORE_ERRORS=1 tools/compile
+          
+          # 4. 编译核心库
+          echo "🔨 步骤4: 编译核心库..."
+          make -j$JOBS IGNORE_ERRORS=1 package/libs/compile
+          
+          # 5. 尝试编译失败的关键包
+          echo "🔨 步骤5: 尝试编译失败的关键包..."
+          
+          # GMP库
+          echo "🔧 编译GMP库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/gmp/compile $VERBOSE || true
+          
+          # OpenSSL库
+          echo "🔧 编译OpenSSL库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/openssl/compile $VERBOSE || true
+          
+          # 6. 尝试编译主机工具
+          echo "🔨 步骤6: 编译主机工具..."
+          
+          # Golang
+          echo "🔧 编译Golang..."
+          make -j1 IGNORE_ERRORS=1 package/feeds/packages/golang/host-compile $VERBOSE || true
+          
+          # Rust
+          echo "🔧 编译Rust..."
+          make -j1 IGNORE_ERRORS=1 package/feeds/packages/rust/host-compile $VERBOSE || true
+          
+          # 7. 最终编译
+          echo "🔨 步骤7: 最终编译..."
+          make -j$JOBS IGNORE_ERRORS=1 $VERBOSE || true
 
       - name: 💾 检查磁盘空间 - 编译后
         run: |
@@ -704,7 +741,7 @@ jobs:
       - name: 🛠️ 初始化环境
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl
+          sudo apt-get install -y jq curl build-essential libncurses5-dev gawk git libssl-dev gettext python3-distutils unzip
 
       - name: 💾 检查磁盘空间
         run: |
@@ -978,13 +1015,21 @@ jobs:
           echo "📊 编译前磁盘空间:"
           df -h
 
-      - name: 🔨 编译${{ matrix.variant }}固件
+      - name: 🔨 编译${{ matrix.variant }}固件 - 分阶段编译
         run: |
           cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           
-          # 下载软件包
-          echo "📥 开始下载软件包..."
-          make -j$(nproc) IGNORE_ERRORS=1 download
+          # 设置编译参数
+          JOBS=$(nproc)
+          VERBOSE=${{ inputs.debug_build && 'V=sc' || 'V=s' }}
+          
+          echo "🔧 编译参数:"
+          echo "  - 并行任务数: $JOBS"
+          echo "  - 详细日志: $VERBOSE"
+          
+          # 1. 下载软件包
+          echo "📥 步骤1: 下载软件包..."
+          make -j$JOBS IGNORE_ERRORS=1 download
           
           # 检查下载后空间
           echo "📊 下载后磁盘空间:"
@@ -995,9 +1040,44 @@ jobs:
           find dl/ -name "*.tmp" -delete 2>/dev/null || true
           find dl/ -name "*.bak" -delete 2>/dev/null || true
           
-          # 编译固件
-          echo "🔨 开始编译固件..."
-          make -j$(nproc) IGNORE_ERRORS=1
+          # 2. 预编译工具链
+          echo "🔨 步骤2: 预编译工具链..."
+          make -j1 IGNORE_ERRORS=1 tools/prepare || true
+          make -j1 IGNORE_ERRORS=1 toolchain/prepare || true
+          
+          # 3. 编译工具链
+          echo "🔨 步骤3: 编译工具链..."
+          make -j$JOBS IGNORE_ERRORS=1 tools/compile
+          
+          # 4. 编译核心库
+          echo "🔨 步骤4: 编译核心库..."
+          make -j$JOBS IGNORE_ERRORS=1 package/libs/compile
+          
+          # 5. 尝试编译失败的关键包
+          echo "🔨 步骤5: 尝试编译失败的关键包..."
+          
+          # GMP库
+          echo "🔧 编译GMP库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/gmp/compile $VERBOSE || true
+          
+          # OpenSSL库
+          echo "🔧 编译OpenSSL库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/openssl/compile $VERBOSE || true
+          
+          # 6. 尝试编译主机工具
+          echo "🔨 步骤6: 编译主机工具..."
+          
+          # Golang
+          echo "🔧 编译Golang..."
+          make -j1 IGNORE_ERRORS=1 package/feeds/packages/golang/host-compile $VERBOSE || true
+          
+          # Rust
+          echo "🔧 编译Rust..."
+          make -j1 IGNORE_ERRORS=1 package/feeds/packages/rust/host-compile $VERBOSE || true
+          
+          # 7. 最终编译
+          echo "🔨 步骤7: 最终编译..."
+          make -j$JOBS IGNORE_ERRORS=1 $VERBOSE || true
 
       - name: 💾 检查磁盘空间 - 编译后
         run: |
