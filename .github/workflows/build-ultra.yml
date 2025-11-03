@@ -300,6 +300,15 @@ jobs:
           echo "  - 安装feeds"
           ./scripts/feeds install -a
           
+          # 7. 修复 libxcrypt 编译问题
+          echo "  - 修复 libxcrypt 编译问题"
+          if [ -f "package/libs/xcrypt/libxcrypt/Makefile" ]; then
+            sed -i 's/-Werror=pedantic//g' package/libs/xcrypt/libxcrypt/Makefile
+            echo "✅ 已从 libxcrypt Makefile 中移除 -Werror=pedantic"
+          else
+            echo "⚠️ libxcrypt Makefile 未找到，跳过修复"
+          fi
+          
           echo "✅ 自定义功能集成完成"
 
       - name: 加载Ultra配置
@@ -561,11 +570,9 @@ jobs:
           cd /workdir/openwrt
           echo "🚀 开始编译Ultra变体"
           echo "使用 $(nproc) 个线程并行编译"
-          echo "💡 提示: 已添加 WERROR=0 和 -Wno-error=pedantic 以忽略编译器警告，这是CI环境的常见做法。"
+          echo "💡 提示: 已添加 WERROR=0 和 -Wno-error=pedantic 以忽略编译器警告，并直接修改了 libxcrypt Makefile。"
           
           # 多重编译策略，并添加标志来绕过编译器警告错误
-          # WERROR=0: 全局禁用将警告视为错误
-          # -Wno-error=pedantic: 针对性禁用pedantic警告错误
           TARGET_CFLAGS="-Wno-error=pedantic" TARGET_CXXFLAGS="-Wno-error=pedantic" make -j$(nproc) WERROR=0 || \
           TARGET_CFLAGS="-Wno-error=pedantic" TARGET_CXXFLAGS="-Wno-error=pedantic" make -j1 WERROR=0 || \
           TARGET_CFLAGS="-Wno-error=pedantic" TARGET_CXXFLAGS="-Wno-error=pedantic" make -j1 V=s WERROR=0
