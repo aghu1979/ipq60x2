@@ -76,6 +76,39 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 💾 检查磁盘空间
+        run: |
+          echo "📊 初始磁盘空间:"
+          df -h
+          echo ""
+          echo "📊 / 目录使用情况:"
+          sudo du -sh /* 2>/dev/null | sort -hr | head -10
+
+      - name: 🧹 清理系统空间
+        run: |
+          echo "🧹 清理不必要的文件..."
+          # 清理apt缓存
+          sudo apt-get clean
+          sudo apt-get autoremove -y
+          
+          # 清理Docker镜像（如果有）
+          sudo docker system prune -af --volumes || true
+          
+          # 清理大日志文件
+          sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+          sudo journalctl --vacuum-time=1d || true
+          
+          # 清理临时文件
+          sudo rm -rf /tmp/* 2>/dev/null || true
+          sudo rm -rf /var/tmp/* 2>/dev/null || true
+          
+          # 清理用户缓存
+          rm -rf ~/.cache/* 2>/dev/null || true
+          
+          echo "✅ 系统清理完成"
+          echo "📊 清理后磁盘空间:"
+          df -h
+
       - name: 🔍 检查目录结构
         run: |
           echo "📌 当前工作目录: $(pwd)"
@@ -282,6 +315,39 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl
+
+      - name: 💾 检查磁盘空间
+        run: |
+          echo "📊 初始磁盘空间:"
+          df -h
+          echo ""
+          echo "📊 / 目录使用情况:"
+          sudo du -sh /* 2>/dev/null | sort -hr | head -10
+
+      - name: 🧹 清理系统空间
+        run: |
+          echo "🧹 清理不必要的文件..."
+          # 清理apt缓存
+          sudo apt-get clean
+          sudo apt-get autoremove -y
+          
+          # 清理Docker镜像（如果有）
+          sudo docker system prune -af --volumes || true
+          
+          # 清理大日志文件
+          sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+          sudo journalctl --vacuum-time=1d || true
+          
+          # 清理临时文件
+          sudo rm -rf /tmp/* 2>/dev/null || true
+          sudo rm -rf /var/tmp/* 2>/dev/null || true
+          
+          # 清理用户缓存
+          rm -rf ~/.cache/* 2>/dev/null || true
+          
+          echo "✅ 系统清理完成"
+          echo "📊 清理后磁盘空间:"
+          df -h
 
       - name: 📥 检出代码
         uses: actions/checkout@v4
@@ -536,33 +602,81 @@ jobs:
             echo "无" >> luci-check-ultra-${{ matrix.branch }}.md
           fi
 
+      - name: 💾 检查磁盘空间 - 编译前
+        run: |
+          echo "📊 编译前磁盘空间:"
+          df -h
+
       - name: 🔨 编译Ultra固件
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.cache-key.outputs.path }}
           
           # 下载软件包
+          echo "📥 开始下载软件包..."
           make -j$(nproc) IGNORE_ERRORS=1 download
           
+          # 检查下载后空间
+          echo "📊 下载后磁盘空间:"
+          df -h
+          
+          # 清理下载缓存中的不必要文件
+          echo "🧹 清理下载缓存..."
+          find dl/ -name "*.tmp" -delete 2>/dev/null || true
+          find dl/ -name "*.bak" -delete 2>/dev/null || true
+          
           # 编译固件
+          echo "🔨 开始编译固件..."
           make -j$(nproc) IGNORE_ERRORS=1
+
+      - name: 💾 检查磁盘空间 - 编译后
+        run: |
+          echo "📊 编译后磁盘空间:"
+          df -h
+
+      - name: 🧹 清理编译环境
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd ${{ steps.cache-key.outputs.path }}
+          
+          echo "🧹 清理编译环境以节省空间..."
+          
+          # 保存重要文件
+          mkdir -p ../temp-save
+          find . -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} ../temp-save/
+          
+          # 清理大目录
+          rm -rf build_dir/target-* 2>/dev/null || true
+          rm -rf build_dir/host-* 2>/dev/null || true
+          rm -rf staging_dir/target-* 2>/dev/null || true
+          rm -rf staging_dir/host-* 2>/dev/null || true
+          rm -rf logs/ 2>/dev/null || true
+          rm -rf tmp/ 2>/dev/null || true
+          
+          # 清理工具链（保留编译结果）
+          find toolchain/ -name "*.a" -delete 2>/dev/null || true
+          find toolchain/ -name "*.o" -delete 2>/dev/null || true
+          
+          # 清理源码目录中的大文件
+          find . -name "*.git" -type d -exec rm -rf {} + 2>/dev/null || true
+          find . -name ".svn" -type d -exec rm -rf {} + 2>/dev/null || true
+          
+          # 恢复重要文件
+          cp ../temp-save/* ./
+          rm -rf ../temp-save
+          
+          echo "✅ 编译环境清理完成"
+          echo "📊 清理后磁盘空间:"
+          df -h
 
       - name: 📦 缓存Ultra环境
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.cache-key.outputs.path }}
           
-          # 清理编译产物但保留环境
-          find . -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} ../
-          make clean
-          
-          # 打包环境
+          # 打包环境（已经清理过）
           tar -czf ${{ steps.cache-key.outputs.path }}/ultra-env.tar.gz .
-          
-          # 恢复编译产物
-          cp ../*.bin ./
-          cp ../*.img ./
-          cp ../*.manifest ./
+          echo "✅ Ultra环境缓存完成"
 
       - name: 📤 上传Ultra构建产物
         uses: actions/upload-artifact@v4
@@ -591,6 +705,36 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl
+
+      - name: 💾 检查磁盘空间
+        run: |
+          echo "📊 初始磁盘空间:"
+          df -h
+
+      - name: 🧹 清理系统空间
+        run: |
+          echo "🧹 清理不必要的文件..."
+          # 清理apt缓存
+          sudo apt-get clean
+          sudo apt-get autoremove -y
+          
+          # 清理Docker镜像（如果有）
+          sudo docker system prune -af --volumes || true
+          
+          # 清理大日志文件
+          sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \;
+          sudo journalctl --vacuum-time=1d || true
+          
+          # 清理临时文件
+          sudo rm -rf /tmp/* 2>/dev/null || true
+          sudo rm -rf /var/tmp/* 2>/dev/null || true
+          
+          # 清理用户缓存
+          rm -rf ~/.cache/* 2>/dev/null || true
+          
+          echo "✅ 系统清理完成"
+          echo "📊 清理后磁盘空间:"
+          df -h
 
       - name: 📥 检出代码
         uses: actions/checkout@v4
@@ -829,15 +973,66 @@ jobs:
             echo "无" >> luci-check-${{ matrix.variant }}-${{ matrix.branch }}.md
           fi
 
+      - name: 💾 检查磁盘空间 - 编译前
+        run: |
+          echo "📊 编译前磁盘空间:"
+          df -h
+
       - name: 🔨 编译${{ matrix.variant }}固件
         run: |
           cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           
           # 下载软件包
+          echo "📥 开始下载软件包..."
           make -j$(nproc) IGNORE_ERRORS=1 download
           
+          # 检查下载后空间
+          echo "📊 下载后磁盘空间:"
+          df -h
+          
+          # 清理下载缓存中的不必要文件
+          echo "🧹 清理下载缓存..."
+          find dl/ -name "*.tmp" -delete 2>/dev/null || true
+          find dl/ -name "*.bak" -delete 2>/dev/null || true
+          
           # 编译固件
+          echo "🔨 开始编译固件..."
           make -j$(nproc) IGNORE_ERRORS=1
+
+      - name: 💾 检查磁盘空间 - 编译后
+        run: |
+          echo "📊 编译后磁盘空间:"
+          df -h
+
+      - name: 🧹 清理编译环境
+        run: |
+          cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
+          
+          echo "🧹 清理编译环境以节省空间..."
+          
+          # 保存重要文件
+          mkdir -p ../temp-save
+          find . -name "*.bin" -o -name "*.img" -o -name "*.manifest" | xargs -I {} cp {} ../temp-save/
+          
+          # 清理大目录
+          rm -rf build_dir/target-* 2>/dev/null || true
+          rm -rf build_dir/host-* 2>/dev/null || true
+          rm -rf staging_dir/target-* 2>/dev/null || true
+          rm -rf staging_dir/host-* 2>/dev/null || true
+          rm -rf logs/ 2>/dev/null || true
+          rm -rf tmp/ 2>/dev/null || true
+          
+          # 清理工具链（保留编译结果）
+          find toolchain/ -name "*.a" -delete 2>/dev/null || true
+          find toolchain/ -name "*.o" -delete 2>/dev/null || true
+          
+          # 恢复重要文件
+          cp ../temp-save/* ./
+          rm -rf ../temp-save
+          
+          echo "✅ 编译环境清理完成"
+          echo "📊 清理后磁盘空间:"
+          df -h
 
       - name: 📤 上传${{ matrix.variant }}构建产物
         uses: actions/upload-artifact@v4
