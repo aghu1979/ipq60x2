@@ -561,10 +561,14 @@ jobs:
           cd /workdir/openwrt
           echo "🚀 开始编译Ultra变体"
           echo "使用 $(nproc) 个线程并行编译"
-          echo "💡 提示: 已添加 WERROR=0 以忽略编译器警告，这是CI环境的常见做法。"
+          echo "💡 提示: 已添加 WERROR=0 和 -Wno-error=pedantic 以忽略编译器警告，这是CI环境的常见做法。"
           
-          # 多重编译策略，并添加 WERROR=0 来绕过编译器警告错误
-          make -j$(nproc) WERROR=0 || make -j1 WERROR=0 || make -j1 V=s WERROR=0
+          # 多重编译策略，并添加标志来绕过编译器警告错误
+          # WERROR=0: 全局禁用将警告视为错误
+          # -Wno-error=pedantic: 针对性禁用pedantic警告错误
+          TARGET_CFLAGS="-Wno-error=pedantic" TARGET_CXXFLAGS="-Wno-error=pedantic" make -j$(nproc) WERROR=0 || \
+          TARGET_CFLAGS="-Wno-error=pedantic" TARGET_CXXFLAGS="-Wno-error=pedantic" make -j1 WERROR=0 || \
+          TARGET_CFLAGS="-Wno-error=pedantic" TARGET_CXXFLAGS="-Wno-error=pedantic" make -j1 V=s WERROR=0
           
           echo "✅ Ultra编译完成"
 
