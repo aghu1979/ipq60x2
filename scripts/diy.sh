@@ -13,6 +13,8 @@ source "$(dirname "$0")/common.sh"
 LAN_IP="192.168.111.1"
 # 默认主机名
 HOSTNAME="WRT"
+# 默认 root 用户密码
+ROOT_PASSWORD="password"
 # 编译署名
 BUILDER_NAME="Mary"
 # 是否应用Argon主题优化 (true/false)
