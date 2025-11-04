@@ -160,19 +160,42 @@ jobs:
           free -h
           df -h
           
-          # 尝试编译，如果失败则输出错误信息
-          if ! make ${{ env.MAKE_OPTS }}; then
-            echo "编译失败，尝试获取更多错误信息..."
-            echo "编译失败后系统资源状态:"
-            free -h
-            df -h
-            # 输出构建日志
-            find . -name "*.log" -exec echo "=== {} ===" \; -exec cat {} \;
+          # 创建日志文件
+          LOG_FILE="build.log"
+          
+          # 尝试编译，同时将输出保存到日志文件
+          make ${{ env.MAKE_OPTS }} 2>&1 | tee $LOG_FILE
+          COMPILE_EXIT_CODE=${PIPESTATUS[0]}
+          
+          if [ $COMPILE_EXIT_CODE -ne 0 ]; then
+            echo "编译失败，尝试从日志中提取关键错误信息..."
+            
+            # 尝试提取错误信息
+            echo "=== 错误摘要 ==="
+            grep -i -E "(error|Error|ERROR)" $LOG_FILE | tail -20
+            
+            echo "=== Make 错误 ==="
+            grep -i -E "(make.*\*\*\*.*error|make.*error|failed to build)" $LOG_FILE | tail -10
+            
+            echo "=== 工具链错误 ==="
+            grep -i -E "(toolchain.*failed|gcc.*error|gdb.*error|binutils.*error)" $LOG_FILE | tail -10
+            
+            echo "=== 依赖错误 ==="
+            grep -i -E "(not found|No such file|cannot find|is missing)" $LOG_FILE | tail -10
+            
             exit 1
           fi
           
           echo "status=success" >> $GITHUB_OUTPUT
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_OUTPUT
+
+      - name: 上传编译日志
+        if: always() # 无论成功或失败都上传日志
+        uses: actions/upload-artifact@v4
+        with:
+          name: build_log_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
+          path: openwrt/build.log
+          retention-days: 7
 
       - name: 检查空间使用
         if: (!cancelled())
