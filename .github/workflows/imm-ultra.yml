@@ -13,6 +13,7 @@ env:
   CONFIG_BRANCH: configs/base_immwrt.config
   CONFIG_LUCI: configs/Ultra.config
   DIY_SCRIPT: scripts/diy.sh
+  REPO_SCRIPT: scripts/repo.sh
   CLASH_KERNEL: amd64
   UPLOAD_BIN_DIR: false
   FIRMWARE_RELEASE: true
