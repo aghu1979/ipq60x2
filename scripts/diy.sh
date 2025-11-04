@@ -1,40 +1,38 @@
-# 修改默认IP & 固件名称 & 编译署名
-sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/bin/config_generate
-sed -i "s/hostname='.*'/hostname='WRT'/g" package/base-files/files/bin/config_generate
-sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ Built by Mary')/g" feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
+#!/bin/bash
 
-# 调整在Argon主题下，概览页面显示/隐藏按钮的样式
-sed -i '/^\.td\.cbi-section-actions {$/,/^}$/ {
-    /^}$/a\
-.cbi-section.fade-in .cbi-title {\
-  position: relative;\
-  min-height: 2.765rem;\
-  display: flex;\
-  align-items: center\
-}\
-.cbi-section.fade-in .cbi-title>div:last-child {\
-  position: absolute;\
-  right: 1rem\
-}\
-.cbi-section.fade-in .cbi-title>div:last-child span {\
-  display: inline-block;\
-  position: relative;\
-  font-size: 0\
-}\
-.cbi-section.fade-in .cbi-title>div:last-child span::after {\
-  content: "\\e90f";\
-  font-family: '\''argon'\'' !important;\
-  font-size: 1.1rem;\
-  display: inline-block;\
-  transition: transform 0.3s ease;\
-  -webkit-font-smoothing: antialiased;\
-  line-height: 1\
-}\
-.cbi-section.fade-in .cbi-title>div:last-child span[data-style='\''inactive'\'']::after {\
-  transform: rotate(90deg);\
-}
-}' feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css/cascade.css
+# 导入通用函数
+source "$(dirname "$0")/common.sh"
 
-sed -i -e '/btn\.setAttribute(\x27class\x27, include\.hide ? \x27label notice\x27 : \x27label\x27);/d' \
-      -e "/\x27class\x27: includes\[i\]\.hide ? \x27label notice\x27 : \x27label\x27,/d" \
-         feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/index.js
+# --- 在此修改初始管理配置 ---
+# 默认 LAN IP 地址
+LAN_IP="192.168.31.1"
+# 默认 root 用户密码
+ROOT_PASSWORD="password"
+
+# --- 脚本逻辑 ---
+OPENWRT_ROOT_DIR="$1"
+
+log_info "开始执行 DIY Part 1: 初始配置"
+
+if [ -z "$OPENWRT_ROOT_DIR" ]; then
+    log_error "未指定 OpenWrt 根目录！"
+    exit 1
+fi
+
+if [ ! -d "$OPENWRT_ROOT_DIR" ]; then
+    log_error "OpenWrt 根目录不存在: $OPENWRT_ROOT_DIR"
+    exit 1
+fi
+
+# 1. 修改 LAN IP
+log_info "正在设置 LAN IP 为: ${LAN_IP}"
+sed -i "s/192.168.1.1/${LAN_IP}/g" "$OPENWRT_ROOT_DIR/package/base-files/files/bin/config_generate"
+
+# 2. 修改 root 密码
+log_info "正在设置 root 密码"
+# 使用 openssl 生成密码哈希
+PASSWORD_HASH=$(openssl passwd -1 "${ROOT_PASSWORD}")
+# 替换 shadow 文件中的 root 密码字段
+sed -i "s/root:\!/root:${PASSWORD_HASH}/g" "$OPENWRT_ROOT_DIR/package/base-files/files/etc/shadow"
+
+log_success "DIY Part 1 执行完成。"
