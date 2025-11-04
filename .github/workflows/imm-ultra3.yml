@@ -65,10 +65,10 @@ jobs:
       - name: 加载自定义脚本
         run: |
           chmod +x scripts/*.sh
-          # 注意：函数导出已移除，因为每个脚本会自行 source common.sh
           
       - name: 合并配置文件
         run: |
+          source scripts/common.sh
           [ -f openwrt/.config ] && rm -f openwrt/.config
           cat configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config > openwrt/.config
           log_success "配置文件合并完成: base_ipq60xx.config + base_immwrt.config + Ultra.config"
@@ -76,6 +76,7 @@ jobs:
       - name: 提取目标和设备信息
         id: target_info
         run: |
+          source scripts/common.sh
           cd openwrt
           # 提取目标平台和子平台
           TARGET=$(grep '^CONFIG_TARGET_BOARD=.*$' .config | sed 's/.*=//')
@@ -130,6 +131,7 @@ jobs:
       - name: 生成 LUCI 报告
         id: report
         run: |
+          source scripts/common.sh
           cd openwrt
           $GITHUB_WORKSPACE/scripts/luci_report.sh before
           make defconfig
