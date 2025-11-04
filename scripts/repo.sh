@@ -2,6 +2,16 @@
 git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
 chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
 
+# passwall by xiaorouji，
+# 移除 openwrt feeds 自带的核心库
+rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages
+# 移除 openwrt feeds 过时的luci版本
+rm -rf feeds/luci/applications/luci-app-passwall
+git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall package/passwall-luci
+# passwall2 by xiaorouji，
+git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall2 package/passwall2-luci
+
 # AdGuardHome，官方推荐OpenWrt LUCI app by @kongfl888 (originally by @rufengsuixing).
 # git clone --depth=1 https://github.com/kongfl888/luci-app-adguardhome package/luci-app-adguardhome
 # luci-app-adguardhome by sirpdboy
@@ -26,22 +36,10 @@ git clone --depth=1 https://github.com/sirpdboy/luci-app-taskplan package/luci-a
 git clone --depth=1  https://github.com/gdy666/luci-app-lucky.git package/lucky
 #git clone --depth=1 https://github.com/sirpdboy/luci-app-lucky.git package/lucky
 
-# passwall by xiaorouji，
-# 移除 openwrt feeds 自带的核心库
-rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
-git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages
-# 移除 openwrt feeds 过时的luci版本
-rm -rf feeds/luci/applications/luci-app-passwall
-git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall package/passwall-luci
-# passwall2 by xiaorouji，
-git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall2 package/passwall2-luci
+# luci-app-easytier
+git clone https://github.com/EasyTier/luci-app-easytier.git package/luci-app-easytier
 
-# golang & luci-app-openlist2 by sbwml
-git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
-git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist
-
-# luci-app-quickfile by sbwml
-git clone --depth=1 https://github.com/sbwml/luci-app-quickfile package/quickfile
+# frp https://github.com/fatedier/frp，无luci-app，建议使用small-package更新
 
 # homeproxy immortalwrt官方出品，无luci-app，建议使用https://github.com/VIKINGYFY/homeproxy更新
 git clone --depth=1 https://github.com/VIKINGYFY/homeproxy package/homeproxy
@@ -49,10 +47,15 @@ git clone --depth=1 https://github.com/VIKINGYFY/homeproxy package/homeproxy
  (必备) 通过私密 Gist 或其它可被正常访问的私有链接定制你的专属 rules.sh 配置内容；
 执行以下命令（脚本执行期间会向你索要你的定制配置URL）：bash -c "$(curl -fsSl https://raw.githubusercontent.com/thisIsIan-W/homeproxy-autogen-configuration/refs/heads/main/generate_homeproxy_rules.sh)"
 
-# OpenAppFilter（OAF），自带luci-app
-git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
+# golang & luci-app-openlist2 by sbwml
+git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
+git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist
 
-# frp https://github.com/fatedier/frp，无luci-app，建议使用small-package更新
+# luci-app-mosdns  by sbwml
+git clone  -b v5 https://github.com/sbwml/luci-app-mosdns package/mosdns
+
+# luci-app-quickfile by sbwml
+git clone --depth=1 https://github.com/sbwml/luci-app-quickfile package/quickfile
 
 # luci-app-istorex（向导模式及主体）/luci-app-quickstart（网络向导和首页界面）/luci-app-diskman （磁盘管理），建议使用small-package更新
 
@@ -62,12 +65,18 @@ git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAp
 git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-momo package/luci-app-momo
 git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-nikki package/luci-app-nikki
 
+# OpenAppFilter（OAF），自带luci-app
+git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
+
+# luci-app-openclash by vernesong
+git clone -b dev https://github.com/vernesong/OpenClash.git package/luci-app-openclash
+
 # tailscale，官方推荐luci-app-tailscale by asvow
 sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
 git clone --depth=1 https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
 
-# luci-app-easytier
-git clone https://github.com/EasyTier/luci-app-easytier.git package/luci-app-easytier
+# vnt，官方https://github.com/vnt-dev/vnt，无luci-app，使用lmq8267
+git clone https://github.com/lmq8267/luci-app-vnt.git package/luci-app-vnt
 
 # kenzok8/small-package，后备之选，只有上述的ipk地址缺失才会用到。
 git clone --depth=1 https://github.com/kenzok8/small-package small
