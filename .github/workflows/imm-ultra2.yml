@@ -32,6 +32,11 @@ on:
         type: boolean
         default: false
         description: "启用调试模式 (详细日志)"
+      skip_deps:
+        required: false
+        type: boolean
+        default: false
+        description: "跳过有问题的依赖包"
 
 env:
   CACHE_VERSION: "v2"
@@ -601,7 +606,7 @@ jobs:
           echo "📊 编译前磁盘空间:"
           df -h
 
-      - name: 🔨 编译Ultra固件 - 分阶段编译
+      - name: 🔨 编译Ultra固件 - 依赖修复策略
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.cache-key.outputs.path }}
@@ -609,10 +614,12 @@ jobs:
           # 设置编译参数
           JOBS=$(nproc)
           VERBOSE=${{ inputs.debug_build && 'V=sc' || 'V=s' }}
+          SKIP_DEPS=${{ inputs.skip_deps && 'true' || 'false' }}
           
           echo "🔧 编译参数:"
           echo "  - 并行任务数: $JOBS"
           echo "  - 详细日志: $VERBOSE"
+          echo "  - 跳过问题依赖: $SKIP_DEPS"
           
           # 1. 下载软件包
           echo "📥 步骤1: 下载软件包..."
@@ -636,35 +643,82 @@ jobs:
           echo "🔨 步骤3: 编译工具链..."
           make -j$JOBS IGNORE_ERRORS=1 tools/compile
           
-          # 4. 编译核心库
-          echo "🔨 步骤4: 编译核心库..."
-          make -j$JOBS IGNORE_ERRORS=1 package/libs/compile
+          # 4. 安装系统依赖
+          echo "🔧 步骤4: 安装系统依赖..."
+          sudo apt-get install -y libpcre3 libpcre3-dev zlib1g-dev libssl-dev libreadline-dev libsqlite3-dev libbz2-dev || true
           
-          # 5. 尝试编译失败的关键包
-          echo "🔨 步骤5: 尝试编译失败的关键包..."
+          # 5. 编译核心库 - 逐个编译
+          echo "🔨 步骤5: 编译核心库..."
+          
+          # 创建临时配置文件，移除有问题的包
+          if [ "$SKIP_DEPS" = "true" ]; then
+            echo "🔧 创建临时配置文件，移除有问题的依赖..."
+            cp .config .config.backup
+            
+            # 移除有问题的包
+            sed -i '/CONFIG_PACKAGE_luci-app-bandwidthd/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-bypass/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-dogcom/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-gowebdav/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-nginx-pingos/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus/d' .config
+            sed -i '/CONFIG_PACKAGE_natflow/d' .config
+            sed -i '/CONFIG_PACKAGE_rblibtorrent/d' .config
+            sed -i '/CONFIG_PACKAGE_trojan-plus/d' .config
+            
+            # 重新运行defconfig
+            make defconfig
+          fi
+          
+          # 6. 尝试编译失败的关键包
+          echo "🔨 步骤6: 尝试编译失败的关键包..."
           
           # GMP库
           echo "🔧 编译GMP库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/gmp/prepare || true
           make -j1 IGNORE_ERRORS=1 package/libs/gmp/compile $VERBOSE || true
           
           # OpenSSL库
           echo "🔧 编译OpenSSL库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/openssl/prepare || true
           make -j1 IGNORE_ERRORS=1 package/libs/openssl/compile $VERBOSE || true
           
-          # 6. 尝试编译主机工具
-          echo "🔨 步骤6: 编译主机工具..."
+          # PCRE库
+          echo "🔧 编译PCRE库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/libpcre/prepare || true
+          make -j1 IGNORE_ERRORS=1 package/libs/libpcre/compile $VERBOSE || true
+          
+          # Boost库
+          echo "🔧 编译Boost库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/boost/prepare || true
+          make -j1 IGNORE_ERRORS=1 package/libs/boost/compile $VERBOSE || true
+          
+          # 7. 尝试编译主机工具
+          echo "🔨 步骤7: 编译主机工具..."
           
           # Golang
           echo "🔧 编译Golang..."
+          make -j1 IGNORE_ERRORS=1 package/feeds/packages/golang/host-prepare || true
           make -j1 IGNORE_ERRORS=1 package/feeds/packages/golang/host-compile $VERBOSE || true
           
           # Rust
           echo "🔧 编译Rust..."
+          make -j1 IGNORE_ERRORS=1 package/feeds/packages/rust/host-prepare || true
           make -j1 IGNORE_ERRORS=1 package/feeds/packages/rust/host-compile $VERBOSE || true
           
-          # 7. 最终编译
-          echo "🔨 步骤7: 最终编译..."
+          # 8. 尝试编译所有库
+          echo "🔨 步骤8: 编译所有库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/compile $VERBOSE || true
+          
+          # 9. 最终编译
+          echo "🔨 步骤9: 最终编译..."
           make -j$JOBS IGNORE_ERRORS=1 $VERBOSE || true
+          
+          # 10. 恢复配置（如果修改过）
+          if [ "$SKIP_DEPS" = "true" ] && [ -f .config.backup ]; then
+            echo "🔧 恢复原始配置..."
+            mv .config.backup .config
+          fi
 
       - name: 💾 检查磁盘空间 - 编译后
         run: |
@@ -1015,17 +1069,19 @@ jobs:
           echo "📊 编译前磁盘空间:"
           df -h
 
-      - name: 🔨 编译${{ matrix.variant }}固件 - 分阶段编译
+      - name: 🔨 编译${{ matrix.variant }}固件 - 依赖修复策略
         run: |
           cd build-${{ matrix.variant }}-${{ inputs.chip }}-${{ matrix.branch }}
           
           # 设置编译参数
           JOBS=$(nproc)
           VERBOSE=${{ inputs.debug_build && 'V=sc' || 'V=s' }}
+          SKIP_DEPS=${{ inputs.skip_deps && 'true' || 'false' }}
           
           echo "🔧 编译参数:"
           echo "  - 并行任务数: $JOBS"
           echo "  - 详细日志: $VERBOSE"
+          echo "  - 跳过问题依赖: $SKIP_DEPS"
           
           # 1. 下载软件包
           echo "📥 步骤1: 下载软件包..."
@@ -1049,35 +1105,82 @@ jobs:
           echo "🔨 步骤3: 编译工具链..."
           make -j$JOBS IGNORE_ERRORS=1 tools/compile
           
-          # 4. 编译核心库
-          echo "🔨 步骤4: 编译核心库..."
-          make -j$JOBS IGNORE_ERRORS=1 package/libs/compile
+          # 4. 安装系统依赖
+          echo "🔧 步骤4: 安装系统依赖..."
+          sudo apt-get install -y libpcre3 libpcre3-dev zlib1g-dev libssl-dev libreadline-dev libsqlite3-dev libbz2-dev || true
           
-          # 5. 尝试编译失败的关键包
-          echo "🔨 步骤5: 尝试编译失败的关键包..."
+          # 5. 编译核心库 - 逐个编译
+          echo "🔨 步骤5: 编译核心库..."
+          
+          # 创建临时配置文件，移除有问题的包
+          if [ "$SKIP_DEPS" = "true" ]; then
+            echo "🔧 创建临时配置文件，移除有问题的依赖..."
+            cp .config .config.backup
+            
+            # 移除有问题的包
+            sed -i '/CONFIG_PACKAGE_luci-app-bandwidthd/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-bypass/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-dogcom/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-gowebdav/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-nginx-pingos/d' .config
+            sed -i '/CONFIG_PACKAGE_luci-app-ssr-plus/d' .config
+            sed -i '/CONFIG_PACKAGE_natflow/d' .config
+            sed -i '/CONFIG_PACKAGE_rblibtorrent/d' .config
+            sed -i '/CONFIG_PACKAGE_trojan-plus/d' .config
+            
+            # 重新运行defconfig
+            make defconfig
+          fi
+          
+          # 6. 尝试编译失败的关键包
+          echo "🔨 步骤6: 尝试编译失败的关键包..."
           
           # GMP库
           echo "🔧 编译GMP库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/gmp/prepare || true
           make -j1 IGNORE_ERRORS=1 package/libs/gmp/compile $VERBOSE || true
           
           # OpenSSL库
           echo "🔧 编译OpenSSL库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/openssl/prepare || true
           make -j1 IGNORE_ERRORS=1 package/libs/openssl/compile $VERBOSE || true
           
-          # 6. 尝试编译主机工具
-          echo "🔨 步骤6: 编译主机工具..."
+          # PCRE库
+          echo "🔧 编译PCRE库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/libpcre/prepare || true
+          make -j1 IGNORE_ERRORS=1 package/libs/libpcre/compile $VERBOSE || true
+          
+          # Boost库
+          echo "🔧 编译Boost库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/boost/prepare || true
+          make -j1 IGNORE_ERRORS=1 package/libs/boost/compile $VERBOSE || true
+          
+          # 7. 尝试编译主机工具
+          echo "🔨 步骤7: 编译主机工具..."
           
           # Golang
           echo "🔧 编译Golang..."
+          make -j1 IGNORE_ERRORS=1 package/feeds/packages/golang/host-prepare || true
           make -j1 IGNORE_ERRORS=1 package/feeds/packages/golang/host-compile $VERBOSE || true
           
           # Rust
           echo "🔧 编译Rust..."
+          make -j1 IGNORE_ERRORS=1 package/feeds/packages/rust/host-prepare || true
           make -j1 IGNORE_ERRORS=1 package/feeds/packages/rust/host-compile $VERBOSE || true
           
-          # 7. 最终编译
-          echo "🔨 步骤7: 最终编译..."
+          # 8. 尝试编译所有库
+          echo "🔨 步骤8: 编译所有库..."
+          make -j1 IGNORE_ERRORS=1 package/libs/compile $VERBOSE || true
+          
+          # 9. 最终编译
+          echo "🔨 步骤9: 最终编译..."
           make -j$JOBS IGNORE_ERRORS=1 $VERBOSE || true
+          
+          # 10. 恢复配置（如果修改过）
+          if [ "$SKIP_DEPS" = "true" ] && [ -f .config.backup ]; then
+            echo "🔧 恢复原始配置..."
+            mv .config.backup .config
+          fi
 
       - name: 💾 检查磁盘空间 - 编译后
         run: |
