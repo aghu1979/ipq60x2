@@ -1,260 +1,236 @@
-# .github/workflows/build.yml
-name: 为 IPQ60xx 构建 ImmortalWrt Ultra 固件
+# 工作流名称
+name: Build ImmortalWrt for Ultra3
 
+# 触发条件
 on:
+  # 允许在 GitHub Actions 页面手动触发
   workflow_dispatch:
-    inputs:
-      ssh:
-        description: 'SSH 连接到 Actions'
-        required: false
-        default: 'false'
+  # 当推送到 main 分支，并且以下文件有变更时触发
   push:
     branches:
       - main
     paths:
-      - 'configs/**'
-      - 'scripts/**'
-      - '.github/workflows/build.yml'
+      - '.config' # 自定义配置文件变更
+      - 'scripts/**' # 脚本目录下的任何文件变更
+      - '.github/workflows/imm-ultra3.yml' # 工作流文件自身变更
 
+# 环境变量
 env:
-  # --- 全局变量 (尽量不使用硬编码) ---
-  REPO_URL: https://github.com/immortalwrt/immortalwrt
-  REPO_BRANCH: openwrt-23.05
-  FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: ".config"
-  DIY_P1_SH: scripts/diy.sh
-  DIY_P2_SH: scripts/repo.sh
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_COWTRANSFER: false
-  UPLOAD_WETRANSFER: false
-  UPLOAD_RELEASE: true
-  TZ: Asia/Shanghai
+  REPO_URL: https://github.com/immortalwrt/immortalwrt # ImmortalWrt 源码仓库地址
+  REPO_BRANCH: openwrt-23.05 # 要使用的分支
+  FEEDS_CONF: feeds.conf.default # 自定义 feeds 配置文件
+  CONFIG_FILE: .config # 自定义固件配置文件
+  DIY_P1_SH: scripts/diy-part1.sh # 自定义脚本1 (在更新源前执行)
+  DIY_P2_SH: scripts/diy-part2.sh # 自定义脚本2 (在更新源后执行)
+  UPLOAD_BIN_DIR: false # 是否上传整个 bin 目录
+  UPLOAD_FIRMWARE: true # 是否上传最终固件文件
+  UPLOAD_COWTRANSFER: false # 是否上传到 Cowtransfer
+  UPLOAD_WETRANSFER: false # 是否上传到 WeTransfer
+  UPLOAD_RELEASE: true # 是否创建 GitHub Release
+  TZ: Asia/Shanghai # 设置时区
 
+# 作业定义
 jobs:
+  # 作业名称: 构建
   build:
+    # 运行环境: Ubuntu 22.04
     runs-on: ubuntu-22.04
-    
-    env:
-      # 编译选项，使用单线程和详细输出，有助于诊断问题
-      MAKE_OPTS: "-j1 V=s"
 
+    # 作业步骤
     steps:
-      - name: 检出仓库代码
-        uses: actions/checkout@v4
+    # 步骤 1: 检出当前仓库的代码
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: 初始化构建环境
-        run: |
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo -E apt-get -qq update
-          # 定义适用于 Ubuntu 24.04 的完整依赖列表
-          PACKAGES_24="build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils python3-pyelftools python3-setuptools python3-udev rsync swig unzip wget zlib1g-dev file"
-          # 定义适用于 Ubuntu 22.04 的兼容依赖列表 (移除 python3-udev)
-          PACKAGES_22="build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils python3-pyelftools python3-setuptools rsync swig unzip wget zlib1g-dev file"
-          # 首先尝试安装 24.04 的列表，如果失败则回退到 22.04 的列表
-          sudo -E apt-get -qq install $PACKAGES_24 || sudo -E apt-get -qq install $PACKAGES_22
-          sudo -E apt-get -qq autoremove --purge
-          sudo -E apt-get -qq clean
-          sudo timedatectl set-timezone "$TZ"
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
-          
-      - name: 克隆源代码
-        working-directory: /workdir
-        run: |
-          df -hT $PWD
-          git clone $REPO_URL -b $REPO_BRANCH openwrt
-          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+    # 步骤 2: 初始化构建环境
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        # 清理系统，释放空间
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        # 更新包列表并安装构建依赖
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
+        # 清理不需要的包
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        # 设置时区
+        sudo timedatectl set-timezone "$TZ"
+        # 创建并设置工作目录权限
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+        # 显示磁盘空间
+        df -hT
 
-      - name: 加载自定义脚本
-        run: |
-          chmod +x scripts/*.sh
-          
-      - name: 合并配置文件
-        run: |
-          source scripts/common.sh
-          [ -f openwrt/.config ] && rm -f openwrt/.config
-          cat configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config > openwrt/.config
-          log_success "配置文件合并完成: base_ipq60xx.config + base_immwrt.config + Ultra.config"
+    # 步骤 3: 克隆 ImmortalWrt 源码
+    - name: Clone source code
+      working-directory: /workdir
+      run: |
+        df -hT $GITHUB_WORKSPACE
+        # 克隆指定分支的源码
+        git clone $REPO_URL -b $REPO_BRANCH immortalwrt
+        # 创建软链接，方便后续步骤访问
+        ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
-      - name: 提取目标和设备信息
-        id: target_info
-        run: |
-          source scripts/common.sh
-          cd openwrt
-          # 提取目标平台和子平台
-          TARGET=$(grep '^CONFIG_TARGET_BOARD=.*$' .config | sed 's/.*=//')
-          SUBTARGET=$(grep '^CONFIG_TARGET_SUBTARGET=.*$' .config | sed 's/.*=//')
-          echo "TARGET=$TARGET" >> $GITHUB_ENV
-          echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
-          echo "target_platform=$TARGET/$SUBTARGET" >> $GITHUB_OUTPUT
-          
-          # 提取所有启用的设备名
-          DEVICE_NAMES=$(grep '^CONFIG_TARGET_DEVICE_.*=y$' .config | sed 's/.*DEVICE_\(.*\)=y/\1/' | tr '\n' ' ')
-          if [ -z "$DEVICE_NAMES" ]; then
-            log_error "未在 .config 中找到任何启用的设备。"
-            exit 1
-          fi
-          echo "DEVICE_NAMES=$DEVICE_NAMES" >> $GITHUB_ENV
-          log_success "提取到目标平台: $TARGET/$SUBTARGET"
-          log_success "提取到设备列表: $DEVICE_NAMES"
+    # 步骤 4: 加载自定义 feeds 配置
+    - name: Load custom feeds
+      run: |
+        # 如果存在自定义 feeds 配置，则复制到源码目录
+        [ -e $FEEDS_CONF ] && cp $FEEDS_CONF immortalwrt/feeds.conf.default
+        # 如果存在自定义脚本1，则在源码目录执行
+        [ -e $DIY_P1_SH ] && cd immortalwrt && bash $GITHUB_WORKSPACE/$DIY_P1_SH
 
-      - name: 缓存工具链
-        uses: actions/cache@v4
-        with:
-          path: openwrt/staging_dir/toolchain-*
-          key: ${{ env.REPO_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-toolchain-${{ hashFiles('configs/base_*.config', 'configs/Ultra.config') }}
-          restore-keys: |
-            ${{ env.REPO_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-toolchain-
+    # 步骤 5: 准备自定义软件源和软件包 (核心修正步骤)
+    - name: Prepare custom feeds and packages
+      id: customfeeds
+      run: |
+        cd immortalwrt
+        # 执行 repo.sh 脚本。
+        # 此脚本现在负责：
+        # 1. 添加自定义软件源。
+        # 2. 运行 'feeds update -a' 和 'feeds install -a'。
+        # 3. 将选定的软件包添加到 .config 文件。
+        # 4. 生成一个变更报告。
+        # 注意：原工作流中的 "Update & Install Feeds" 步骤已被整合到此脚本中。
+        bash $GITHUB_WORKSPACE/scripts/repo.sh
 
-      - name: 缓存下载包
-        uses: actions/cache@v4
-        with:
-          path: openwrt/dl
-          key: ${{ env.REPO_BRANCH }}-dl-${{ hashFiles('configs/Ultra.config') }}
-          restore-keys: |
-            ${{ env.REPO_BRANCH }}-dl-
+    # 步骤 6: 加载自定义固件配置
+    - name: Load custom configuration
+      run: |
+        # 如果存在 files 目录，则移动到源码目录，用于覆盖固件文件
+        [ -e files ] && mv files immortalwrt/files
+        # 如果存在自定义固件配置，则复制到源码目录
+        [ -e $CONFIG_FILE ] && cp $CONFIG_FILE immortalwrt/.config
+        # 如果存在自定义脚本2，则在源码目录执行
+        [ -e $DIY_P2_SH ] && cd immortalwrt && bash $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      - name: 运行 DIY Part 1 (初始设置)
-        run: |
-          cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P1_SH .
+    # 步骤 7: 准备内核配置
+    - name: Prepare kernel config
+      run: |
+        cd immortalwrt
+        # 复制自定义的内核配置文件
+        cp $GITHUB_WORKSPACE/kernel/ipq60xx.config target/linux/ipq60xx/config-6.1
+        # 运行 make defconfig。
+        # 上一步 (repo.sh) 已经修改了 .config，此步骤会基于修改后的 .config
+        # 进行最终确认，并补全缺失的依赖项，生成最终的、完整的配置文件。
+        make defconfig
 
-      - name: 更新 Feeds
-        run: cd openwrt && ./scripts/feeds update -a
+    # 步骤 8: 下载所有软件包源码
+    - name: Download package
+      id: package
+      run: |
+        cd immortalwrt
+        make defconfig
+        # 下载所有需要的软件包源码
+        make download -j8
+        # 查找并删除下载失败的小文件，避免编译错误
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
 
-      - name: 安装 Feeds
-        run: cd openwrt && ./scripts/feeds install -a
+    # 步骤 9: 编译固件
+    - name: Compile the firmware
+      id: compile
+      run: |
+        cd immortalwrt
+        echo -e "$(nproc) thread compile"
+        # 使用所有CPU核心进行编译，如果失败则尝试单核编译并输出详细日志
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "status=success" >> $GITHUB_OUTPUT
+        # 从 .config 中提取设备名称，用于后续文件命名
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        # 生成时间戳，用于文件命名
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-      - name: 运行 DIY Part 2 (第三方源)
-        id: repo
-        run: |
-          cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P2_SH
-          
-      - name: 生成 LUCI 报告
-        id: report
-        run: |
-          source scripts/common.sh
-          cd openwrt
-          $GITHUB_WORKSPACE/scripts/luci_report.sh before
-          make defconfig
-          $GITHUB_WORKSPACE/scripts/luci_report.sh after
-          echo "report_path=$(pwd)/luci_report.md" >> $GITHUB_OUTPUT
+    # 步骤 10: 检查磁盘空间使用情况
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
 
-      - name: 下载软件包
-        id: package
-        run: |
-          cd openwrt
-          make defconfig
-          make download -j8
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
+    # 步骤 11: 上传 bin 目录 (作为构建产物)
+    - name: Upload bin directory
+      uses: actions/upload-artifact@v4
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: ImmortalWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: immortalwrt/bin/
 
-      - name: 编译固件
-        id: compile
-        run: |
-          cd openwrt
-          echo -e "开始编译固件，使用选项: ${{ env.MAKE_OPTS }}"
-          echo "编译前系统资源状态:"
-          free -h
-          df -h
-          
-          # 创建日志文件
-          LOG_FILE="build.log"
-          
-          # 尝试编译，同时将输出保存到日志文件
-          make ${{ env.MAKE_OPTS }} 2>&1 | tee $LOG_FILE
-          COMPILE_EXIT_CODE=${PIPESTATUS[0]}
-          
-          if [ $COMPILE_EXIT_CODE -ne 0 ]; then
-            echo "编译失败，尝试从日志中提取关键错误信息..."
-            
-            # 尝试提取错误信息
-            echo "=== 错误摘要 ==="
-            grep -i -E "(error|Error|ERROR)" $LOG_FILE | tail -20
-            
-            echo "=== Make 错误 ==="
-            grep -i -E "(make.*\*\*\*.*error|make.*error|failed to build)" $LOG_FILE | tail -10
-            
-            echo "=== 工具链错误 ==="
-            grep -i -E "(toolchain.*failed|gcc.*error|gdb.*error|binutils.*error)" $LOG_FILE | tail -10
-            
-            echo "=== 依赖错误 ==="
-            grep -i -E "(not found|No such file|cannot find|is missing)" $LOG_FILE | tail -10
-            
-            exit 1
-          fi
-          
-          echo "status=success" >> $GITHUB_OUTPUT
-          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_OUTPUT
+    # 步骤 12: 整理最终固件文件
+    - name: Organize files
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd immortalwrt/bin/targets/*/*
+        # 删除 packages 目录，只保留固件本身
+        rm -rf packages
+        # 将固件所在路径设置为环境变量，供后续步骤使用
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: 上传编译日志
-        if: always() # 无论成功或失败都上传日志
-        uses: actions/upload-artifact@v4
-        with:
-          name: build_log_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
-          path: openwrt/build.log
-          retention-days: 7
+    # 步骤 13: 上传整理后的固件目录 (作为构建产物)
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@v4
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: ImmortalWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
 
-      - name: 检查空间使用
-        if: (!cancelled())
-        run: df -hT
+    # 步骤 14: 上传固件到 Cowtransfer
+    - name: Upload firmware to cowtransfer
+      id: cowtransfer
+      if: steps.organize.outputs.status == 'success' && env.UPLOAD_COWTRANSFER == 'true' && !cancelled()
+      run: |
+        curl -L https://cowtransfer.com/static/cowtransfer.sh -s | sudo bash -s upload -s -p ${{ env.FIRMWARE }} 2>&1 | tee cowtransfer.log
+        echo "::warning file=cowtransfer.com::$(cat cowtransfer.log | grep https)"
+        echo "url=$(cat cowtransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
 
-      - name: 上传 LUCI 报告
-        uses: actions/upload-artifact@v4
-        with:
-          name: LUCI_report_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
-          path: ${{ steps.report.outputs.report_path }}
+    # 步骤 15: 上传固件到 WeTransfer
+    - name: Upload firmware to WeTransfer
+      id: wetransfer
+      if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
+      run: |
+        curl -fsSL git.io/wetransfer.sh | bash -s ${{ env.FIRMWARE }} 2>&1 | tee wetransfer.log
+        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
+        echo "url=$(cat wetransfer.log | grep https | cut -f3 -d" ")" >> $GITHUB_OUTPUT
 
-      - name: 上传固件目录
-        uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-        with:
-          name: OpenWrt_bin_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
-          path: openwrt/bin
+    # 步骤 16: 生成 Release 标签
+    - name: Generate release tag
+      id: tag
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      run: |
+        # 生成基于时间的标签
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        touch release.txt
+        # 将其他分享链接写入 Release 正文
+        [ ${{ steps.cowtransfer.outputs.url }} ] && echo "🔗 [Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
+        [ ${{ steps.wetransfer.outputs.url }} ] && echo "🔗 [WeTransfer](${{ steps.wetransfer.outputs.url }})" >> release.txt
+        echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: 上传固件
-        uses: actions/upload-artifact@v4
-        if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
-        with:
-          name: OpenWrt_firmware_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
-          path: |
-            openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*combined*
-            openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*sysupgrade*
-            ${{ steps.report.outputs.report_path }}
+    # 步骤 17: 上传固件到 GitHub Release
+    - name: Upload firmware to release
+      uses: softprops/action-gh-release@v2
+      if: steps.tag.outputs.status == 'success' && !cancelled()
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.tag.outputs.release_tag }}${{ env.DEVICE_NAME }}
+        body_path: release.txt
+        files: ${{ env.FIRMWARE }}/*
 
-      - name: 发布固件到 Release
-        uses: softprops/action-gh-release@v2
-        if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ImmortalWrt-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ steps.compile.outputs.FILE_DATE }}
-          body: |
-            ## 📦 固件信息
-            - **源码分支**: ${{ env.REPO_BRANCH }}
-            - **目标平台**: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-            - **构建设备**: ${{ env.DEVICE_NAMES }}
-            
-            ## 📋 LUCI 软件包变更报告
-            请查看下方 `luci_report.md` 文件附件，了解本次构建新增、删除及更新的所有 LUCI 应用。
-          files: |
-            openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*combined*
-            openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*sysupgrade*
-            ${{ steps.report.outputs.report_path }}
+    # 步骤 18: 删除旧的 workflow 运行记录
+    - name: Delete workflow runs
+      uses: GitRML/delete-workflow-runs@main
+      with:
+        retain_days: 1
+        keep_minimum_runs: 3
 
-      - name: 删除旧的构建记录
-        uses: GitRML/delete-workflow-runs@main
-        with:
-          retain_days: 1
-          keep_minimum_runs: 3
-
-      - name: 删除旧的 Release
-        uses: dev-drprasad/delete-older-releases@v0.1.0
-        if: env.UPLOAD_RELEASE == 'true'
-        with:
-          keep_latest: 3
-          delete_tags: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # 步骤 19: 删除旧的 Release
+    - name: Remove old Releases
+      uses: dev-drprasad/delete-older-releases@v0.1.0
+      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      with:
+        keep_latest: 3
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
