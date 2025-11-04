@@ -197,7 +197,7 @@ UPDATE_PACKAGE "luci-app-netdata" "sirpdboy/luci-app-netdata" "main" && SUCCESS_
 # --- netspeedtest ---
 TOTAL_COUNT=$((TOTAL_COUNT + 1))
 echo -e "\n${YELLOW}--- [${TOTAL_COUNT}] 添加: luci-app-netspeedtest ---${NC}"
-UPDATE_PACKAGE "luci-app-netspeedtest" "sirpdboy/luci-app-netspeedtest" "main" "" "homebox speedtest" && SUCCESS_LIST+=("luci-app-netspeedtest") && SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || FAIL_LIST+=("luci-app-netspeedtest") && FAIL_COUNT=$((FAIL_COUNT + 1))
+UPDATE_PACKAGE "luci-app-netspeedtest" "sirpdboy/luci-app-netspeedtest" "js" "" "homebox speedtest" && SUCCESS_LIST+=("luci-app-netspeedtest") && SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || FAIL_LIST+=("luci-app-netspeedtest") && FAIL_COUNT=$((FAIL_COUNT + 1))
 
 # --- partexp ---
 TOTAL_COUNT=$((TOTAL_COUNT + 1))
@@ -207,7 +207,7 @@ UPDATE_PACKAGE "luci-app-partexp" "sirpdboy/luci-app-partexp" "main" && SUCCESS_
 # --- taskplan ---
 TOTAL_COUNT=$((TOTAL_COUNT + 1))
 echo -e "\n${YELLOW}--- [${TOTAL_COUNT}] 添加: luci-app-taskplan ---${NC}"
-UPDATE_PACKAGE "luci-app-taskplan" "sirpdboy/luci-app-taskplan" "main" && SUCCESS_LIST+=("luci-app-taskplan") && SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || FAIL_LIST+=("luci-app-taskplan") && FAIL_COUNT=$((FAIL_COUNT + 1))
+UPDATE_PACKAGE "luci-app-taskplan" "sirpdboy/luci-app-taskplan" "master" && SUCCESS_LIST+=("luci-app-taskplan") && SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || FAIL_LIST+=("luci-app-taskplan") && FAIL_COUNT=$((FAIL_COUNT + 1))
 
 # --- lucky ---
 TOTAL_COUNT=$((TOTAL_COUNT + 1))
@@ -228,7 +228,7 @@ EXECUTE_SCRIPT "https://raw.githubusercontent.com/thisIsIan-W/homeproxy-autogen-
 # --- golang & openlist2 ---
 TOTAL_COUNT=$((TOTAL_COUNT + 1))
 echo -e "\n${YELLOW}--- [${TOTAL_COUNT}] 添加: packages_lang_golang ---${NC}"
-UPDATE_PACKAGE "golang" "sbwml/packages_lang_golang" "main" "name" && SUCCESS_LIST+=("packages_lang_golang") && SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || FAIL_LIST+=("packages_lang_golang") && FAIL_COUNT=$((FAIL_COUNT + 1))
+UPDATE_PACKAGE "golang" "sbwml/packages_lang_golang" "25.x" "name" && SUCCESS_LIST+=("packages_lang_golang") && SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || FAIL_LIST+=("packages_lang_golang") && FAIL_COUNT=$((FAIL_COUNT + 1))
 
 TOTAL_COUNT=$((TOTAL_COUNT + 1))
 echo -e "\n${YELLOW}--- [${TOTAL_COUNT}] 添加: luci-app-openlist2 ---${NC}"
@@ -256,7 +256,7 @@ UPDATE_PACKAGE "nikki" "nikkinikki-org/OpenWrt-nikki" "main" "name" && SUCCESS_L
 # --- OpenAppFilter ---
 TOTAL_COUNT=$((TOTAL_COUNT + 1))
 echo -e "\n${YELLOW}--- [${TOTAL_COUNT}] 添加: OpenAppFilter ---${NC}"
-UPDATE_PACKAGE "OpenAppFilter" "destan19/OpenAppFilter" "main" "name" && SUCCESS_LIST+=("OpenAppFilter") && SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || FAIL_LIST+=("OpenAppFilter") && FAIL_COUNT=$((FAIL_COUNT + 1))
+UPDATE_PACKAGE "OpenAppFilter" "destan19/OpenAppFilter" "master" "name" && SUCCESS_LIST+=("OpenAppFilter") && SUCCESS_COUNT=$((SUCCESS_COUNT + 1)) || FAIL_LIST+=("OpenAppFilter") && FAIL_COUNT=$((FAIL_COUNT + 1))
 
 # --- OpenClash ---
 TOTAL_COUNT=$((TOTAL_COUNT + 1))
