@@ -1,0 +1,206 @@
+# .github/workflows/imm-ultra3.yml
+name: Build ImmortalWrt Ultra for IPQ60xx
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: 'SSH connection to Actions'
+        required: false
+        default: 'false'
+  push:
+    branches:
+      - main
+    paths:
+      - 'configs/**'
+      - 'scripts/**'
+      - '.github/workflows/build.yml'
+
+env:
+  # --- 全局变量 (尽量不使用硬编码) ---
+  REPO_URL: https://github.com/immortalwrt/immortalwrt
+  REPO_BRANCH: openwrt-23.05
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: ".config"
+  DIY_P1_SH: scripts/diy.sh
+  DIY_P2_SH: scripts/repo.sh
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_COWTRANSFER: false
+  UPLOAD_WETRANSFER: false
+  UPLOAD_RELEASE: true
+  TZ: Asia/Shanghai
+  # --- 设备和目标配置 ---
+  TARGET: qualcommax
+  SUBTARGET: ipq60xx
+  DEVICE_NAME: ipq60xx-generic
+  # --- 初始管理配置 ---
+  LAN_IP: 192.168.31.1
+  ROOT_PASSWORD: password
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialization environment
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+          
+      - name: Clone source code
+        working-directory: /workdir
+        run: |
+          df -hT $PWD
+          git clone $REPO_URL -b $REPO_BRANCH openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+      - name: Load custom scripts
+        run: |
+          chmod +x scripts/*.sh
+          # 导出日志函数为环境变量，供子进程使用
+          export -f log_info log_success log_warn log_error
+          
+      - name: Cache Toolchain
+        uses: actions/cache@v4
+        with:
+          path: openwrt/staging_dir/toolchain-*
+          key: ${{ env.REPO_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-toolchain-${{ hashFiles('configs/base_*.config', 'configs/Ultra.config') }}
+          restore-keys: |
+            ${{ env.REPO_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-toolchain-
+
+      - name: Cache Downloads
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: ${{ env.REPO_BRANCH }}-dl-${{ hashFiles('configs/Ultra.config') }}
+          restore-keys: |
+            ${{ env.REPO_BRANCH }}-dl-
+
+      - name: Merge Configuration Files
+        run: |
+          [ -f openwrt/.config ] && rm -f openwrt/.config
+          cat configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config > openwrt/.config
+          log_success "配置文件合并完成: base_ipq60xx.config + base_immwrt.config + Ultra.config"
+
+      - name: Run DIY-Part 1 (Initial Settings)
+        run: |
+          cd openwrt
+          $GITHUB_WORKSPACE/$DIY_P1_SH
+
+      - name: Update Feeds
+        run: cd openwrt && ./scripts/feeds update -a
+
+      - name: Install Feeds
+        run: cd openwrt && ./scripts/feeds install -a
+
+      - name: Run DIY-Part 2 (Third-party Sources)
+        id: repo
+        run: |
+          cd openwrt
+          $GITHUB_WORKSPACE/$DIY_P2_SH
+          
+      - name: Generate LUCI Report
+        id: report
+        run: |
+          cd openwrt
+          # 生成 defconfig 前的 LUCI 包列表
+          $GITHUB_WORKSPACE/scripts/luci_report.sh before
+          # 执行 defconfig，这会根据所有可用包更新 .config
+          make defconfig
+          # 生成 defconfig 后的 LUCI 包列表并生成报告
+          $GITHUB_WORKSPACE/scripts/luci_report.sh after
+          # 输出报告文件路径，供后续步骤使用
+          echo "report_path=$(pwd)/luci_report.md" >> $GITHUB_OUTPUT
+
+      - name: Download package
+        id: package
+        run: |
+          cd openwrt
+          make defconfig
+          make download -j8
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Build the firmware
+        id: compile
+        run: |
+          cd openwrt
+          echo -e "$(nproc) thread compile"
+          make -j$(nproc) || make -j1 || make
+          echo "status=success" >> $GITHUB_OUTPUT
+          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_OUTPUT
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_OUTPUT
+
+      - name: Check space usage
+        if: (!cancelled())
+        run: df -hT
+
+      - name: Upload LUCI Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: LUCI_report_${{ env.DEVICE_NAME }}${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
+          path: ${{ steps.report.outputs.report_path }}
+
+      - name: Upload firmware directory
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+        with:
+          name: OpenWrt_bin${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
+          path: openwrt/bin
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
+        with:
+          name: OpenWrt_firmware${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
+          path: |
+            openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*combined*
+            openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*sysupgrade*
+            ${{ steps.report.outputs.report_path }}
+
+      - name: Upload firmware to release
+        uses: softprops/action-gh-release@v2
+        if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.DEVICE_NAME }}${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
+          body: |
+            ## 📦 固件信息
+            - **源码分支**: ${{ env.REPO_BRANCH }}
+            - **目标平台**: ${{ env.TARGET }}/${{ env.SUBTARGET }}
+            - **默认IP地址**: ${{ env.LAN_IP }}
+            - **默认密码**: ${{ env.ROOT_PASSWORD }}
+            
+            ## 📋 LUCI 软件包变更报告
+            请查看下方 `luci_report.md` 文件附件，了解本次构建新增、删除及更新的所有 LUCI 应用。
+          files: |
+            openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*combined*
+            openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*sysupgrade*
+            ${{ steps.report.outputs.report_path }}
+
+      - name: Delete workflow runs
+        uses: GitRML/delete-workflow-runs@main
+        with:
+          retain_days: 1
+          keep_minimum_runs: 3
+
+      - name: Remove old Releases
+        uses: dev-drprasad/delete-older-releases@v0.1.0
+        if: env.UPLOAD_RELEASE == 'true'
+        with:
+          keep_latest: 3
+          delete_tags: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
