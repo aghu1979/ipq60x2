@@ -1,30 +1,73 @@
-#!/bin/bash
-# 作者: AI Assistant
-# 描述: 将第三方软件源添加到 ImmortalWrt 构建系统中。
+# 京东云雅典娜led控制
+git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
+chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
 
-# --- 配置 ---
-REPO_URL="https://github.com/kenzok8/small-package"
-TARGET_DIR="package/small-package"
-# --- 配置结束 ---
+# AdGuardHome，官方推荐OpenWrt LUCI app by @kongfl888 (originally by @rufengsuixing).
+# git clone --depth=1 https://github.com/kongfl888/luci-app-adguardhome package/luci-app-adguardhome
+# luci-app-adguardhome by sirpdboy
+git clone --depth=1  https://github.com/sirpdboy/luci-app-adguardhome.git package/luci-app-adguardhome
 
-# 获取脚本所在目录的绝对路径，以避免路径问题
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# 脚本预期在 immwrt 源码根目录中运行
-IMMWRT_ROOT="$(pwd)"
+# ddns-go by sirpdboy，自带luci-app
+git clone --depth=1  https://github.com/sirpdboy/luci-app-ddns-go.git package/ddns-go
 
-if [ ! -d "$IMMWRT_ROOT/$TARGET_DIR" ]; then
-    echo "正在从 $REPO_URL 克隆第三方软件源到 $TARGET_DIR..."
-    git clone "$REPO_URL" "$IMMWRT_ROOT/$TARGET_DIR"
-    if [ $? -eq 0 ]; then
-        echo "第三方软件源添加成功。"
-    else
-        echo "错误：克隆第三方软件源失败。"
-        exit 1
-    fi
-else
-    echo "第三方软件源目录 $TARGET_DIR 已存在。正在删除并重新克隆。"
-    rm -rf "$IMMWRT_ROOT/$TARGET_DIR"
-    git clone "$REPO_URL" "$IMMWRT_ROOT/$TARGET_DIR"
-fi
+# luci-app-netdata by sirpdboy
+git clone --depth=1  https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata
 
-echo "软件源脚本执行完毕。"
+# luci-app-netspeedtest by sirpdboy
+git clone --depth=1  https://github.com/sirpdboy/luci-app-netspeedtest package/luci-app-netspeedtest
+
+# luci-app-partexp by sirpdboy
+git clone --depth=1  https://github.com/sirpdboy/luci-app-partexp.git package/luci-app-partexp
+
+# luci-app-taskplan by sirpdboy
+git clone --depth=1 https://github.com/sirpdboy/luci-app-taskplan package/luci-app-taskplan
+
+# lucky by gdy666，自带luci-app，sirpdboy也有luci-app但是可能与原作者有冲突
+git clone --depth=1  https://github.com/gdy666/luci-app-lucky.git package/lucky
+#git clone --depth=1 https://github.com/sirpdboy/luci-app-lucky.git package/lucky
+
+# passwall by xiaorouji，
+# 移除 openwrt feeds 自带的核心库
+rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages
+# 移除 openwrt feeds 过时的luci版本
+rm -rf feeds/luci/applications/luci-app-passwall
+git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall package/passwall-luci
+# passwall2 by xiaorouji，
+git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall2 package/passwall2-luci
+
+# golang & luci-app-openlist2 by sbwml
+git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
+git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist
+
+# luci-app-quickfile by sbwml
+git clone --depth=1 https://github.com/sbwml/luci-app-quickfile package/quickfile
+
+# homeproxy immortalwrt官方出品，无luci-app，建议使用https://github.com/VIKINGYFY/homeproxy更新
+git clone --depth=1 https://github.com/VIKINGYFY/homeproxy package/homeproxy
+ #  一个更方便地生成 ImmortalWrt/OpenWrt(23.05.x+) HomeProxy 插件大多数常用配置的脚本。
+ (必备) 通过私密 Gist 或其它可被正常访问的私有链接定制你的专属 rules.sh 配置内容；
+执行以下命令（脚本执行期间会向你索要你的定制配置URL）：bash -c "$(curl -fsSl https://raw.githubusercontent.com/thisIsIan-W/homeproxy-autogen-configuration/refs/heads/main/generate_homeproxy_rules.sh)"
+
+# OpenAppFilter（OAF），自带luci-app
+git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
+
+# frp https://github.com/fatedier/frp，无luci-app，建议使用small-package更新
+
+# luci-app-istorex（向导模式及主体）/luci-app-quickstart（网络向导和首页界面）/luci-app-diskman （磁盘管理），建议使用small-package更新
+
+# momo在 OpenWrt 上使用 sing-box 进行透明代理/nikki在 OpenWrt 上使用 Mihomo 进行透明代理。
+# echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main" >> "feeds.conf.default"
+# echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
+git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-momo package/luci-app-momo
+git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-nikki package/luci-app-nikki
+
+# tailscale，官方推荐luci-app-tailscale by asvow
+sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
+git clone --depth=1 https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
+
+# luci-app-easytier
+git clone https://github.com/EasyTier/luci-app-easytier.git package/luci-app-easytier
+
+# kenzok8/small-package，后备之选，只有上述的ipk地址缺失才会用到。
+git clone --depth=1 https://github.com/kenzok8/small-package small
