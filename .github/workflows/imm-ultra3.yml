@@ -30,13 +30,6 @@ env:
   UPLOAD_WETRANSFER: false
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
-  # --- 设备和目标配置 ---
-  TARGET: qualcommax
-  SUBTARGET: ipq60xx
-  DEVICE_NAME: ipq60xx-generic
-  # --- 初始管理配置 ---
-  LAN_IP: 192.168.31.1
-  ROOT_PASSWORD: password
 
 jobs:
   build:
@@ -70,6 +63,33 @@ jobs:
           # 导出日志函数为环境变量，供子进程使用
           export -f log_info log_success log_warn log_error
           
+      - name: Merge Configuration Files
+        run: |
+          [ -f openwrt/.config ] && rm -f openwrt/.config
+          cat configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config > openwrt/.config
+          log_success "配置文件合并完成: base_ipq60xx.config + base_immwrt.config + Ultra.config"
+
+      - name: Extract Target and Device Info
+        id: target_info
+        run: |
+          cd openwrt
+          # 提取目标平台和子平台
+          TARGET=$(grep '^CONFIG_TARGET_BOARD=.*$' .config | sed 's/.*=//')
+          SUBTARGET=$(grep '^CONFIG_TARGET_SUBTARGET=.*$' .config | sed 's/.*=//')
+          echo "TARGET=$TARGET" >> $GITHUB_ENV
+          echo "SUBTARGET=$SUBTARGET" >> $GITHUB_ENV
+          echo "target_platform=$TARGET/$SUBTARGET" >> $GITHUB_OUTPUT
+          
+          # 提取所有启用的设备名
+          DEVICE_NAMES=$(grep '^CONFIG_TARGET_DEVICE_.*=y$' .config | sed 's/.*DEVICE_\(.*\)=y/\1/' | tr '\n' ' ')
+          if [ -z "$DEVICE_NAMES" ]; then
+            log_error "未在 .config 中找到任何启用的设备。"
+            exit 1
+          fi
+          echo "DEVICE_NAMES=$DEVICE_NAMES" >> $GITHUB_ENV
+          log_success "提取到目标平台: $TARGET/$SUBTARGET"
+          log_success "提取到设备列表: $DEVICE_NAMES"
+
       - name: Cache Toolchain
         uses: actions/cache@v4
         with:
@@ -86,16 +106,10 @@ jobs:
           restore-keys: |
             ${{ env.REPO_BRANCH }}-dl-
 
-      - name: Merge Configuration Files
-        run: |
-          [ -f openwrt/.config ] && rm -f openwrt/.config
-          cat configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config > openwrt/.config
-          log_success "配置文件合并完成: base_ipq60xx.config + base_immwrt.config + Ultra.config"
-
       - name: Run DIY-Part 1 (Initial Settings)
         run: |
           cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P1_SH
+          $GITHUB_WORKSPACE/$DIY_P1_SH .
 
       - name: Update Feeds
         run: cd openwrt && ./scripts/feeds update -a
@@ -113,13 +127,9 @@ jobs:
         id: report
         run: |
           cd openwrt
-          # 生成 defconfig 前的 LUCI 包列表
           $GITHUB_WORKSPACE/scripts/luci_report.sh before
-          # 执行 defconfig，这会根据所有可用包更新 .config
           make defconfig
-          # 生成 defconfig 后的 LUCI 包列表并生成报告
           $GITHUB_WORKSPACE/scripts/luci_report.sh after
-          # 输出报告文件路径，供后续步骤使用
           echo "report_path=$(pwd)/luci_report.md" >> $GITHUB_OUTPUT
 
       - name: Download package
@@ -138,8 +148,6 @@ jobs:
           echo -e "$(nproc) thread compile"
           make -j$(nproc) || make -j1 || make
           echo "status=success" >> $GITHUB_OUTPUT
-          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_OUTPUT
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_OUTPUT
 
       - name: Check space usage
@@ -149,21 +157,21 @@ jobs:
       - name: Upload LUCI Report
         uses: actions/upload-artifact@v4
         with:
-          name: LUCI_report_${{ env.DEVICE_NAME }}${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
+          name: LUCI_report_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
           path: ${{ steps.report.outputs.report_path }}
 
       - name: Upload firmware directory
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
         with:
-          name: OpenWrt_bin${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
+          name: OpenWrt_bin_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
           path: openwrt/bin
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
         with:
-          name: OpenWrt_firmware${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
+          name: OpenWrt_firmware_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
           path: |
             openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*combined*
             openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*sysupgrade*
@@ -175,13 +183,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.DEVICE_NAME }}${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
+          tag_name: ImmortalWrt-${{ env.TARGET }}-${{ env.SUBTARGET }}-${{ steps.compile.outputs.FILE_DATE }}
           body: |
             ## 📦 固件信息
             - **源码分支**: ${{ env.REPO_BRANCH }}
             - **目标平台**: ${{ env.TARGET }}/${{ env.SUBTARGET }}
-            - **默认IP地址**: ${{ env.LAN_IP }}
-            - **默认密码**: ${{ env.ROOT_PASSWORD }}
+            - **构建设备**: ${{ env.DEVICE_NAMES }}
             
             ## 📋 LUCI 软件包变更报告
             请查看下方 `luci_report.md` 文件附件，了解本次构建新增、删除及更新的所有 LUCI 应用。
