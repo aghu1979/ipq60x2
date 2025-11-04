@@ -1,11 +1,11 @@
 # .github/workflows/imm-ultra3.yml
-name: Build ImmortalWrt Ultra for IPQ60xx
+name: 为 IPQ60xx 构建 ImmortalWrt Ultra 固件
 
 on:
   workflow_dispatch:
     inputs:
       ssh:
-        description: 'SSH connection to Actions'
+        description: 'SSH 连接到 Actions'
         required: false
         default: 'false'
   push:
@@ -36,40 +36,40 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: Initialization environment
+      - name: 初始化构建环境
         run: |
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo -E apt-get -qq update
-          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
+          # 使用固定的依赖列表，避免 git.io 链接失效
+          sudo -E apt-get -qq install $(echo "build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils python3-pyelftools python3-setuptools python3-udev rsync swig unzip wget zlib1g-dev file")
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
           sudo timedatectl set-timezone "$TZ"
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
           
-      - name: Clone source code
+      - name: 克隆源代码
         working-directory: /workdir
         run: |
           df -hT $PWD
           git clone $REPO_URL -b $REPO_BRANCH openwrt
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-      - name: Load custom scripts
+      - name: 加载自定义脚本
         run: |
           chmod +x scripts/*.sh
-          # 导出日志函数为环境变量，供子进程使用
-          export -f log_info log_success log_warn log_error
+          # 注意：函数导出已移除，因为每个脚本会自行 source common.sh
           
-      - name: Merge Configuration Files
+      - name: 合并配置文件
         run: |
           [ -f openwrt/.config ] && rm -f openwrt/.config
           cat configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config > openwrt/.config
           log_success "配置文件合并完成: base_ipq60xx.config + base_immwrt.config + Ultra.config"
 
-      - name: Extract Target and Device Info
+      - name: 提取目标和设备信息
         id: target_info
         run: |
           cd openwrt
@@ -90,7 +90,7 @@ jobs:
           log_success "提取到目标平台: $TARGET/$SUBTARGET"
           log_success "提取到设备列表: $DEVICE_NAMES"
 
-      - name: Cache Toolchain
+      - name: 缓存工具链
         uses: actions/cache@v4
         with:
           path: openwrt/staging_dir/toolchain-*
@@ -98,7 +98,7 @@ jobs:
           restore-keys: |
             ${{ env.REPO_BRANCH }}-${{ env.TARGET }}-${{ env.SUBTARGET }}-toolchain-
 
-      - name: Cache Downloads
+      - name: 缓存下载包
         uses: actions/cache@v4
         with:
           path: openwrt/dl
@@ -106,24 +106,24 @@ jobs:
           restore-keys: |
             ${{ env.REPO_BRANCH }}-dl-
 
-      - name: Run DIY-Part 1 (Initial Settings)
+      - name: 运行 DIY Part 1 (初始设置)
         run: |
           cd openwrt
           $GITHUB_WORKSPACE/$DIY_P1_SH .
 
-      - name: Update Feeds
+      - name: 更新 Feeds
         run: cd openwrt && ./scripts/feeds update -a
 
-      - name: Install Feeds
+      - name: 安装 Feeds
         run: cd openwrt && ./scripts/feeds install -a
 
-      - name: Run DIY-Part 2 (Third-party Sources)
+      - name: 运行 DIY Part 2 (第三方源)
         id: repo
         run: |
           cd openwrt
           $GITHUB_WORKSPACE/$DIY_P2_SH
           
-      - name: Generate LUCI Report
+      - name: 生成 LUCI 报告
         id: report
         run: |
           cd openwrt
@@ -132,7 +132,7 @@ jobs:
           $GITHUB_WORKSPACE/scripts/luci_report.sh after
           echo "report_path=$(pwd)/luci_report.md" >> $GITHUB_OUTPUT
 
-      - name: Download package
+      - name: 下载软件包
         id: package
         run: |
           cd openwrt
@@ -141,7 +141,7 @@ jobs:
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
 
-      - name: Build the firmware
+      - name: 编译固件
         id: compile
         run: |
           cd openwrt
@@ -150,24 +150,24 @@ jobs:
           echo "status=success" >> $GITHUB_OUTPUT
           echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_OUTPUT
 
-      - name: Check space usage
+      - name: 检查空间使用
         if: (!cancelled())
         run: df -hT
 
-      - name: Upload LUCI Report
+      - name: 上传 LUCI 报告
         uses: actions/upload-artifact@v4
         with:
           name: LUCI_report_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
           path: ${{ steps.report.outputs.report_path }}
 
-      - name: Upload firmware directory
+      - name: 上传固件目录
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
         with:
           name: OpenWrt_bin_${{ steps.target_info.outputs.target_platform }}_${{ steps.compile.outputs.FILE_DATE }}
           path: openwrt/bin
 
-      - name: Upload firmware
+      - name: 上传固件
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
         with:
@@ -177,7 +177,7 @@ jobs:
             openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*sysupgrade*
             ${{ steps.report.outputs.report_path }}
 
-      - name: Upload firmware to release
+      - name: 发布固件到 Release
         uses: softprops/action-gh-release@v2
         if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
         env:
@@ -197,13 +197,13 @@ jobs:
             openwrt/bin/targets/${{ env.TARGET }}/${{ env.SUBTARGET }}/*sysupgrade*
             ${{ steps.report.outputs.report_path }}
 
-      - name: Delete workflow runs
+      - name: 删除旧的构建记录
         uses: GitRML/delete-workflow-runs@main
         with:
           retain_days: 1
           keep_minimum_runs: 3
 
-      - name: Remove old Releases
+      - name: 删除旧的 Release
         uses: dev-drprasad/delete-older-releases@v0.1.0
         if: env.UPLOAD_RELEASE == 'true'
         with:
