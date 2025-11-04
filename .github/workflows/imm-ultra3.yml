@@ -34,9 +34,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    # 增加内存限制，有助于解决编译问题
-    options:
-      memory: 8GB
     
     env:
       # 编译选项，使用单线程和详细输出，有助于诊断问题
@@ -159,10 +156,16 @@ jobs:
         run: |
           cd openwrt
           echo -e "开始编译固件，使用选项: ${{ env.MAKE_OPTS }}"
+          echo "编译前系统资源状态:"
+          free -h
+          df -h
           
           # 尝试编译，如果失败则输出错误信息
           if ! make ${{ env.MAKE_OPTS }}; then
             echo "编译失败，尝试获取更多错误信息..."
+            echo "编译失败后系统资源状态:"
+            free -h
+            df -h
             # 输出构建日志
             find . -name "*.log" -exec echo "=== {} ===" \; -exec cat {} \;
             exit 1
