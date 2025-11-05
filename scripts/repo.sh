@@ -119,7 +119,7 @@ log_step "预处理：删除可能冲突的官方软件包"
 for NAME in "${PKG_LIST[@]}"; do
     # 查找匹配的目录
     log_info "搜索目录: $NAME"
-    local FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
+    FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
 
     # 删除找到的目录
     if [ -n "$FOUND_DIRS" ]; then
@@ -158,7 +158,7 @@ log_debug "删除 PassWall 相关的官方依赖包"
 for NAME in "${PASSWALL_DEPS[@]}"; do
     # 查找匹配的目录
     log_debug "搜索 PassWall 依赖目录: $NAME"
-    local FOUND_DIRS=$(find ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
+    FOUND_DIRS=$(find ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
 
     # 删除找到的目录
     if [ -n "$FOUND_DIRS" ]; then
@@ -294,7 +294,7 @@ fi
 # 13. golang & luci-app-openlist2 by sbwml
 log_info "添加 Golang 语言支持"
 if [ ! -d "feeds/packages/lang/golang" ]; then
-    git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang"
+    git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
     check_status "克隆 Golang 语言支持失败"
     log_success "Golang 语言支持添加完成"
 else
