@@ -269,7 +269,7 @@ done
 log_info "添加 Small-Package 后备仓库"
 TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
 if [ ! -d "$SMALL_PACKAGE_DIR" ]; then
-    if git clone --depth=1 https://github.com/kenzok8/small-package "$SMALL_PACKAGE_DIR"; then
+    if git clone https://github.com/kenzok8/small-package "$SMALL_PACKAGE_DIR"; then
         log_success "Small-Package 后备仓库添加完成"
         SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
     else
