@@ -34,6 +34,7 @@ COLOR_YELLOW='\033[1;93m'    # 亮黄色 - 用于标题和警告
 COLOR_BLUE='\033[1;94m'      # 亮蓝色 - 用于信息
 COLOR_CYAN='\033[1;96m'      # 亮青色 - 用于列表项
 COLOR_WHITE='\033[1;97m'     # 亮白色 - 用于边框
+COLOR_MAGENTA='\033[1;95m'   # 洋红色 - 用于本地package
 COLOR_RESET='\033[0m'        # 重置颜色
 
 SYMBOL_ADD="${COLOR_GREEN}✅${COLOR_RESET}"
@@ -85,22 +86,32 @@ get_luci_packages() {
 analyze_package_source() {
     local package_name="$1"
     
-    # 检查是否在 package 目录中
+    # 检查是否在本地 package 目录中
     if [ -d "package/$package_name" ]; then
-        echo "package"
+        echo "local"
         return 0
     fi
     
-    # 检查是否在 feeds/luci 目录中
+    # 检查是否在 feeds/luci/applications 目录中
     if [ -d "feeds/luci/applications/$package_name" ]; then
         echo "feeds/luci"
         return 0
     fi
     
-    # 检查是否在 feeds/packages 目录中
-    if find feeds/packages -name "$package_name" -type d 2>/dev/null | grep -q .; then
+    # 检查是否在 feeds/packages 目录中（递归查找）
+    local found_in_feeds=$(find feeds/packages -name "$package_name" -type d 2>/dev/null | head -1)
+    if [ -n "$found_in_feeds" ]; then
         echo "feeds/packages"
         return 0
+    fi
+    
+    # 检查是否在 package/feeds 目录中（安装后的feeds）
+    if [ -d "package/feeds" ]; then
+        local found_in_package_feeds=$(find package/feeds -name "$package_name" -type d 2>/dev/null | head -1)
+        if [ -n "$found_in_package_feeds" ]; then
+            echo "package/feeds"
+            return 0
+        fi
     fi
     
     # 检查是否在 small-package 目录中
@@ -121,14 +132,17 @@ print_list_with_source() {
         while IFS= read -r package; do
             source=$(analyze_package_source "$package")
             case "$source" in
-                "package")
-                    echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_BLUE}[本地package]${COLOR_RESET}"
+                "local")
+                    echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_MAGENTA}[本地package]${COLOR_RESET}"
                     ;;
                 "feeds/luci")
                     echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_GREEN}[feeds/luci]${COLOR_RESET}"
                     ;;
                 "feeds/packages")
                     echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_CYAN}[feeds/packages]${COLOR_RESET}"
+                    ;;
+                "package/feeds")
+                    echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_BLUE}[package/feeds]${COLOR_RESET}"
                     ;;
                 "small-package")
                     echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_YELLOW}[small-package]${COLOR_RESET}"
@@ -208,6 +222,15 @@ if [ ! -f "$BEFORE_FILE" ]; then
     print_section_header "基准配置已成功捕获"
     print_list_with_source "$BEFORE_FILE"
     
+    # 添加来源说明
+    echo -e "\n${COLOR_BLUE}来源说明：${NC}"
+    echo -e "  ${COLOR_MAGENTA}[本地package]${NC} - 手动添加到 package 目录的包"
+    echo -e "  ${COLOR_GREEN}[feeds/luci]${NC} - 来自官方 luci feeds 的包"
+    echo -e "  ${COLOR_CYAN}[feeds/packages]${NC} - 来自官方 packages feeds 的包"
+    echo -e "  ${COLOR_BLUE}[package/feeds]${NC} - 已安装的 feeds 包（位于 package/feeds）"
+    echo -e "  ${COLOR_YELLOW}[small-package]${NC} - 来自 small-package 后备仓库的包"
+    echo -e "  ${COLOR_RED}[未知来源]${NC} - 无法确定来源的包"
+    
     echo -e "\n${COLOR_BLUE}提示: 基准配置已保存到 '$BEFORE_FILE'。"
     echo -e "请运行 'make defconfig' 后再次执行本脚本以生成变更报告。${COLOR_RESET}"
 
@@ -253,14 +276,17 @@ else
         while IFS= read -r package; do
             source=$(analyze_package_source "$package")
             case "$source" in
-                "package")
-                    echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_BLUE}[本地package]${COLOR_RESET}"
+                "local")
+                    echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_MAGENTA}[本地package]${COLOR_RESET}"
                     ;;
                 "feeds/luci")
                     echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_GREEN}[feeds/luci]${COLOR_RESET}"
                     ;;
                 "feeds/packages")
                     echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_CYAN}[feeds/packages]${COLOR_RESET}"
+                    ;;
+                "package/feeds")
+                    echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_BLUE}[package/feeds]${COLOR_RESET}"
                     ;;
                 "small-package")
                     echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_YELLOW}[small-package]${COLOR_RESET}"
