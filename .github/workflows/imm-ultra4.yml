@@ -233,9 +233,29 @@ jobs:
         echo "=== 执行DIY脚本 ==="
         $GITHUB_WORKSPACE/$DIY_SCRIPT $OPENWRT_PATH
         
-        # 执行repo脚本添加第三方源
+        # 合并配置文件并禁用 NSS feeds
+        echo "=== 合并配置文件 ==="
+        cat $GITHUB_WORKSPACE/$CONFIG_BASE $GITHUB_WORKSPACE/$CONFIG_BRANCH $GITHUB_WORKSPACE/$CONFIG_ULTRA > .config
+        
+        # 禁用 NSS feeds
+        echo "=== 禁用 NSS feeds ==="
+        sed -i 's/^# CONFIG_FEED_nss_packages is not set$/CONFIG_FEED_nss_packages=n/' .config
+        echo "已禁用 NSS feeds"
+        
+        # 执行repo脚本添加第三方源（传递配置文件路径）
         echo "=== 添加第三方源 ==="
-        $GITHUB_WORKSPACE/$REPO_SCRIPT
+        CONFIG_FILE="$OPENWRT_PATH/.config" $GITHUB_WORKSPACE/$REPO_SCRIPT
+        
+        # 验证结果
+        echo "=== 验证软件包 ==="
+        echo "配置文件中的 LUCI 包:"
+        grep "^CONFIG_PACKAGE_luci-app.*=y$" .config | sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | sort
+        echo ""
+        echo "package 目录中的 luci-app:"
+        find package -name "luci-app-*" -type d | sed 's|package/||' | sort
+        echo ""
+        echo "small-package 目录中的 luci-app:"
+        find small -name "luci-app-*" -type d 2>/dev/null | sed 's|small/||' | sort || echo "small-package 目录不存在"
 
     # --- 生成LUCI报告 ---
     - name: 生成LUCI报告
