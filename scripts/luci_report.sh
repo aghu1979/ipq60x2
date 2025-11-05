@@ -81,13 +81,62 @@ get_luci_packages() {
     grep "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" | sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | sort
 }
 
-# 打印软件包列表
-print_list() {
+# 分析包的来源
+analyze_package_source() {
+    local package_name="$1"
+    
+    # 检查是否在 package 目录中
+    if [ -d "package/$package_name" ]; then
+        echo "package"
+        return 0
+    fi
+    
+    # 检查是否在 feeds/luci 目录中
+    if [ -d "feeds/luci/applications/$package_name" ]; then
+        echo "feeds/luci"
+        return 0
+    fi
+    
+    # 检查是否在 feeds/packages 目录中
+    if find feeds/packages -name "$package_name" -type d 2>/dev/null | grep -q .; then
+        echo "feeds/packages"
+        return 0
+    fi
+    
+    # 检查是否在 small-package 目录中
+    if [ -d "small/$package_name" ]; then
+        echo "small-package"
+        return 0
+    fi
+    
+    echo "unknown"
+    return 1
+}
+
+# 打印软件包列表（带来源分析）
+print_list_with_source() {
     local file_path="$1"
     
     if [ -s "$file_path" ]; then
         while IFS= read -r package; do
-            echo -e "  ${SYMBOL_BULLET} ${package}"
+            source=$(analyze_package_source "$package")
+            case "$source" in
+                "package")
+                    echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_BLUE}[本地package]${COLOR_RESET}"
+                    ;;
+                "feeds/luci")
+                    echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_GREEN}[feeds/luci]${COLOR_RESET}"
+                    ;;
+                "feeds/packages")
+                    echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_CYAN}[feeds/packages]${COLOR_RESET}"
+                    ;;
+                "small-package")
+                    echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_YELLOW}[small-package]${COLOR_RESET}"
+                    ;;
+                *)
+                    echo -e "  ${SYMBOL_BULLET} ${package} ${COLOR_RED}[未知来源]${COLOR_RESET}"
+                    ;;
+            esac
         done < "$file_path"
     else
         echo -e "  ${COLOR_BLUE}(列表为空)${COLOR_RESET}"
@@ -157,7 +206,7 @@ if [ ! -f "$BEFORE_FILE" ]; then
     check_status "获取 LUCI 软件包列表失败"
     
     print_section_header "基准配置已成功捕获"
-    print_list "$BEFORE_FILE"
+    print_list_with_source "$BEFORE_FILE"
     
     echo -e "\n${COLOR_BLUE}提示: 基准配置已保存到 '$BEFORE_FILE'。"
     echo -e "请运行 'make defconfig' 后再次执行本脚本以生成变更报告。${COLOR_RESET}"
@@ -187,11 +236,11 @@ else
     
     # 1. 基准配置
     print_section_header "1. 基准配置 (make defconfig 前)"
-    print_list "$BEFORE_FILE"
+    print_list_with_source "$BEFORE_FILE"
     
     # 2. 当前配置
     print_section_header "2. 当前配置 (make defconfig 后)"
-    print_list "$AFTER_FILE"
+    print_list_with_source "$AFTER_FILE"
     
     # 3. 变更摘要
     print_section_header "3. 变更摘要"
@@ -202,7 +251,24 @@ else
     if [ -n "$ADDED_PACKAGES" ]; then
         echo -e "${COLOR_GREEN}🎉 新增的软件包 (${COLOR_CYAN}$(echo "$ADDED_PACKAGES" | wc -l)${COLOR_GREEN} 个)${COLOR_RESET}"
         while IFS= read -r package; do
-            echo -e "  ${SYMBOL_ADD} ${package}"
+            source=$(analyze_package_source "$package")
+            case "$source" in
+                "package")
+                    echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_BLUE}[本地package]${COLOR_RESET}"
+                    ;;
+                "feeds/luci")
+                    echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_GREEN}[feeds/luci]${COLOR_RESET}"
+                    ;;
+                "feeds/packages")
+                    echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_CYAN}[feeds/packages]${COLOR_RESET}"
+                    ;;
+                "small-package")
+                    echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_YELLOW}[small-package]${COLOR_RESET}"
+                    ;;
+                *)
+                    echo -e "  ${SYMBOL_ADD} ${package} ${COLOR_RED}[未知来源]${COLOR_RESET}"
+                    ;;
+            esac
         done <<< "$ADDED_PACKAGES"
     else
         echo -e "${COLOR_BLUE}🎉 没有新增的软件包。${COLOR_RESET}"
