@@ -1,0 +1,445 @@
+name: ipq60xx-ImmWrt-Ultra-Build
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  # schedule:
+  #   - cron: 0 16 * * 4
+
+env:
+  # --- 仓库配置 ---
+  REPO_URL: https://github.com/laipeng668/immortalwrt.git
+  REPO_BRANCH: master
+  REPO_SHORT: immwrt
+  
+  # --- 配置文件路径 ---
+  CONFIG_BASE: configs/base_ipq60xx.config
+  CONFIG_BRANCH: configs/base_immwrt.config
+  CONFIG_PRO: configs/Pro.config
+  CONFIG_MAX: configs/Max.config
+  CONFIG_ULTRA: configs/Ultra.config
+  
+  # --- 脚本路径 ---
+  DIY_SCRIPT: scripts/diy.sh
+  REPO_SCRIPT: scripts/repo.sh
+  LUCI_REPORT_SCRIPT: scripts/luci_report.sh
+  
+  # --- 构建配置 ---
+  CLASH_KERNEL: amd64
+  UPLOAD_BIN_DIR: false
+  FIRMWARE_RELEASE: true
+  FIRMWARE_TAG: ipq60xx-immwrt-Ultra
+  TZ: Asia/Shanghai
+  
+  # --- 缓存配置 ---
+  CACHE_TOOLCHAIN: true
+  CACHE_DOWNLOADS: true
+  CACHE_FEEDS: true
+
+jobs:
+  Build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    # --- 初始化环境 ---
+    - name: 初始化环境
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        # 记录开始时间
+        echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
+        
+        # 设置时区
+        sudo timedatectl set-timezone "$TZ"
+        
+        # 更新包列表并安装必要软件
+        sudo apt-get update
+        sudo apt-get -yqq install dos2unix libfuse-dev
+        
+        # 清理不必要的包
+        sudo apt-get -yqq autoremove --purge
+        sudo apt-get -yqq autoclean
+        sudo apt-get -yqq clean
+        
+        # 重新加载系统服务
+        sudo systemctl daemon-reload
+        
+        # 显示系统信息
+        echo "=== 系统信息 ==="
+        uname -a
+        df -h
+        free -h
+        echo "================="
+
+    # --- 检出代码 ---
+    - name: 检出代码
+      uses: actions/checkout@main
+
+    # --- 克隆源代码 ---
+    - name: 克隆源代码
+      run: |
+        # 显示工作空间信息
+        echo "=== 工作空间信息 ==="
+        df -hT $GITHUB_WORKSPACE
+        echo "===================="
+        
+        # 创建OpenWrt目录并设置权限
+        sudo mkdir -p /mnt/openwrt
+        sudo chown -R $(id -u):$(id -g) /mnt/openwrt
+        
+        # 克隆源代码
+        echo "正在克隆源代码..."
+        git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/openwrt
+        cd /mnt/openwrt
+        
+        # 设置环境变量
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
+        echo "OPENWRT_COMMIT=$(git rev-parse HEAD)" >> $GITHUB_ENV
+        
+        # 获取版本信息
+        VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
+        echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
+        
+        # 尝试获取内核版本信息
+        if [ -f "target/linux/generic/kernel-6.12" ]; then
+          VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12)
+          echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
+        else
+          echo "VERSION_KERNEL=未知" >> $GITHUB_ENV
+        fi
+        
+        # 显示源码信息
+        echo "=== 源码信息 ==="
+        echo "仓库: $REPO_URL"
+        echo "分支: $REPO_BRANCH"
+        echo "提交: $OPENWRT_COMMIT"
+        echo "================="
+
+    # --- 生成变量 ---
+    - name: 生成变量
+      run: |
+        cd $OPENWRT_PATH
+        
+        # 合并配置文件
+        echo "=== 合并配置文件 ==="
+        cat $GITHUB_WORKSPACE/$CONFIG_BASE $GITHUB_WORKSPACE/$CONFIG_BRANCH $GITHUB_WORKSPACE/$CONFIG_ULTRA > .config
+        echo "配置文件合并完成"
+        
+        # 生成默认配置
+        make defconfig > /dev/null 2>&1
+        
+        # 提取设备信息
+        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        
+        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+        
+        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+        
+        # 提取所有设备配置
+        echo "=== 设备配置 ==="
+        grep "^CONFIG_TARGET.*DEVICE.*=y" .config | while read line; do
+          device=$(echo $line | sed 's/CONFIG_TARGET_.*_DEVICE_\(.*\)=y/\1/')
+          echo "检测到设备: $device"
+        done
+        echo "==============="
+        
+        # 设置其他变量
+        echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+        echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+
+    # --- 缓存工具链 ---
+    - name: 缓存工具链
+      if: env.CACHE_TOOLCHAIN == 'true'
+      uses: actions/cache@main
+      with:
+        key: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }} ${{ env.CACHE_DATE }}
+        restore-keys: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
+        path: |
+          ${{ env.OPENWRT_PATH }}/.ccache
+          ${{ env.OPENWRT_PATH }}/staging_dir
+
+    # --- 刷新缓存 ---
+    - name: 刷新缓存
+      if: env.CACHE_TOOLCHAIN == 'true'
+      run: |
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          echo "刷新工具链缓存..."
+          find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+              find "$dir" -type f -exec touch {} +
+          done
+          echo "工具链缓存刷新完成"
+        fi
+
+    # --- 缓存下载 ---
+    - name: 缓存下载
+      if: env.CACHE_DOWNLOADS == 'true'
+      uses: actions/cache@main
+      with:
+        key: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-downloads-${{ env.HASH }}
+        restore-keys: |
+          ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-downloads-
+        path: ${{ env.OPENWRT_PATH }}/dl
+
+    # --- 缓存Feeds ---
+    - name: 缓存Feeds
+      if: env.CACHE_FEEDS == 'true'
+      uses: actions/cache@main
+      with:
+        key: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-feeds-${{ env.HASH }}
+        restore-keys: |
+          ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-feeds-
+        path: |
+          ${{ env.OPENWRT_PATH }}/feeds
+          ${{ env.OPENWRT_PATH }}/package/feeds
+
+    # --- 安装Feeds ---
+    - name: 安装Feeds
+      run: |
+        cd $OPENWRT_PATH
+        echo "=== 更新Feeds ==="
+        ./scripts/feeds update -a
+        echo "=== 安装Feeds ==="
+        ./scripts/feeds install -a
+
+    # --- 加载自定义配置 ---
+    - name: 加载自定义配置
+      run: |
+        # 设置脚本执行权限
+        chmod +x $GITHUB_WORKSPACE/$DIY_SCRIPT
+        chmod +x $GITHUB_WORKSPACE/$REPO_SCRIPT
+        chmod +x $GITHUB_WORKSPACE/$LUCI_REPORT_SCRIPT
+        
+        # 执行DIY脚本
+        cd $OPENWRT_PATH
+        echo "=== 执行DIY脚本 ==="
+        $GITHUB_WORKSPACE/$DIY_SCRIPT $OPENWRT_PATH
+        
+        # 执行repo脚本添加第三方源
+        echo "=== 添加第三方源 ==="
+        $GITHUB_WORKSPACE/$REPO_SCRIPT
+
+    # --- 生成LUCI报告 ---
+    - name: 生成LUCI报告
+      run: |
+        cd $OPENWRT_PATH
+        
+        # 首次运行luci_report.sh建立基准
+        echo "=== 建立LUCI基准配置 ==="
+        $GITHUB_WORKSPACE/$LUCI_REPORT_SCRIPT
+        
+        # 重新生成配置
+        echo "=== 重新生成配置 ==="
+        cat $GITHUB_WORKSPACE/$CONFIG_BASE $GITHUB_WORKSPACE/$CONFIG_BRANCH $GITHUB_WORKSPACE/$CONFIG_ULTRA > .config
+        make defconfig
+        
+        # 再次运行luci_report.sh生成报告
+        echo "=== 生成LUCI变更报告 ==="
+        $GITHUB_WORKSPACE/$LUCI_REPORT_SCRIPT
+        
+        # 上传报告
+        if [ -f ".luci_report.txt" ]; then
+          echo "=== LUCI报告内容 ==="
+          cat .luci_report.txt
+          echo "==================="
+        fi
+
+    # --- 下载DL软件包 ---
+    - name: 下载DL软件包
+      run: |
+        cd $OPENWRT_PATH
+        
+        # 合并配置文件
+        cat $GITHUB_WORKSPACE/$CONFIG_BASE $GITHUB_WORKSPACE/$CONFIG_BRANCH $GITHUB_WORKSPACE/$CONFIG_ULTRA > .config
+        
+        # 生成默认配置
+        make defconfig
+        
+        # 下载软件包
+        echo "=== 下载软件包 ==="
+        make download -j$(nproc)
+        echo "=================="
+
+    # --- 编译固件 ---
+    - name: 编译固件
+      id: compile
+      run: |
+        cd $OPENWRT_PATH
+        
+        # 记录编译开始时间
+        COMPILE_START_TIME=$(date +%s)
+        echo "COMPILE_START_TIME=$COMPILE_START_TIME" >> $GITHUB_ENV
+        
+        # 显示编译信息
+        echo "=== 编译信息 ==="
+        echo "线程数: $(nproc)"
+        echo "可用内存: $(free -h | awk '/^Mem:/{print $7}')"
+        echo "可用磁盘: $(df -h $PWD | awk 'NR==2{print $4}')"
+        echo "==============="
+        
+        # 开始编译
+        echo "=== 开始编译固件 ==="
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        
+        # 记录编译结束时间
+        COMPILE_END_TIME=$(date +%s)
+        echo "COMPILE_END_TIME=$COMPILE_END_TIME" >> $GITHUB_ENV
+        
+        # 计算编译耗时
+        COMPILE_DURATION=$((COMPILE_END_TIME - COMPILE_START_TIME))
+        COMPILE_MINUTES=$((COMPILE_DURATION / 60))
+        COMPILE_SECONDS=$((COMPILE_DURATION % 60))
+        echo "编译耗时: ${COMPILE_MINUTES}分${COMPILE_SECONDS}秒"
+        
+        # 设置输出状态
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+
+    # --- 检查空间使用情况 ---
+    - name: 检查空间使用情况
+      if: (!cancelled())
+      run: |
+        echo "=== 空间使用情况 ==="
+        df -hT
+        echo "==================="
+        
+        echo "=== OpenWrt目录大小 ==="
+        du -sh $OPENWRT_PATH
+        echo "======================"
+        
+        echo "=== 编译输出目录大小 ==="
+        du -sh $OPENWRT_PATH/bin
+        echo "========================"
+
+    # --- 上传Bin目录 ---
+    - name: 上传Bin目录
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.SOURCE_REPO }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        path: ${{ env.OPENWRT_PATH }}/bin
+
+    # --- 整理文件 ---
+    - name: 整理文件
+      if: steps.compile.outputs.status == 'success'
+      run: |
+        cd $OPENWRT_PATH/bin/targets/*/*
+        
+        # 复制配置文件
+        cp $OPENWRT_PATH/.config $FIRMWARE_TAG.config
+        
+        # 重命名文件
+        mv config.buildinfo $FIRMWARE_TAG.buildinfo
+        mv immortalwrt-qualcommax-ipq60xx.manifest $FIRMWARE_TAG.manifest
+        
+        # 整理软件包
+        if [ -d "$OPENWRT_PATH/bin/packages" ]; then
+          mkdir -p packages
+          find $OPENWRT_PATH/bin/packages -name "*.apk" -exec cp {} packages/ \;
+          tar -zcf Arthur.Athena.Taiyi.Packages.tar.gz packages
+        fi
+        
+        # 清理不需要的文件
+        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+        
+        # 设置固件路径环境变量
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+        
+        # 列出最终文件
+        echo "=== 最终文件列表 ==="
+        ls -la
+        echo "==================="
+
+    # --- 上传固件到Artifact ---
+    - name: 上传固件到Artifact
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{ env.SOURCE_REPO }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE_PATH }}
+
+    # --- 发布固件 ---
+    - name: 发布固件
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+      uses: ncipollo/release-action@main
+      with:
+        name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+        allowUpdates: true
+        tag: ${{ env.FIRMWARE_TAG }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: ${{ env.FIRMWARE_PATH }}/*
+        body: |
+          **这是 ${{ env.FIRMWARE_TAG }} 平台使用的 OpenWrt 固件**
+          
+          ### 📒 固件信息
+          - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件添加了若干工具，具体详见对应机型的config。
+          - 💻 平台: ${{ env.FIRMWARE_TAG }}
+          - ⚽ 固件源码: ${{ env.REPO_URL }}
+          - 💝 源码分支: ${{ env.REPO_BRANCH }}
+          - 🌐 默认地址: **192.168.111.1**
+          - 🔑 默认密码: password
+          
+          ### 🧊 固件版本
+          - 固件内核版本：**${{ env.VERSION_KERNEL }}**
+          - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
+          - ${{ env.VERSION_INFO }}
+
+    # --- 删除旧缓存 ---
+    - name: 删除旧缓存
+      if: always()
+      run: |
+        # 获取缓存列表并删除
+        echo "=== 清理旧缓存 ==="
+        gh cache list --key ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
+          gh cache delete "$key"
+        done
+        
+        # 输出缓存状态
+        echo "=== 缓存状态 ==="
+        if [ -d "$OPENWRT_PATH/.ccache" ]; then
+          echo "ccache: $(du -sh $OPENWRT_PATH/.ccache | cut -f 1)"
+        else
+          echo "ccache: 未使用缓存"
+        fi
+        
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          echo "staging: $(du -sh $OPENWRT_PATH/staging_dir | cut -f 1)"
+        else
+          echo "staging: 未使用缓存"
+        fi
+        echo "==============="
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    # --- 构建摘要 ---
+    - name: 构建摘要
+      if: always()
+      run: |
+        # 计算总耗时
+        BUILD_END_TIME=$(date +%s)
+        BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
+        BUILD_MINUTES=$((BUILD_DURATION / 60))
+        BUILD_SECONDS=$((BUILD_DURATION % 60))
+        
+        # 输出构建摘要
+        echo "## 构建摘要" >> $GITHUB_STEP_SUMMARY
+        echo "- **状态**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **总耗时**: ${BUILD_MINUTES}分${BUILD_SECONDS}秒" >> $GITHUB_STEP_SUMMARY
+        echo "- **源码仓库**: ${{ env.REPO_URL }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **源码分支**: ${{ env.REPO_BRANCH }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **目标设备**: ${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "- **固件标签**: ${{ env.FIRMWARE_TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **固件路径**: ${{ env.FIRMWARE_PATH }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -n "$COMPILE_START_TIME" ] && [ -n "$COMPILE_END_TIME" ]; then
+            COMPILE_DURATION=$((COMPILE_END_TIME - COMPILE_START_TIME))
+            COMPILE_MINUTES=$((COMPILE_DURATION / 60))
+            COMPILE_SECONDS=$((COMPILE_DURATION % 60))
+            echo "- **编译耗时**: ${COMPILE_MINUTES}分${COMPILE_SECONDS}秒" >> $GITHUB_STEP_SUMMARY
+          fi
+        fi
