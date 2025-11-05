@@ -140,6 +140,19 @@ declare -A PACKAGE_SOURCES=(
     ["golang"]="https://github.com/sbwml/packages_lang_golang.git"
 )
 
+# --- small-package 包映射 ---
+# small-package 中的包可能有不同的命名规则
+declare -A SMALL_PACKAGE_MAPPING=(
+    ["luci-app-istorex"]="luci-app-istorex"
+    ["luci-app-quickstart"]="luci-app-quickstart"
+    ["luci-app-wolplus"]="luci-app-wolplus"
+    ["luci-app-diskman"]="luci-app-diskman"
+    ["luci-app-vlmcsd"]="luci-app-vlmcsd"
+    # 可能的别名
+    ["quickstart"]="luci-app-quickstart"
+    ["vlmcsd"]="luci-app-vlmcsd"
+)
+
 # --- 可能需要从 small-package 后备的包 ---
 # 这些包如果主要源失败，将从 small-package 获取
 SMALL_PACKAGE_BACKUP_LIST=(
@@ -220,6 +233,7 @@ for PKG_NAME in "${!PACKAGE_SOURCES[@]}"; do
     if [ "$PKG_NAME" = "golang" ]; then
         if [ ! -d "feeds/packages/lang/golang" ]; then
             log_info "添加 $PKG_NAME"
+            # 使用完整克隆确保版本兼容性
             if git clone -b 25.x "$PKG_URL" feeds/packages/lang/golang; then
                 log_success "$PKG_NAME 添加完成"
                 SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
@@ -238,7 +252,8 @@ for PKG_NAME in "${!PACKAGE_SOURCES[@]}"; do
     # 处理普通包
     if [ ! -d "$TARGET_DIR" ]; then
         log_info "添加 $PKG_NAME"
-        if git clone --depth=1 "$PKG_URL" "$TARGET_DIR"; then
+        # 使用完整克隆确保包的完整性
+        if git clone "$PKG_URL" "$TARGET_DIR"; then
             # 特殊处理需要设置权限的包
             if [ "$PKG_NAME" = "luci-app-athena-led" ]; then
                 chmod +x "$TARGET_DIR/root/etc/init.d/athena_led"
@@ -265,10 +280,11 @@ for PKG_NAME in "${!PACKAGE_SOURCES[@]}"; do
     fi
 done
 
-# 3. 添加 small-package 后备仓库
+# 3. 添加 small-package 后备仓库（完整克隆）
 log_info "添加 Small-Package 后备仓库"
 TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
 if [ ! -d "$SMALL_PACKAGE_DIR" ]; then
+    # 使用完整克隆以确保所有包都可用
     if git clone https://github.com/kenzok8/small-package "$SMALL_PACKAGE_DIR"; then
         log_success "Small-Package 后备仓库添加完成"
         SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
@@ -298,12 +314,38 @@ for PKG_NAME in $REQUIRED_LUCI_PACKAGES; do
     # 检查是否在 small-package 后备列表中
     if [[ " ${SMALL_PACKAGE_BACKUP_LIST[*]} " =~ " ${PKG_NAME} " ]]; then
         TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-        SOURCE_DIR="$SMALL_PACKAGE_DIR/$PKG_NAME"
+        
+        # 尝试多个可能的源目录
+        SOURCE_DIRS=()
+        
+        # 添加映射的目录
+        if [[ -n "${SMALL_PACKAGE_MAPPING[$PKG_NAME]}" ]]; then
+            SOURCE_DIRS+=("$SMALL_PACKAGE_DIR/${SMALL_PACKAGE_MAPPING[$PKG_NAME]}")
+        fi
+        
+        # 添加直接命名的目录
+        SOURCE_DIRS+=("$SMALL_PACKAGE_DIR/$PKG_NAME")
+        
+        # 尝试不带 luci-app- 前缀的目录
+        if [[ "$PKG_NAME" == luci-app-* ]]; then
+            BASE_NAME=${PKG_NAME#luci-app-}
+            SOURCE_DIRS+=("$SMALL_PACKAGE_DIR/$BASE_NAME")
+        fi
+        
+        # 尝试查找匹配的目录
+        FOUND_SOURCE=""
+        for SOURCE_DIR in "${SOURCE_DIRS[@]}"; do
+            if [ -d "$SOURCE_DIR" ]; then
+                FOUND_SOURCE="$SOURCE_DIR"
+                break
+            fi
+        done
+        
         TARGET_DIR="$PACKAGE_DIR/$PKG_NAME"
         
-        if [ -d "$SOURCE_DIR" ] && [ ! -d "$TARGET_DIR" ]; then
-            log_info "从 small-package 后备添加: $PKG_NAME"
-            if cp -r "$SOURCE_DIR" "$TARGET_DIR"; then
+        if [ -n "$FOUND_SOURCE" ] && [ ! -d "$TARGET_DIR" ]; then
+            log_info "从 small-package 后备添加: $PKG_NAME (来源: $FOUND_SOURCE)"
+            if cp -r "$FOUND_SOURCE" "$TARGET_DIR"; then
                 log_success "包 $PKG_NAME 从 small-package 添加成功"
                 SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
                 BACKUP_USED_PACKAGES="$BACKUP_USED_PACKAGES $PKG_NAME"
@@ -316,6 +358,11 @@ for PKG_NAME in $REQUIRED_LUCI_PACKAGES; do
             log_debug "包 $PKG_NAME 已存在"
         else
             log_warn "包 $PKG_NAME 在 small-package 中不存在"
+            # 列出 small-package 中的相关目录以便调试
+            if [ -d "$SMALL_PACKAGE_DIR" ]; then
+                log_debug "small-package 中相关的目录:"
+                find "$SMALL_PACKAGE_DIR" -name "*${PKG_NAME#luci-app-}*" -type d | head -5
+            fi
             FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
             FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST $PKG_NAME"
         fi
