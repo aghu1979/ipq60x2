@@ -13,8 +13,19 @@
 #   3. 再次运行此脚本，它将自动生成一份包含变更详情的完整报告。
 #
 # 注意: 请在 OpenWrt/ImmortalWrt 源码根目录下运行此脚本。
-# 作者: Mary 日期：20251104
+# 作者: Mary
+# 日期：20251104
 # ==============================================================================
+
+# 导入通用函数
+source "$(dirname "$0")/common.sh"
+
+# --- 配置变量 ---
+# 文件路径定义
+CONFIG_FILE=".config"
+BEFORE_FILE=".luci_report_before.cfg"
+AFTER_FILE=".luci_report_after.cfg"
+REPORT_FILE=".luci_report.txt"
 
 # --- 颜色和符号定义 ---
 COLOR_RED='\033[1;91m'       # 亮红色 - 用于移除项
@@ -31,21 +42,16 @@ SYMBOL_BULLET="${COLOR_CYAN}▸${COLOR_RESET}"
 SYMBOL_INFO="${COLOR_BLUE}ℹ${COLOR_RESET}"
 SYMBOL_REPORT="${COLOR_YELLOW}📄${COLOR_RESET}"
 
-# --- 文件路径定义 ---
-CONFIG_FILE=".config"
-BEFORE_FILE=".luci_report_before.cfg"
-AFTER_FILE=".luci_report_after.cfg"
+# 记录开始时间
+SCRIPT_START_TIME=$(date +%s)
 
 # --- 检查依赖 ---
 if ! command -v comm &> /dev/null; then
-    echo -e "${COLOR_RED}错误: 'comm' 命令未找到，此脚本无法运行。${COLOR_RESET}"
+    log_error "'comm' 命令未找到，此脚本无法运行。"
     exit 1
 fi
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo -e "${COLOR_RED}错误: 未找到 '$CONFIG_FILE' 文件。请确保在源码根目录下运行此脚本。${COLOR_RESET}"
-    exit 1
-fi
+check_file_exists "$CONFIG_FILE" "未找到 '$CONFIG_FILE' 文件。请确保在源码根目录下运行此脚本。"
 
 # --- 核心函数 ---
 
@@ -87,13 +93,67 @@ print_list() {
     fi
 }
 
+# 生成报告文件
+generate_report_file() {
+    local before_file="$1"
+    local after_file="$2"
+    local report_file="$3"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    {
+        echo "LUCI 软件包变更报告 - $timestamp"
+        echo "=================================="
+        echo ""
+        echo "1. 基准配置 (make defconfig 前)"
+        echo "-------------------------------"
+        if [ -s "$before_file" ]; then
+            cat "$before_file"
+        else
+            echo "(列表为空)"
+        fi
+        echo ""
+        echo "2. 当前配置 (make defconfig 后)"
+        echo "-------------------------------"
+        if [ -s "$after_file" ]; then
+            cat "$after_file"
+        else
+            echo "(列表为空)"
+        fi
+        echo ""
+        echo "3. 变更摘要"
+        echo "----------"
+        
+        ADDED_PACKAGES=$(comm -13 "$before_file" "$after_file")
+        REMOVED_PACKAGES=$(comm -23 "$before_file" "$after_file")
+        
+        if [ -n "$ADDED_PACKAGES" ]; then
+            echo "新增的软件包 ($(echo "$ADDED_PACKAGES" | wc -l) 个)"
+            echo "$ADDED_PACKAGES"
+        else
+            echo "没有新增的软件包。"
+        fi
+        
+        echo ""
+        
+        if [ -n "$REMOVED_PACKAGES" ]; then
+            echo "移除的软件包 ($(echo "$REMOVED_PACKAGES" | wc -l) 个)"
+            echo "$REMOVED_PACKAGES"
+        else
+            echo "没有移除的软件包。"
+        fi
+    } > "$report_file"
+    
+    log_info "报告已保存到: $report_file"
+}
+
 # --- 主逻辑 ---
 
 # 第一次运行 (make defconfig 之前)
 if [ ! -f "$BEFORE_FILE" ]; then
-    echo -e "${SYMBOL_INFO} ${COLOR_YELLOW}首次运行：正在建立 LUCI 软件包的基准配置...${COLOR_RESET}"
+    log_step "首次运行：建立 LUCI 软件包的基准配置"
     
     get_luci_packages > "$BEFORE_FILE"
+    check_status "获取 LUCI 软件包列表失败"
     
     print_section_header "基准配置已成功捕获"
     print_list "$BEFORE_FILE"
@@ -103,9 +163,10 @@ if [ ! -f "$BEFORE_FILE" ]; then
 
 # 第二次运行 (make defconfig 之后)
 else
-    echo -e "${SYMBOL_REPORT} ${COLOR_YELLOW}正在生成 LUCI 软件包变更报告...${COLOR_RESET}"
+    log_step "生成 LUCI 软件包变更报告"
     
     get_luci_packages > "$AFTER_FILE"
+    check_status "获取当前 LUCI 软件包列表失败"
     
     # 检查配置是否真的发生了变化
     if cmp -s "$BEFORE_FILE" "$AFTER_FILE"; then
@@ -159,6 +220,9 @@ else
     
     echo -e "\n${COLOR_WHITE}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
     
+    # 生成报告文件
+    generate_report_file "$BEFORE_FILE" "$AFTER_FILE" "$REPORT_FILE"
+    
     # 清理临时文件
     echo -e "\n${COLOR_BLUE}报告生成完毕。是否删除临时文件以便下次使用? (y/n)${COLOR_RESET}"
     read -r -p "> " choice
@@ -172,5 +236,9 @@ else
         ;;
     esac
 fi
+
+# 记录结束时间并生成摘要
+SCRIPT_END_TIME=$(date +%s)
+generate_summary "LUCI 软件包变更报告生成" "$SCRIPT_START_TIME" "$SCRIPT_END_TIME" "成功"
 
 echo -e "\n${COLOR_CYAN}脚本执行完毕。${COLOR_RESET}"
