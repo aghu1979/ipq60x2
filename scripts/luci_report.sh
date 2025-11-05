@@ -77,7 +77,7 @@ print_section_header() {
 
 # 获取并排序 LUCI 软件包列表
 get_luci_packages() {
-    # 只提取非注释行、以=y结尾的LUCI包
+    # 只提取非注释行、以=y结尾的LUCI应用包，排除_INCLUDE_选项和注释掉的包
     grep "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" | sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | sort
 }
 
