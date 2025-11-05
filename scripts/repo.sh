@@ -288,6 +288,11 @@ if [ ! -d "$SMALL_PACKAGE_DIR" ]; then
     if git clone https://github.com/kenzok8/small-package "$SMALL_PACKAGE_DIR"; then
         log_success "Small-Package 后备仓库添加完成"
         SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
+        
+        # 调试：列出 small-package 中的所有 luci-app
+        log_info "small-package 中的 luci-app 列表："
+        find "$SMALL_PACKAGE_DIR" -name "luci-app-*" -type d | sed 's|.*/||' | sort
+        
     else
         log_error "克隆 Small-Package 后备仓库失败"
         FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
@@ -303,6 +308,9 @@ log_step "检查并处理缺失的包"
 
 # 获取配置文件中需要的 LUCI 包
 REQUIRED_LUCI_PACKAGES=$(grep "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" 2>/dev/null | sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | sort)
+
+log_info "配置文件中需要的 LUCI 包："
+echo "$REQUIRED_LUCI_PACKAGES"
 
 # 检查每个需要的包是否存在
 for PKG_NAME in $REQUIRED_LUCI_PACKAGES; do
@@ -361,7 +369,9 @@ for PKG_NAME in $REQUIRED_LUCI_PACKAGES; do
             # 列出 small-package 中的相关目录以便调试
             if [ -d "$SMALL_PACKAGE_DIR" ]; then
                 log_debug "small-package 中相关的目录:"
-                find "$SMALL_PACKAGE_DIR" -name "*${PKG_NAME#luci-app-}*" -type d | head -5
+                find "$SMALL_PACKAGE_DIR" -iname "*${PKG_NAME#luci-app-}*" -type d | head -10
+                log_debug "small-package 完整目录列表:"
+                find "$SMALL_PACKAGE_DIR" -maxdepth 1 -type d | grep luci-app | head -10
             fi
             FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
             FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST $PKG_NAME"
