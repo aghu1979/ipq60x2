@@ -24,6 +24,8 @@ PACKAGE_DIR="package"
 SMALL_PACKAGE_DIR="small"
 # Feeds配置文件
 FEEDS_CONF="feeds.conf.default"
+# 配置文件路径
+CONFIG_FILE="${CONFIG_FILE:-.config}"
 
 # --- 需要检查删除的官方Feeds软件包名称列表 ---
 # 这些软件包可能与第三方源冲突，需要检查并删除官方版本
@@ -70,6 +72,16 @@ PKG_LIST=(
     "luci-app-passwall"
     "passwall2"
     "luci-app-passwall2"
+    "istorex"
+    "luci-app-istorex"
+    "quickstart"
+    "luci-app-quickstart"
+    "wolplus"
+    "luci-app-wolplus"
+    "diskman"
+    "luci-app-diskman"
+    "vlmcsd"
+    "luci-app-vlmcsd"
 )
 
 # --- PassWall 相关依赖包列表 ---
@@ -97,6 +109,47 @@ PASSWALL_DEPS=(
     "shadow-tls"
 )
 
+# --- 第三方软件源映射 ---
+# 定义每个包的首选源和后备源
+declare -A PACKAGE_SOURCES=(
+    # 主要软件源
+    ["luci-app-athena-led"]="https://github.com/NONGFAH/luci-app-athena-led.git"
+    ["passwall-packages"]="https://github.com/xiaorouji/openwrt-passwall-packages.git"
+    ["passwall-luci"]="https://github.com/xiaorouji/openwrt-passwall.git"
+    ["passwall2-luci"]="https://github.com/xiaorouji/openwrt-passwall2.git"
+    ["luci-app-adguardhome"]="https://github.com/sirpdboy/luci-app-adguardhome.git"
+    ["ddns-go"]="https://github.com/sirpdboy/luci-app-ddns-go.git"
+    ["luci-app-netdata"]="https://github.com/sirpdboy/luci-app-netdata.git"
+    ["luci-app-netspeedtest"]="https://github.com/sirpdboy/luci-app-netspeedtest.git"
+    ["luci-app-partexp"]="https://github.com/sirpdboy/luci-app-partexp.git"
+    ["luci-app-taskplan"]="https://github.com/sirpdboy/luci-app-taskplan.git"
+    ["lucky"]="https://github.com/gdy666/luci-app-lucky.git"
+    ["luci-app-easytier"]="https://github.com/EasyTier/luci-app-easytier.git"
+    ["homeproxy"]="https://github.com/VIKINGYFY/homeproxy.git"
+    ["openlist"]="https://github.com/sbwml/luci-app-openlist2.git"
+    ["mosdns"]="https://github.com/sbwml/luci-app-mosdns.git"
+    ["quickfile"]="https://github.com/sbwml/luci-app-quickfile.git"
+    ["luci-app-momo"]="https://github.com/nikkinikki-org/OpenWrt-momo.git"
+    ["luci-app-nikki"]="https://github.com/nikkinikki-org/OpenWrt-nikki.git"
+    ["OpenAppFilter"]="https://github.com/destan19/OpenAppFilter.git"
+    ["luci-app-openclash"]="https://github.com/vernesong/OpenClash.git"
+    ["luci-app-tailscale"]="https://github.com/asvow/luci-app-tailscale.git"
+    ["luci-app-vnt"]="https://github.com/lmq8267/luci-app-vnt.git"
+    
+    # 特殊处理的包
+    ["golang"]="https://github.com/sbwml/packages_lang_golang.git"
+)
+
+# --- 可能需要从 small-package 后备的包 ---
+# 这些包如果主要源失败，将从 small-package 获取
+SMALL_PACKAGE_BACKUP_LIST=(
+    "luci-app-istorex"
+    "luci-app-quickstart"
+    "luci-app-wolplus"
+    "luci-app-diskman"
+    "luci-app-vlmcsd"
+)
+
 # 记录开始时间
 SCRIPT_START_TIME=$(date +%s)
 
@@ -105,6 +158,7 @@ TOTAL_PACKAGES=0
 SUCCESS_PACKAGES=0
 FAILED_PACKAGES=0
 FAILED_PACKAGE_LIST=""
+BACKUP_USED_PACKAGES=""
 
 log_step "开始执行 OpenWrt 第三方软件源集成"
 
@@ -142,426 +196,76 @@ log_success "预处理完成，已删除可能冲突的官方软件包"
 
 # --- 添加第三方软件源 ---
 
-# 1. 京东云雅典娜LED控制
-log_info "添加京东云雅典娜LED控制插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-athena-led" ]; then
-    if git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led "$PACKAGE_DIR/luci-app-athena-led"; then
-        # 设置执行权限
-        chmod +x "$PACKAGE_DIR/luci-app-athena-led/root/etc/init.d/athena_led"
-        chmod +x "$PACKAGE_DIR/luci-app-athena-led/root/usr/sbin/athena-led"
-        log_success "京东云雅典娜LED控制插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆京东云雅典娜LED控制插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-athena-led"
-    fi
-else
-    log_info "京东云雅典娜LED控制插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 2. PassWall by xiaorouji
-log_info "添加 PassWall 插件"
-
-# 删除 PassWall 相关的官方依赖包
-log_debug "删除 PassWall 相关的官方依赖包"
+# 1. 处理 PassWall 依赖
+log_info "处理 PassWall 相关依赖"
 for NAME in "${PASSWALL_DEPS[@]}"; do
-    # 查找匹配的目录
     log_debug "搜索 PassWall 依赖目录: $NAME"
     FOUND_DIRS=$(find ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
-
-    # 删除找到的目录
     if [ -n "$FOUND_DIRS" ]; then
         while read -r DIR; do
             log_debug "删除 PassWall 依赖目录: $DIR"
             rm -rf "$DIR"
         done <<< "$FOUND_DIRS"
-    else
-        log_debug "未找到 PassWall 依赖目录: $NAME"
     fi
 done
 
-# 添加 PassWall 核心包
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/passwall-packages" ]; then
-    if git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall-packages "$PACKAGE_DIR/passwall-packages"; then
-        log_success "PassWall 核心包添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 PassWall 核心包失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST passwall-packages"
+# 2. 添加主要软件源
+log_step "添加主要第三方软件源"
+for PKG_NAME in "${!PACKAGE_SOURCES[@]}"; do
+    TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
+    PKG_URL="${PACKAGE_SOURCES[$PKG_NAME]}"
+    TARGET_DIR="$PACKAGE_DIR/$PKG_NAME"
+    
+    # 特殊处理 golang
+    if [ "$PKG_NAME" = "golang" ]; then
+        if [ ! -d "feeds/packages/lang/golang" ]; then
+            log_info "添加 $PKG_NAME"
+            if git clone -b 25.x "$PKG_URL" feeds/packages/lang/golang; then
+                log_success "$PKG_NAME 添加完成"
+                SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
+            else
+                log_error "$PKG_NAME 添加失败"
+                FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
+                FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST $PKG_NAME"
+            fi
+        else
+            log_info "$PKG_NAME 已存在，跳过"
+            SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
+        fi
+        continue
     fi
-else
-    log_info "PassWall 核心包已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 添加 PassWall LUCI 应用
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/passwall-luci" ]; then
-    if git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall "$PACKAGE_DIR/passwall-luci"; then
-        log_success "PassWall LUCI 应用添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
+    
+    # 处理普通包
+    if [ ! -d "$TARGET_DIR" ]; then
+        log_info "添加 $PKG_NAME"
+        if git clone --depth=1 "$PKG_URL" "$TARGET_DIR"; then
+            # 特殊处理需要设置权限的包
+            if [ "$PKG_NAME" = "luci-app-athena-led" ]; then
+                chmod +x "$TARGET_DIR/root/etc/init.d/athena_led"
+                chmod +x "$TARGET_DIR/root/usr/sbin/athena-led"
+            fi
+            
+            # 特殊处理需要修改 Makefile 的包
+            if [ "$PKG_NAME" = "luci-app-tailscale" ]; then
+                if [ -f "feeds/packages/net/tailscale/Makefile" ]; then
+                    sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
+                fi
+            fi
+            
+            log_success "$PKG_NAME 添加完成"
+            SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
+        else
+            log_error "$PKG_NAME 添加失败"
+            FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
+            FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST $PKG_NAME"
+        fi
     else
-        log_error "克隆 PassWall LUCI 应用失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST passwall-luci"
-    fi
-else
-    log_info "PassWall LUCI 应用已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 3. PassWall2 by xiaorouji
-log_info "添加 PassWall2 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/passwall2-luci" ]; then
-    if git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall2 "$PACKAGE_DIR/passwall2-luci"; then
-        log_success "PassWall2 插件添加完成"
+        log_info "$PKG_NAME 已存在，跳过"
         SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 PassWall2 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST passwall2-luci"
     fi
-else
-    log_info "PassWall2 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
+done
 
-# 4. AdGuardHome by sirpdboy
-log_info "添加 AdGuardHome 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-adguardhome" ]; then
-    if git clone --depth=1 https://github.com/sirpdboy/luci-app-adguardhome.git "$PACKAGE_DIR/luci-app-adguardhome"; then
-        log_success "AdGuardHome 插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 AdGuardHome 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-adguardhome"
-    fi
-else
-    log_info "AdGuardHome 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 5. ddns-go by sirpdboy
-log_info "添加 ddns-go 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/ddns-go" ]; then
-    if git clone --depth=1 https://github.com/sirpdboy/luci-app-ddns-go.git "$PACKAGE_DIR/ddns-go"; then
-        log_success "ddns-go 插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 ddns-go 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST ddns-go"
-    fi
-else
-    log_info "ddns-go 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 6. luci-app-netdata by sirpdboy
-log_info "添加 netdata 监控插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-netdata" ]; then
-    if git clone --depth=1 https://github.com/sirpdboy/luci-app-netdata "$PACKAGE_DIR/luci-app-netdata"; then
-        log_success "netdata 监控插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 netdata 监控插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-netdata"
-    fi
-else
-    log_info "netdata 监控插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 7. luci-app-netspeedtest by sirpdboy
-log_info "添加 网速测试插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-netspeedtest" ]; then
-    if git clone https://github.com/sirpdboy/luci-app-netspeedtest "$PACKAGE_DIR/luci-app-netspeedtest"; then
-        log_success "网速测试插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 网速测试插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-netspeedtest"
-    fi
-else
-    log_info "网速测试插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 8. luci-app-partexp by sirpdboy
-log_info "添加 分区管理插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-partexp" ]; then
-    if git clone --depth=1 https://github.com/sirpdboy/luci-app-partexp.git "$PACKAGE_DIR/luci-app-partexp"; then
-        log_success "分区管理插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 分区管理插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-partexp"
-    fi
-else
-    log_info "分区管理插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 9. luci-app-taskplan by sirpdboy
-log_info "添加 任务计划插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-taskplan" ]; then
-    if git clone https://github.com/sirpdboy/luci-app-taskplan "$PACKAGE_DIR/luci-app-taskplan"; then
-        log_success "任务计划插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 任务计划插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-taskplan"
-    fi
-else
-    log_info "任务计划插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 10. lucky by gdy666
-log_info "添加 Lucky 端口管理工具"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/lucky" ]; then
-    if git clone --depth=1 https://github.com/gdy666/luci-app-lucky.git "$PACKAGE_DIR/lucky"; then
-        log_success "Lucky 端口管理工具添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 Lucky 端口管理工具失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST lucky"
-    fi
-else
-    log_info "Lucky 端口管理工具已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 11. luci-app-easytier
-log_info "添加 EasyTier 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-easytier" ]; then
-    if git clone https://github.com/EasyTier/luci-app-easytier.git "$PACKAGE_DIR/luci-app-easytier"; then
-        log_success "EasyTier 插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 EasyTier 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-easytier"
-    fi
-else
-    log_info "EasyTier 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 12. homeproxy by VIKINGYFY
-log_info "添加 HomeProxy 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/homeproxy" ]; then
-    if git clone --depth=1 https://github.com/VIKINGYFY/homeproxy "$PACKAGE_DIR/homeproxy"; then
-        log_success "HomeProxy 插件添加完成"
-        log_info "提示: 可以使用以下命令生成 HomeProxy 配置:"
-        log_info "bash -c \"\$(curl -fsSl https://raw.githubusercontent.com/thisIsIan-W/homeproxy-autogen-configuration/refs/heads/main/generate_homeproxy_rules.sh)\""
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 HomeProxy 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST homeproxy"
-    fi
-else
-    log_info "HomeProxy 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 13. golang & luci-app-openlist2 by sbwml
-log_info "添加 Golang 语言支持"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "feeds/packages/lang/golang" ]; then
-    if git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang; then
-        log_success "Golang 语言支持添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 Golang 语言支持失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST golang"
-    fi
-else
-    log_info "Golang 语言支持已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-log_info "添加 OpenList2 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/openlist" ]; then
-    if git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 "$PACKAGE_DIR/openlist"; then
-        log_success "OpenList2 插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 OpenList2 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST openlist"
-    fi
-else
-    log_info "OpenList2 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 14. luci-app-mosdns by sbwml
-log_info "添加 MosDNS 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/mosdns" ]; then
-    if git clone -b v5 https://github.com/sbwml/luci-app-mosdns "$PACKAGE_DIR/mosdns"; then
-        log_success "MosDNS 插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 MosDNS 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST mosdns"
-    fi
-else
-    log_info "MosDNS 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 15. luci-app-quickfile by sbwml
-log_info "添加 QuickFile 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/quickfile" ]; then
-    if git clone --depth=1 https://github.com/sbwml/luci-app-quickfile "$PACKAGE_DIR/quickfile"; then
-        log_success "QuickFile 插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 QuickFile 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST quickfile"
-    fi
-else
-    log_info "QuickFile 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 16. momo 和 nikki 透明代理
-log_info "添加 Momo 透明代理插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-momo" ]; then
-    if git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-momo "$PACKAGE_DIR/luci-app-momo"; then
-        log_success "Momo 透明代理插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 Momo 透明代理插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-momo"
-    fi
-else
-    log_info "Momo 透明代理插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-log_info "添加 Nikki 透明代理插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-nikki" ]; then
-    if git clone --depth=1 https://github.com/nikkinikki-org/OpenWrt-nikki "$PACKAGE_DIR/luci-app-nikki"; then
-        log_success "Nikki 透明代理插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 Nikki 透明代理插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-nikki"
-    fi
-else
-    log_info "Nikki 透明代理插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 17. OpenAppFilter (OAF)
-log_info "添加 OpenAppFilter 应用过滤插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/OpenAppFilter" ]; then
-    if git clone https://github.com/destan19/OpenAppFilter.git "$PACKAGE_DIR/OpenAppFilter"; then
-        log_success "OpenAppFilter 应用过滤插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 OpenAppFilter 应用过滤插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST OpenAppFilter"
-    fi
-else
-    log_info "OpenAppFilter 应用过滤插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 18. luci-app-openclash by vernesong
-log_info "添加 OpenClash 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-openclash" ]; then
-    if git clone -b dev https://github.com/vernesong/OpenClash.git "$PACKAGE_DIR/luci-app-openclash"; then
-        log_success "OpenClash 插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 OpenClash 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-openclash"
-    fi
-else
-    log_info "OpenClash 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 19. tailscale
-log_info "添加 Tailscale 插件"
-# 修改 Tailscale Makefile
-if [ -f "feeds/packages/net/tailscale/Makefile" ]; then
-    log_debug "修改 Tailscale Makefile"
-    sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
-fi
-
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-tailscale" ]; then
-    if git clone --depth=1 https://github.com/asvow/luci-app-tailscale "$PACKAGE_DIR/luci-app-tailscale"; then
-        log_success "Tailscale 插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 Tailscale 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-tailscale"
-    fi
-else
-    log_info "Tailscale 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 20. vnt
-log_info "添加 VNT 插件"
-TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
-if [ ! -d "$PACKAGE_DIR/luci-app-vnt" ]; then
-    if git clone https://github.com/lmq8267/luci-app-vnt.git "$PACKAGE_DIR/luci-app-vnt"; then
-        log_success "VNT 插件添加完成"
-        SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-    else
-        log_error "克隆 VNT 插件失败"
-        FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
-        FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST luci-app-vnt"
-    fi
-else
-    log_info "VNT 插件已存在，跳过"
-    SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
-fi
-
-# 21. kenzok8/small-package 后备仓库
+# 3. 添加 small-package 后备仓库
 log_info "添加 Small-Package 后备仓库"
 TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
 if [ ! -d "$SMALL_PACKAGE_DIR" ]; then
@@ -577,6 +281,46 @@ else
     log_info "Small-Package 后备仓库已存在，跳过"
     SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
 fi
+
+# 4. 智能后备处理
+log_step "检查并处理缺失的包"
+
+# 获取配置文件中需要的 LUCI 包
+REQUIRED_LUCI_PACKAGES=$(grep "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" 2>/dev/null | sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | sort)
+
+# 检查每个需要的包是否存在
+for PKG_NAME in $REQUIRED_LUCI_PACKAGES; do
+    # 跳过已经在主要源中处理的包
+    if [[ -n "${PACKAGE_SOURCES[$PKG_NAME]}" ]]; then
+        continue
+    fi
+    
+    # 检查是否在 small-package 后备列表中
+    if [[ " ${SMALL_PACKAGE_BACKUP_LIST[*]} " =~ " ${PKG_NAME} " ]]; then
+        TOTAL_PACKAGES=$((TOTAL_PACKAGES + 1))
+        SOURCE_DIR="$SMALL_PACKAGE_DIR/$PKG_NAME"
+        TARGET_DIR="$PACKAGE_DIR/$PKG_NAME"
+        
+        if [ -d "$SOURCE_DIR" ] && [ ! -d "$TARGET_DIR" ]; then
+            log_info "从 small-package 后备添加: $PKG_NAME"
+            if cp -r "$SOURCE_DIR" "$TARGET_DIR"; then
+                log_success "包 $PKG_NAME 从 small-package 添加成功"
+                SUCCESS_PACKAGES=$((SUCCESS_PACKAGES + 1))
+                BACKUP_USED_PACKAGES="$BACKUP_USED_PACKAGES $PKG_NAME"
+            else
+                log_error "包 $PKG_NAME 从 small-package 添加失败"
+                FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
+                FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST $PKG_NAME"
+            fi
+        elif [ -d "$TARGET_DIR" ]; then
+            log_debug "包 $PKG_NAME 已存在"
+        else
+            log_warn "包 $PKG_NAME 在 small-package 中不存在"
+            FAILED_PACKAGES=$((FAILED_PACKAGES + 1))
+            FAILED_PACKAGE_LIST="$FAILED_PACKAGE_LIST $PKG_NAME"
+        fi
+    fi
+done
 
 # --- 更新 feeds ---
 log_step "更新软件源"
@@ -607,6 +351,10 @@ echo -e "添加失败: ${RED}${FAILED_PACKAGES}${NC}"
 
 if [ $FAILED_PACKAGES -gt 0 ]; then
     echo -e "失败软件包列表: ${RED}${FAILED_PACKAGE_LIST}${NC}"
+fi
+
+if [ -n "$BACKUP_USED_PACKAGES" ]; then
+    echo -e "使用 small-package 后备的包: ${YELLOW}${BACKUP_USED_PACKAGES}${NC}"
 fi
 
 echo -e "开始时间: $(date -d @$SCRIPT_START_TIME '+%Y-%m-%d %H:%M:%S')"
