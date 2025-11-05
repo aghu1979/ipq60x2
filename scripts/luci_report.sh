@@ -77,9 +77,12 @@ print_section_header() {
 }
 
 # 获取并排序 LUCI 软件包列表
+# 只获取真正的 LUCI 应用包，过滤掉配置选项
 get_luci_packages() {
-    # 只提取非注释行、以=y结尾的LUCI应用包，排除_INCLUDE_选项和注释掉的包
-    grep "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" | sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | sort
+    grep "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" | \
+    grep -v "_INCLUDE_" | \
+    sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
+    sort
 }
 
 # 分析包的来源
@@ -304,34 +307,3 @@ else
     
     if [ -n "$REMOVED_PACKAGES" ]; then
         echo -e "${COLOR_RED}🗑️  移除的软件包 (${COLOR_CYAN}$(echo "$REMOVED_PACKAGES" | wc -l)${COLOR_RED} 个)${COLOR_RESET}"
-        while IFS= read -r package; do
-            echo -e "  ${SYMBOL_REMOVE} ${package}"
-        done <<< "$REMOVED_PACKAGES"
-    else
-        echo -e "${COLOR_BLUE}🗑️  没有移除的软件包。${COLOR_RESET}"
-    fi
-    
-    echo -e "\n${COLOR_WHITE}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
-    
-    # 生成报告文件
-    generate_report_file "$BEFORE_FILE" "$AFTER_FILE" "$REPORT_FILE"
-    
-    # 清理临时文件
-    echo -e "\n${COLOR_BLUE}报告生成完毕。是否删除临时文件以便下次使用? (y/n)${COLOR_RESET}"
-    read -r -p "> " choice
-    case "$choice" in
-      y|Y )
-        rm -f "$BEFORE_FILE" "$AFTER_FILE"
-        echo -e "${COLOR_GREEN}✅ 临时文件已删除，已准备好进行下一次对比。${COLOR_RESET}"
-        ;;
-      * )
-        echo -e "${COLOR_YELLOW}⚠️  临时文件已保留。如需重新开始，请手动删除 '$BEFORE_FILE'。${COLOR_RESET}"
-        ;;
-    esac
-fi
-
-# 记录结束时间并生成摘要
-SCRIPT_END_TIME=$(date +%s)
-generate_summary "LUCI 软件包变更报告生成" "$SCRIPT_START_TIME" "$SCRIPT_END_TIME" "成功"
-
-echo -e "\n${COLOR_CYAN}脚本执行完毕。${COLOR_RESET}"
