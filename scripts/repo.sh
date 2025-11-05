@@ -25,6 +25,78 @@ SMALL_PACKAGE_DIR="small"
 # Feeds配置文件
 FEEDS_CONF="feeds.conf.default"
 
+# --- 需要检查删除的官方Feeds软件包名称列表 ---
+# 这些软件包可能与第三方源冲突，需要检查并删除官方版本
+PKG_LIST=(
+    "lucky"
+    "luci-app-lucky"
+    "homeproxy"
+    "luci-app-homeproxy"
+    "nikki"
+    "luci-app-nikki"
+    "momo"
+    "luci-app-momo"
+    "adguardhome"
+    "luci-app-adguardhome"
+    "ddns-go"
+    "luci-app-ddns-go"
+    "netdata"
+    "luci-app-netdata"
+    "netspeedtest"
+    "luci-app-netspeedtest"
+    "partexp"
+    "luci-app-partexp"
+    "taskplan"
+    "luci-app-taskplan"
+    "easytier"
+    "luci-app-easytier"
+    "openlist2"
+    "luci-app-openlist2"
+    "mosdns"
+    "luci-app-mosdns"
+    "quickfile"
+    "luci-app-quickfile"
+    "OpenAppFilter"
+    "luci-app-oaf"
+    "openclash"
+    "luci-app-openclash"
+    "tailscale"
+    "luci-app-tailscale"
+    "vnt"
+    "luci-app-vnt"
+    "athena-led"
+    "luci-app-athena-led"
+    "passwall"
+    "luci-app-passwall"
+    "passwall2"
+    "luci-app-passwall2"
+)
+
+# --- PassWall 相关依赖包列表 ---
+# 这些是 PassWall 的依赖包，需要删除官方版本
+PASSWALL_DEPS=(
+    "xray-core"
+    "v2ray-geodata"
+    "sing-box"
+    "chinadns-ng"
+    "dns2socks"
+    "hysteria"
+    "ipt2socks"
+    "microsocks"
+    "naiveproxy"
+    "shadowsocks-libev"
+    "shadowsocks-rust"
+    "shadowsocksr-libev"
+    "simple-obfs"
+    "tcping"
+    "trojan-plus"
+    "tuic-client"
+    "v2ray-plugin"
+    "xray-plugin"
+    "geoview"
+    "shadow-tls"
+)
+
 # 记录开始时间
 SCRIPT_START_TIME=$(date +%s)
 
@@ -39,6 +111,28 @@ fi
 # 创建必要的目录
 safe_mkdir "$PACKAGE_DIR"
 safe_mkdir "$SMALL_PACKAGE_DIR"
+
+# --- 预处理：删除可能冲突的官方软件包 ---
+log_step "预处理：删除可能冲突的官方软件包"
+
+# 删除本地可能存在的不同名称的软件包
+for NAME in "${PKG_LIST[@]}"; do
+    # 查找匹配的目录
+    log_info "搜索目录: $NAME"
+    local FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
+
+    # 删除找到的目录
+    if [ -n "$FOUND_DIRS" ]; then
+        while read -r DIR; do
+            log_info "删除目录: $DIR"
+            rm -rf "$DIR"
+        done <<< "$FOUND_DIRS"
+    else
+        log_debug "未找到目录: $NAME"
+    fi
+done
+
+log_success "预处理完成，已删除可能冲突的官方软件包"
 
 # --- 添加第三方软件源 ---
 
@@ -58,9 +152,24 @@ fi
 
 # 2. PassWall by xiaorouji
 log_info "添加 PassWall 插件"
-# 移除 openwrt feeds 自带的核心库
-log_debug "移除 openwrt feeds 自带的核心库"
-rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+
+# 删除 PassWall 相关的官方依赖包
+log_debug "删除 PassWall 相关的官方依赖包"
+for NAME in "${PASSWALL_DEPS[@]}"; do
+    # 查找匹配的目录
+    log_debug "搜索 PassWall 依赖目录: $NAME"
+    local FOUND_DIRS=$(find ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
+
+    # 删除找到的目录
+    if [ -n "$FOUND_DIRS" ]; then
+        while read -r DIR; do
+            log_debug "删除 PassWall 依赖目录: $DIR"
+            rm -rf "$DIR"
+        done <<< "$FOUND_DIRS"
+    else
+        log_debug "未找到 PassWall 依赖目录: $NAME"
+    fi
+done
 
 # 添加 PassWall 核心包
 if [ ! -d "$PACKAGE_DIR/passwall-packages" ]; then
@@ -70,10 +179,6 @@ if [ ! -d "$PACKAGE_DIR/passwall-packages" ]; then
 else
     log_info "PassWall 核心包已存在，跳过"
 fi
-
-# 移除 openwrt feeds 过时的luci版本
-log_debug "移除 openwrt feeds 过时的luci版本"
-rm -rf feeds/luci/applications/luci-app-passwall
 
 # 添加 PassWall LUCI 应用
 if [ ! -d "$PACKAGE_DIR/passwall-luci" ]; then
@@ -189,7 +294,7 @@ fi
 # 13. golang & luci-app-openlist2 by sbwml
 log_info "添加 Golang 语言支持"
 if [ ! -d "feeds/packages/lang/golang" ]; then
-    git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
+    git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang"
     check_status "克隆 Golang 语言支持失败"
     log_success "Golang 语言支持添加完成"
 else
