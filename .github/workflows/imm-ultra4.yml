@@ -1,4 +1,4 @@
-name: ipq60xx-ImmWrt-Ultra-Build4
+name: ipq60xx-ImmWrt-Ultra-Build
 
 on:
   workflow_dispatch:
@@ -320,9 +320,13 @@ jobs:
         du -sh $OPENWRT_PATH
         echo "======================"
         
-        echo "=== 编译输出目录大小 ==="
-        du -sh $OPENWRT_PATH/bin
-        echo "========================"
+        if [ -d "$OPENWRT_PATH/bin" ]; then
+          echo "=== 编译输出目录大小 ==="
+          du -sh $OPENWRT_PATH/bin
+          echo "========================"
+        else
+          echo "=== 编译输出目录不存在 ==="
+        fi
 
     # --- 上传Bin目录 ---
     - name: 上传Bin目录
@@ -430,11 +434,37 @@ jobs:
       run: |
         # 计算总耗时
         BUILD_END_TIME=$(date +%s)
-        BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
-        BUILD_MINUTES=$((BUILD_DURATION / 60))
-        BUILD_SECONDS=$((BUILD_DURATION % 60))
+        if [ -n "$BUILD_START_TIME" ]; then
+          BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
+          BUILD_MINUTES=$((BUILD_DURATION / 60))
+          BUILD_SECONDS=$((BUILD_DURATION % 60))
+        else
+          BUILD_MINUTES=0
+          BUILD_SECONDS=0
+        fi
         
-        # 输出构建摘要
+        # 输出构建摘要到控制台
+        echo "=== 构建摘要 ==="
+        echo "状态: ${{ job.status }}"
+        echo "总耗时: ${BUILD_MINUTES}分${BUILD_SECONDS}秒"
+        echo "源码仓库: ${{ env.REPO_URL }}"
+        echo "源码分支: ${{ env.REPO_BRANCH }}"
+        echo "目标设备: ${{ env.DEVICE_TARGET }}/${{ env.DEVICE_SUBTARGET }}"
+        
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "固件标签: ${{ env.FIRMWARE_TAG }}"
+          echo "固件路径: ${{ env.FIRMWARE_PATH }}"
+          
+          if [ -n "$COMPILE_START_TIME" ] && [ -n "$COMPILE_END_TIME" ]; then
+            COMPILE_DURATION=$((COMPILE_END_TIME - COMPILE_START_TIME))
+            COMPILE_MINUTES=$((COMPILE_DURATION / 60))
+            COMPILE_SECONDS=$((COMPILE_DURATION % 60))
+            echo "编译耗时: ${COMPILE_MINUTES}分${COMPILE_SECONDS}秒"
+          fi
+        fi
+        echo "==============="
+        
+        # 输出构建摘要到 GitHub Actions
         echo "## 构建摘要" >> $GITHUB_STEP_SUMMARY
         echo "- **状态**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
         echo "- **总耗时**: ${BUILD_MINUTES}分${BUILD_SECONDS}秒" >> $GITHUB_STEP_SUMMARY
