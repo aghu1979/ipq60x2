@@ -1,4 +1,4 @@
-name: ipq60xx-ImmWrt-Ultra-Build4
+name: ipq60xx-ImmWrt-Ultra-Build
 
 on:
   workflow_dispatch:
@@ -138,13 +138,23 @@ jobs:
         DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
         
-        # 提取所有设备配置
+        # 提取所有设备配置（排除ROOTFS）
         echo "=== 设备配置 ==="
-        grep "^CONFIG_TARGET.*DEVICE.*=y" .config | while read line; do
+        grep "^CONFIG_TARGET.*DEVICE.*=y" .config | grep -v "ROOTFS" | while read line; do
           device=$(echo $line | sed 's/CONFIG_TARGET_.*_DEVICE_\(.*\)=y/\1/')
           echo "检测到设备: $device"
         done
         echo "==============="
+        
+        # 提取第一个非ROOTFS设备作为主设备
+        PRIMARY_DEVICE=$(grep "^CONFIG_TARGET.*DEVICE.*=y" .config | grep -v "ROOTFS" | head -1 | sed 's/CONFIG_TARGET_.*_DEVICE_\(.*\)=y/\1/')
+        if [ -n "$PRIMARY_DEVICE" ]; then
+          echo "PRIMARY_DEVICE=$PRIMARY_DEVICE" >> $GITHUB_ENV
+          echo "主设备: $PRIMARY_DEVICE"
+        else
+          echo "PRIMARY_DEVICE=unknown" >> $GITHUB_ENV
+          echo "警告: 未找到有效设备配置"
+        fi
         
         # 设置其他变量
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
