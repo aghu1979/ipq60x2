@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# DIY Part 1: OpenWrt 初始配置脚本
+# DIY Part: OpenWrt 初始配置脚本
 #
 # 功能:
 #   修改默认IP、主机名、编译署名、主题样式等
@@ -35,7 +35,7 @@ OPENWRT_ROOT_DIR="$1"
 # 记录开始时间
 SCRIPT_START_TIME=$(date +%s)
 
-log_step "开始执行 DIY Part 1: 初始配置"
+log_step "开始执行 DIY Part 初始配置"
 
 # 检查参数
 check_var_not_empty "OPENWRT_ROOT_DIR" "$OPENWRT_ROOT_DIR" "未指定 OpenWrt 根目录！"
@@ -148,6 +148,6 @@ fi
 
 # 记录结束时间并生成摘要
 SCRIPT_END_TIME=$(date +%s)
-generate_summary "DIY Part 1 初始配置" "$SCRIPT_START_TIME" "$SCRIPT_END_TIME" "成功"
+generate_summary "DIY Part 初始配置" "$SCRIPT_START_TIME" "$SCRIPT_END_TIME" "成功"
 
-log_success "DIY Part 1 执行完成。"
+log_success "DIY Part 初始配置执行完成。"
