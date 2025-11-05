@@ -80,3 +80,6 @@ git clone https://github.com/lmq8267/luci-app-vnt.git package/luci-app-vnt
 
 # kenzok8/small-package，后备之选，只有上述的ipk地址缺失才会用到。
 git clone --depth=1 https://github.com/kenzok8/small-package small
+
+./scripts/feeds update -a
+./scripts/feeds install -a
