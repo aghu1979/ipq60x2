@@ -15,6 +15,8 @@ env:
   CONFIG_FILE: configs/immu.config
   TZ: Asia/Shanghai
   CACHE_VERSION: v1
+  # 定义脚本路径环境变量，便于统一管理
+  SCRIPTS_DIR: ${{ github.workspace }}/scripts
 
 jobs:
   build:
@@ -139,21 +141,67 @@ jobs:
           df -h
           lsblk
           
+      - name: 检查仓库文件结构
+        run: |
+          echo "📁 检查仓库文件结构..."
+          echo "当前工作目录: $(pwd)"
+          echo "GitHub workspace: ${{ github.workspace }}"
+          echo "REPO_PATH: ${{ env.REPO_PATH }}"
+          echo "SCRIPTS_DIR: ${{ env.SCRIPTS_DIR }}"
+          echo ""
+          echo "📋 仓库根目录内容:"
+          ls -la "${{ github.workspace }}"
+          echo ""
+          echo "📋 检查configs目录:"
+          if [ -d "${{ github.workspace }}/configs" ]; then
+            ls -la "${{ github.workspace }}/configs"
+          else
+            echo "❌ configs目录不存在"
+          fi
+          echo ""
+          echo "📋 检查scripts目录:"
+          if [ -d "${{ env.SCRIPTS_DIR }}" ]; then
+            ls -la "${{ env.SCRIPTS_DIR }}"
+          else
+            echo "❌ scripts目录不存在"
+          fi
+          echo ""
+          echo "📋 检查REPO_PATH目录:"
+          if [ -d "${{ env.REPO_PATH }}" ]; then
+            echo "✅ REPO_PATH存在"
+            ls -la "${{ env.REPO_PATH }}" | head -10
+          else
+            echo "❌ REPO_PATH不存在"
+          fi
+          
       - name: 设置企业级缓存变量
         id: cache
         run: |
+          # 检查必要文件是否存在
+          echo "🔍 检查必要文件..."
+          
           if [ ! -f "$CONFIG_FILE" ]; then
             echo "❌ 配置文件 $CONFIG_FILE 不存在"
+            echo "当前目录: $(pwd)"
+            echo "查找所有config文件:"
+            find "${{ github.workspace }}" -name "*.config" -type f
             exit 1
+          else
+            echo "✅ 配置文件 $CONFIG_FILE 存在"
           fi
           
-          if [ ! -f "scripts/repo.sh" ]; then
-            echo "❌ 脚本文件 scripts/repo.sh 不存在"
+          if [ ! -f "${{ env.SCRIPTS_DIR }}/repo.sh" ]; then
+            echo "❌ 脚本文件 ${{ env.SCRIPTS_DIR }}/repo.sh 不存在"
+            echo "当前目录: $(pwd)"
+            echo "查找所有repo.sh文件:"
+            find "${{ github.workspace }}" -name "repo.sh" -type f
             exit 1
+          else
+            echo "✅ 脚本文件 ${{ env.SCRIPTS_DIR }}/repo.sh 存在"
           fi
           
           CONFIG_HASH=$(sha256sum "$CONFIG_FILE" | cut -d' ' -f1)
-          REPO_HASH=$(sha256sum scripts/repo.sh | cut -d' ' -f1)
+          REPO_HASH=$(sha256sum "${{ env.SCRIPTS_DIR }}/repo.sh" | cut -d' ' -f1)
           CACHE_DATE=$(date +%Y%m%d)
           
           IMMORTALWRT_CACHE_KEY="cache-${{ env.CACHE_VERSION }}-immwrt-${CONFIG_HASH}-${REPO_HASH}-${CACHE_DATE}"
@@ -272,8 +320,30 @@ jobs:
       - name: 更新第三方源
         run: |
           echo "🔄 更新第三方源..."
+          echo "当前工作目录: $(pwd)"
+          echo "REPO_PATH: ${{ env.REPO_PATH }}"
+          echo "SCRIPTS_DIR: ${{ env.SCRIPTS_DIR }}"
+          echo "repo.sh路径: ${{ env.SCRIPTS_DIR }}/repo.sh"
+          
+          # 检查脚本是否存在
+          if [ ! -f "${{ env.SCRIPTS_DIR }}/repo.sh" ]; then
+            echo "❌ 脚本文件不存在: ${{ env.SCRIPTS_DIR }}/repo.sh"
+            echo "查找所有repo.sh文件:"
+            find "${{ github.workspace }}" -name "repo.sh" -type f
+            exit 1
+          fi
+          
+          # 检查脚本是否可执行
+          if [ ! -x "${{ env.SCRIPTS_DIR }}/repo.sh" ]; then
+            echo "🔧 添加执行权限..."
+            chmod +x "${{ env.SCRIPTS_DIR }}/repo.sh"
+          fi
+          
+          # 进入源码目录并执行脚本
           cd "${{ env.REPO_PATH }}"
-          bash ../scripts/repo.sh
+          echo "进入目录: $(pwd)"
+          echo "执行脚本: ${{ env.SCRIPTS_DIR }}/repo.sh"
+          bash "${{ env.SCRIPTS_DIR }}/repo.sh"
           echo "✅ 第三方源更新完成"
           
       - name: 更新 Feeds
@@ -295,10 +365,15 @@ jobs:
         run: |
           echo "📄 生成 LUCI 报告..."
           cd "${{ env.REPO_PATH }}"
-          bash ../scripts/luci_report.sh
+          if [ -f "${{ env.SCRIPTS_DIR }}/luci_report.sh" ]; then
+            bash "${{ env.SCRIPTS_DIR }}/luci_report.sh"
+          else
+            echo "⚠️ luci_report.sh 不存在，跳过报告生成"
+          fi
           echo "✅ 报告生成完成"
           
       - name: 上传 LUCI 报告
+        if: hashFiles('${{ env.REPO_PATH }}/.luci_report.txt') != ''
         uses: actions/upload-artifact@v4
         with:
           name: luci-report-${{ github.run_number }}
@@ -322,7 +397,15 @@ jobs:
           echo "THREADS=$THREADS" >> "$GITHUB_ENV"
           echo "🔧 使用 $THREADS 线程编译"
           echo "CONFIG_CCACHE=y" >> .config
-          bash ../scripts/diy.sh
+          
+          # 检查并执行diy.sh
+          if [ -f "${{ env.SCRIPTS_DIR }}/diy.sh" ]; then
+            echo "🔧 执行DIY脚本..."
+            bash "${{ env.SCRIPTS_DIR }}/diy.sh"
+          else
+            echo "⚠️ diy.sh 不存在，跳过"
+          fi
+          
           echo "✅ 编译环境配置完成"
           
       - name: 编译固件
