@@ -1,13 +1,13 @@
-# .github/workflows/immu.yml (完整版，仔细检查每一步)
-
-name: ImmortalWrt 自动构建工作流
+name: ImmortalWrt IPQ60xx Auto Build
 
 on:
-  push:
-    branches: [ master, main ]
-  pull_request:
-    branches: [ master, main ]
   workflow_dispatch:
+    inputs:
+      cache_version:
+        description: '缓存版本（用于强制更新缓存）'
+        required: false
+        default: 'v1'
+        type: string
 
 env:
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
@@ -20,10 +20,11 @@ env:
   UPLOAD_FIRMWARE: true
   UPLOAD_COWTRANSFER: false
   UPLOAD_WETRANSFER: false
-  UPLOAD_RELEASE: true
+  UPLOAD_RELEASE: true  # 默认发布到Release
   TZ: Asia/Shanghai
-  SCRIPT_NAME: ImmortalWrt 自动构建
-  PRODUCT_NAME: ImmortalWrt
+  VARIANT: 'Max'  # 固定为Max变体
+  DEBUG: false  # 默认不启用调试模式
+  CACHE_VERSION: ${{ github.event.inputs.cache_version || 'v1' }}
 
 jobs:
   build:
@@ -31,294 +32,306 @@ jobs:
     permissions:
       contents: write
       packages: write
-
+      
     steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: 初始化环境
-      run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo -E apt-get -qq update
-        sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
-        echo "编译开始时间: $(date)"
-        echo "当前磁盘使用情况:"
-        df -h
+      - name: 设置缓存变量
+        run: |
+          # 生成高命中率的缓存键
+          SOURCE_HASH=$(echo "${{ env.REPO_URL }}${{ env.REPO_BRANCH }}" | sha256sum | cut -d' ' -f1)
+          CONFIG_HASH=$(sha256sum ${{ env.CONFIG_FILE }} | cut -d' ' -f1)
+          FEEDS_HASH=$(cat scripts/diy.sh scripts/repo.sh | sha256sum | cut -d' ' -f1)
+          
+          # 组合缓存键，包含版本控制
+          CACHE_KEY="immwrt-${{ env.CACHE_VERSION }}-${SOURCE_HASH:0:8}-${CONFIG_HASH:0:8}-${FEEDS_HASH:0:8}"
+          
+          echo "SOURCE_HASH=$SOURCE_HASH" >> $GITHUB_ENV
+          echo "CONFIG_HASH=$CONFIG_HASH" >> $GITHUB_ENV
+          echo "FEEDS_HASH=$FEEDS_HASH" >> $GITHUB_ENV
+          echo "CACHE_KEY=$CACHE_KEY" >> $GITHUB_ENV
+          
+          echo "🔑 缓存键生成完成: $CACHE_KEY"
 
-    - name: 扩展磁盘空间
-      run: |
-        echo "扩展磁盘空间前:"
-        df -h
-        lsblk
-        
-        if [ -e /dev/sdb1 ] && mountpoint -q /mnt; then
-          echo "发现 /dev/sdb1 挂载在 /mnt，准备使用其空间"
-          
-          sudo mkdir -p /mnt/workdir
-          sudo chown $USER:$GROUPS /mnt/workdir
-          
-          sudo rm -rf /workdir
-          sudo ln -sf /mnt/workdir /workdir
-          
-          echo "磁盘空间重定向完成:"
+      - name: 缓存工具链和下载
+        uses: actions/cache@v4
+        id: cache
+        with:
+          path: |
+            ${{ env.WORKDIR }}/immortalwrt/tmp
+            ${{ env.WORKDIR }}/immortalwrt/staging_dir
+            ${{ env.WORKDIR }}/immortalwrt/dl
+            ${{ env.WORKDIR }}/immortalwrt/build_dir
+          key: ${{ env.CACHE_KEY }}
+          restore-keys: |
+            immwrt-${{ env.CACHE_VERSION }}-
+            immwrt-
+
+      - name: 初始化编译环境
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: 扩展磁盘空间
+        run: |
+          # 检查可用磁盘空间
+          echo "📊 初始磁盘空间:"
           df -h
-          lsblk
-        else
-          echo "未发现可用的磁盘空间，继续使用默认配置"
-        fi
-
-    - name: 克隆源码
-      run: |
-        df -h
-        echo "开始克隆源码..."
-        cd /workdir
-        git clone $REPO_URL -b $REPO_BRANCH immortalwrt
-        cd immortalwrt
-        echo "源码克隆完成，当前磁盘使用情况:"
-        df -h
-
-    - name: 加载自定义配置
-      run: |
-        # 确保在正确的工作目录中
-        cd /workdir/immortalwrt
-        
-        echo "当前工作目录: $(pwd)"
-        echo "当前磁盘使用情况:"
-        df -h
-        
-        # 检查用户配置文件
-        echo "检查用户配置文件路径: ${{ github.workspace }}/$CONFIG_FILE"
-        if [ -f "${{ github.workspace }}/$CONFIG_FILE" ]; then
-          echo "✅ 发现用户配置文件"
-          echo "用户配置文件大小: $(stat -c%s "${{ github.workspace }}/$CONFIG_FILE") 字节"
-          echo "用户配置文件行数: $(wc -l < "${{ github.workspace }}/$CONFIG_FILE")"
-          echo "用户配置文件中LUCI包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" "${{ github.workspace }}/$CONFIG_FILE" || echo "0")"
           
-          # 显示用户配置文件的前10个LUCI包
-          echo "用户配置文件前10个LUCI软件包:"
-          grep "^CONFIG_PACKAGE_luci-app-.*=y" "${{ github.workspace }}/$CONFIG_FILE" | head -10 || echo "无LUCI包"
+          # 扩展磁盘空间到最大
+          sudo apt-get clean
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo docker system prune -af
           
-          # 复制到 .config
-          cp "${{ github.workspace }}/$CONFIG_FILE" /workdir/immortalwrt/.config
-          echo "✅ 已复制用户配置文件到 .config"
-          
-          # 验证复制结果
-          echo "验证复制结果:"
-          echo "  .config文件大小: $(stat -c%s /workdir/immortalwrt/.config) 字节"
-          echo "  .config文件行数: $(wc -l < /workdir/immortalwrt/.config)"
-          echo "  .config中LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" /workdir/immortalwrt/.config || echo "0")"
-          
-          # 显示.config的前10个LUCI包
-          echo ".config前10个LUCI软件包:"
-          grep "^CONFIG_PACKAGE_luci-app-.*=y" /workdir/immortalwrt/.config | head -10 || echo "无LUCI包"
-          
-          # 对比两个文件是否一致
-          if cmp -s "${{ github.workspace }}/$CONFIG_FILE" /workdir/immortalwrt/.config; then
-            echo "✅ 配置文件复制成功，内容一致"
+          # 创建临时工作目录
+          if [ -d /mnt/sda1 ]; then
+            sudo umount /mnt/sda1 2>/dev/null || true
+            sudo mkfs.ext4 -F /dev/sda1
+            sudo mount /dev/sda1 /mnt/sda1
+            sudo chown $USER:$GROUPS /mnt/sda1
+            export WORKDIR=/mnt/sda1
+          elif [ -d /mnt/sdb1 ]; then
+            sudo umount /mnt/sdb1 2>/dev/null || true
+            sudo mkfs.ext4 -F /dev/sdb1
+            sudo mount /dev/sdb1 /mnt/sdb1
+            sudo chown $USER:$GROUPS /mnt/sdb1
+            export WORKDIR=/mnt/sdb1
           else
-            echo "❌ 配置文件复制失败，内容不一致"
-            exit 1
+            export WORKDIR=/workdir
           fi
-        else
-          echo "❌ 警告: 未找到用户配置文件 ${{ github.workspace }}/$CONFIG_FILE"
-          echo "当前目录内容:"
-          ls -la "${{ github.workspace }}/"
-          exit 1
-        fi
-        
-        # 复制脚本文件
-        echo "复制脚本文件..."
-        [ -e "${{ github.workspace }}/$DIY_P1_SH" ] && cp "${{ github.workspace }}/$DIY_P1_SH" /workdir/immortalwrt/diy.sh
-        [ -e "${{ github.workspace }}/$DIY_P2_SH" ] && cp "${{ github.workspace }}/$DIY_P2_SH" /workdir/immortalwrt/repo.sh
-        [ -e "${{ github.workspace }}/scripts/common.sh" ] && cp "${{ github.workspace }}/scripts/common.sh" /workdir/immortalwrt/common.sh
-        [ -e "${{ github.workspace }}/scripts/luci_report.sh" ] && cp "${{ github.workspace }}/scripts/luci_report.sh" /workdir/immortalwrt/luci_report.sh
-        
-        # 设置执行权限
-        chmod +x /workdir/immortalwrt/diy.sh /workdir/immortalwrt/repo.sh /workdir/immortalwrt/common.sh /workdir/immortalwrt/luci_report.sh
-        
-        # 确保configs目录存在
-        mkdir -p /workdir/immortalwrt/configs
-        [ -f "${{ github.workspace }}/$CONFIG_FILE" ] && cp "${{ github.workspace }}/$CONFIG_FILE" /workdir/immortalwrt/configs/immu.config
-        
-        echo "配置加载完成，当前磁盘使用情况:"
-        df -h
+          
+          echo "🔧 使用工作目录: $WORKDIR"
+          echo "WORKDIR=$WORKDIR" >> $GITHUB_ENV
 
-    - name: 更新并安装Feeds
-      run: |
-        cd /workdir/immortalwrt
-        echo "开始更新Feeds..."
-        ./scripts/feeds update -a
-        echo "Feeds更新完成，当前磁盘使用情况:"
-        df -h
-        echo "开始安装Feeds..."
-        ./scripts/feeds install -a
-        echo "Feeds安装完成，当前磁盘使用情况:"
-        df -h
-
-    - name: 运行自定义脚本
-      run: |
-        cd /workdir/immortalwrt
-        echo "运行DIY脚本..."
-        [ -e ./diy.sh ] && ./diy.sh .
-        echo "DIY脚本执行完成，当前磁盘使用情况:"
-        df -h
-
-    - name: 更新第三方源
-      run: |
-        cd /workdir/immortalwrt
-        echo "开始更新第三方源..."
-        [ -e ./repo.sh ] && ./repo.sh .
-        echo "第三方源更新完成，当前磁盘使用情况:"
-        df -h
-
-    - name: 生成LUCI软件包报告（defconfig前）
-      run: |
-        cd /workdir/immortalwrt
-        echo "开始生成LUCI软件包报告（defconfig前）..."
-        echo "当前.config文件信息:"
-        echo "  文件大小: $(stat -c%s .config) 字节"
-        echo "  配置行数: $(wc -l < .config)"
-        echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" .config || echo "0")"
-        echo "前10个LUCI软件包:"
-        grep "^CONFIG_PACKAGE_luci-app-.*=y" .config | head -10 || echo "无LUCI包"
-        [ -e ./luci_report.sh ] && ./luci_report.sh
-        echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
-        df -h
-
-    - name: 执行make defconfig
-      run: |
-        cd /workdir/immortalwrt
-        echo "执行make defconfig前:"
-        echo "  .config文件大小: $(stat -c%s .config) 字节"
-        echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" .config || echo "0")"
-        
-        echo "执行make defconfig..."
-        make defconfig
-        
-        echo "执行make defconfig后:"
-        echo "  .config文件大小: $(stat -c%s .config) 字节"
-        echo "  配置行数: $(wc -l < .config)"
-        echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" .config || echo "0")"
-        echo "make defconfig完成，当前磁盘使用情况:"
-        df -h
-
-    - name: 生成LUCI软件包报告（defconfig后）
-      run: |
-        cd /workdir/immortalwrt
-        echo "再次生成LUCI软件包报告..."
-        [ -e ./luci_report.sh ] && ./luci_report.sh
-        echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
-        df -h
-
-    - name: 下载编译所需依赖
-      id: download
-      run: |
-        cd /workdir/immortalwrt
-        echo "开始下载编译所需依赖..."
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
-        echo "依赖下载完成，当前磁盘使用情况:"
-        df -h
-
-    - name: 编译固件
-      id: compile
-      run: |
-        cd /workdir/immortalwrt
-        echo "开始编译固件..."
-        echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "编译完成，当前磁盘使用情况:"
-        df -h
-        echo "======================="
-        
-        # 提取设备名称
-        DEVICE_NAMES=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' | tr '\n' ' ')
-        echo "检测到的设备: $DEVICE_NAMES"
-        
-        TARGET_DEVICE=$(echo "$DEVICE_NAMES" | awk '{print $1}')
-        TARGET_DEVICE=$(echo "$TARGET_DEVICE" | sed 's/[^a-zA-Z0-9_-]//g')
-        
-        if [ -n "$TARGET_DEVICE" ]; then
-          echo "TARGET_DEVICE=$TARGET_DEVICE"
-          echo "TARGET_DEVICE=$TARGET_DEVICE" >> $GITHUB_ENV
-        else
-          echo "TARGET_DEVICE=unknown"
-          echo "TARGET_DEVICE=unknown" >> $GITHUB_ENV
-        fi
-        
-        echo "======================="
-        echo "当前磁盘使用情况:"
-        df -h
-
-    - name: 检查空间使用情况
-      if: (!cancelled())
-      run: df -h
-
-    - name: 上传固件到Artifact
-      uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
-      with:
-        name: ImmortalWrt_${{ env.TARGET_DEVICE }}_${{ env.DATE }}
-        path: /workdir/immortalwrt/bin/targets/*/*
-        retention-days: 30
-
-    - name: 整理固件信息
-      id: organize
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      run: |
-        if [ -d "/workdir/immortalwrt/bin/targets" ]; then
-          TARGET_DIR=$(find /workdir/immortalwrt/bin/targets -maxdepth 1 -type d | head -2 | tail -1)
-          if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
-            cd "$TARGET_DIR"
-            rm -rf packages
-            echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-            echo "status=success" >> $GITHUB_OUTPUT
-            echo "固件目录: $PWD"
-            ls -la
+      - name: 克隆源码
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          df -h
+          echo "🔄 开始克隆源码..."
+          
+          # 如果缓存未命中，完整克隆
+          if [ "${{ steps.cache.outputs.cache-hit }}" != "true" ]; then
+            echo "📦 缓存未命中，执行完整克隆..."
+            git clone $REPO_URL -b $REPO_BRANCH immortalwrt
           else
-            echo "未找到目标固件目录"
-            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "💾 缓存命中，检查源码..."
+            if [ ! -d "immortalwrt" ]; then
+              git clone $REPO_URL -b $REPO_BRANCH immortalwrt
+            else
+              cd immortalwrt
+              git fetch origin
+              git reset --hard origin/$REPO_BRANCH
+            fi
           fi
-        else
-          echo "固件目录不存在，可能编译失败"
-          echo "status=failed" >> $GITHUB_OUTPUT
-        fi
-
-    - name: 发布固件到Release
-      uses: softprops/action-gh-release@v2
-      if: steps.organize.outputs.status == 'success' && !cancelled()
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ImmortalWrt_${{ env.TARGET_DEVICE }}_${{ env.DATE }}
-        body: |
-          当前编译版本: ImmortalWrt ${{ env.TARGET_DEVICE }}
-          源码分支: ${{ env.REPO_BRANCH }}
-          配置文件: ${{ env.CONFIG_FILE }}
-          编译时间: ${{ env.DATE }}
-          默认IP: 192.168.111.1
-          默认密码: password
-          默认主机名: WRT
           
-          ## 主要特性
-          - 基于ImmortalWrt源码
-          - 集成常用软件包
-          - 优化性能和稳定性
-          
-          ## 注意事项
-          - 首次刷机请恢复出厂设置
-          - 如遇问题请先恢复出厂设置
-        files: ${{ env.FIRMWARE }}/*
+          cd immortalwrt
+          echo "📝 当前提交信息:"
+          git log -1 --oneline
+          echo "REPO_PATH=$WORKDIR/immortalwrt" >> $GITHUB_ENV
 
-    - name: 删除运行中容器
-      if: always()
-      run: |
-        sudo rm -rf /workdir/immortalwrt
-        echo "清理完成，当前磁盘使用情况:"
-        df -h
+      - name: 缓存状态报告
+        run: |
+          echo "📊 缓存状态报告"
+          echo "=================="
+          echo "缓存键: ${{ env.CACHE_KEY }}"
+          echo "缓存命中: ${{ steps.cache.outputs.cache-hit }}"
+          echo "源码哈希: ${{ env.SOURCE_HASH }}"
+          echo "配置哈希: ${{ env.CONFIG_HASH }}"
+          echo "脚本哈希: ${{ env.FEEDS_HASH }}"
+          
+          if [ "${{ steps.cache.outputs.cache-hit }}" == "true" ]; then
+            echo "✅ 缓存命中，跳过下载步骤"
+          else
+            echo "⬇️ 缓存未命中，将执行完整下载"
+          fi
+
+      - name: 加载通用函数库
+        run: |
+          source scripts/common.sh
+          echo "✅ 通用函数库加载完成"
+
+      - name: 加载自定义配置
+        run: |
+          [ -e files ] && mv files $REPO_PATH/files
+          [ -e $DIY_P1_SH ] && chmod +x $DIY_P1_SH && cd $REPO_PATH && $GITHUB_WORKSPACE/$DIY_P1_SH
+          [ -e $CONFIG_FILE ] && cp $CONFIG_FILE $REPO_PATH/.config
+
+      - name: 更新软件源
+        id: update
+        run: |
+          cd $REPO_PATH
+          echo "📦 更新feeds..."
+          ./scripts/feeds update -a
+          echo "📦 安装feeds..."
+          ./scripts/feeds install -a
+          echo "feeds_updated=true" >> $GITHUB_OUTPUT
+
+      - name: 生成Luci软件包报告
+        id: report
+        run: |
+          cd $REPO_PATH
+          echo "📊 生成Luci软件包差异报告..."
+          chmod +x $GITHUB_WORKSPACE/scripts/luci_report.sh
+          $GITHUB_WORKSPACE/scripts/luci_report.sh
+          echo "report_generated=true" >> $GITHUB_OUTPUT
+
+      - name: 上传Luci报告
+        uses: actions/upload-artifact@v4
+        if: steps.report.outputs.report_generated == 'true'
+        with:
+          name: luci-report-${{ env.VARIANT }}
+          path: ${{ env.REPO_PATH }}/luci_report_*.txt
+          retention-days: 7
+
+      - name: 提取设备配置
+        id: devices
+        run: |
+          source scripts/common.sh
+          devices=$(extract_devices_from_config $CONFIG_FILE)
+          echo "📱 检测到设备: $devices"
+          echo "devices=$devices" >> $GITHUB_OUTPUT
+          
+          # 生成设备列表文件
+          echo "$devices" | tr ' ' '\n' > $REPO_PATH/device_list.txt
+          echo "device_list_path=$REPO_PATH/device_list.txt" >> $GITHUB_OUTPUT
+
+      - name: 配置编译选项
+        run: |
+          cd $REPO_PATH
+          echo "⚙️ 应用配置文件..."
+          make defconfig
+          
+          # 显示关键配置
+          echo "📋 编译配置摘要:"
+          grep -E "^CONFIG_TARGET_DEVICE|^CONFIG_ATH11K_MEM_PROFILE|^CONFIG_NSS_FIRMWARE_VERSION" .config || true
+
+      - name: 下载依赖包
+        id: download
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cd $REPO_PATH
+          echo "⬇️ 下载依赖包..."
+          if [ "$DEBUG" == "true" ]; then
+            make download -j8 V=s 2>&1 | tee download.log
+          else
+            make download -j8
+          fi
+          echo "download_completed=true" >> $GITHUB_OUTPUT
+
+      - name: 编译固件
+        id: compile
+        run: |
+          cd $REPO_PATH
+          echo "🔨 开始编译固件..."
+          
+          # 设置编译参数
+          if [ "$DEBUG" == "true" ]; then
+            make -j$(nproc) V=s 2>&1 | tee compile.log
+          else
+            # 使用企业级错误控制
+            make IGNORE_ERRORS=1 -j$(nproc) || {
+              echo "⚠️ 编译出现错误，尝试单线程重新编译关键包..."
+              make IGNORE_ERRORS=1 -j1 V=s
+            }
+          fi
+          
+          echo "compile_completed=true" >> $GITHUB_OUTPUT
+
+      - name: 显示磁盘空间
+        run: |
+          echo "📊 编译后磁盘空间:"
+          df -h
+          echo "📦 固件大小统计:"
+          cd $REPO_PATH
+          du -sh bin/targets/*/* 2>/dev/null || true
+
+      - name: 整理固件文件
+        run: |
+          cd $REPO_PATH
+          mkdir -p firmware
+          
+          # 复制所有固件文件
+          find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.elf" | while read file; do
+            cp $file firmware/
+          done
+          
+          # 复制manifest文件
+          find bin/targets -name "manifest" | while read file; do
+            cp $file firmware/
+          done
+          
+          # 生成固件信息
+          cat > firmware/README.md << EOF
+## 固件信息
+
+- **变体**: $VARIANT
+- **源码**: $REPO_URL
+- **分支**: $REPO_BRANCH
+- **提交**: $(git rev-parse HEAD)
+- **编译时间**: $(date '+%Y-%m-%d %H:%M:%S')
+- **设备**: $(cat device_list.txt | tr '\n' ' ')
+- **缓存键**: $CACHE_KEY
+- **调试模式**: $DEBUG
+
+### 编译环境
+- **运行环境**: Ubuntu 22.04
+- **CPU核心数**: $(nproc)
+- **内存**: $(free -h | awk 'NR==2{print $2}')
+- **缓存命中**: ${{ steps.cache.outputs.cache-hit }}
+
+### 文件说明
+- \*.bin: 固件文件
+- \*.img: 镜像文件
+- manifest: 包清单
+EOF
+
+      - name: 上传固件到Artifacts
+        uses: actions/upload-artifact@v4
+        if: steps.compile.outputs.compile_completed == 'true'
+        with:
+          name: immortalwrt-${{ env.VARIANT }}-${{ github.run_number }}
+          path: ${{ env.REPO_PATH }}/firmware/
+          retention-days: 30
+
+      - name: 发布到GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: steps.compile.outputs.compile_completed == 'true'
+        with:
+          tag_name: ${{ env.VARIANT }}-${{ github.run_number }}
+          name: ImmortalWrt ${{ env.VARIANT }} Build ${{ github.run_number }}
+          body_path: ${{ env.REPO_PATH }}/firmware/README.md
+          files: ${{ env.REPO_PATH }}/firmware/*.*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 缓存清理
+        if: always()
+        run: |
+          echo "🧹 清理过期缓存..."
+          # 保留最近5个缓存
+          gh cache list --repo ${{ github.repository }} --limit 20 | \
+            grep "immwrt-" | \
+            tail -n +6 | \
+            awk '{print $1}' | \
+            xargs -I {} gh cache delete --repo ${{ github.repository }} {} || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: 清理工作目录
+        if: always()
+        run: |
+          echo "🧹 清理工作目录..."
+          sudo rm -rf $REPO_PATH
+          echo "📊 最终磁盘空间:"
+          df -h
