@@ -24,6 +24,7 @@ source "$(dirname "$0")/common.sh"
 # --- 配置变量 ---
 # 文件路径定义
 CONFIG_FILE=".config"
+USER_CONFIG_FILE="configs/immu.config"  # 用户提供的配置文件
 BEFORE_FILE=".luci_report_before.cfg"
 AFTER_FILE=".luci_report_after.cfg"
 REPORT_FILE=".luci_report.txt"
@@ -54,7 +55,18 @@ show_system_resources
 
 # --- 检查依赖 ---
 check_command_exists "comm" "'comm' 命令未找到，此脚本无法运行。"
-check_file_exists "$CONFIG_FILE" "未找到 '$CONFIG_FILE' 文件。请确保在源码根目录下运行此脚本。"
+
+# 检查配置文件是否存在
+if [ ! -f "$CONFIG_FILE" ]; then
+    # 如果.config不存在，尝试从用户配置文件复制
+    if [ -f "$USER_CONFIG_FILE" ]; then
+        log_info "未找到 .config 文件，从用户配置文件复制: $USER_CONFIG_FILE"
+        cp "$USER_CONFIG_FILE" "$CONFIG_FILE"
+    else
+        log_error "未找到 '$CONFIG_FILE' 文件，也未找到用户配置文件 '$USER_CONFIG_FILE'。请确保在源码根目录下运行此脚本。"
+        exit 1
+    fi
+fi
 
 # --- 核心函数 ---
 
@@ -81,10 +93,20 @@ print_section_header() {
 # 获取并排序 LUCI 软件包列表
 # 只获取真正的 LUCI 应用包，过滤掉配置选项
 get_luci_packages() {
-    grep "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" | \
-    grep -v "_INCLUDE_" | \
-    sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
-    sort
+    local config_file="$1"
+    
+    # 优先使用用户配置文件（如果存在且未注释）
+    if [ -f "$USER_CONFIG_FILE" ]; then
+        grep "^CONFIG_PACKAGE_luci-app.*=y$" "$USER_CONFIG_FILE" | \
+        grep -v "_INCLUDE_" | \
+        sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
+        sort
+    elif [ -f "$config_file" ]; then
+        grep "^CONFIG_PACKAGE_luci-app.*=y$" "$config_file" | \
+        grep -v "_INCLUDE_" | \
+        sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
+        sort
+    fi
 }
 
 # 分析包的来源
@@ -221,7 +243,14 @@ generate_report_file() {
 if [ ! -f "$BEFORE_FILE" ]; then
     log_substep "首次运行：建立 LUCI 软件包的基准配置"
     
-    get_luci_packages > "$BEFORE_FILE"
+    # 显示使用的配置文件
+    if [ -f "$USER_CONFIG_FILE" ]; then
+        log_info "使用用户配置文件: $USER_CONFIG_FILE"
+    else
+        log_info "使用默认配置文件: $CONFIG_FILE"
+    fi
+    
+    get_luci_packages "$CONFIG_FILE" > "$BEFORE_FILE"
     check_status "获取 LUCI 软件包列表失败"
     
     print_section_header "基准配置已成功捕获"
@@ -243,7 +272,7 @@ if [ ! -f "$BEFORE_FILE" ]; then
 else
     log_substep "生成 LUCI 软件包变更报告"
     
-    get_luci_packages > "$AFTER_FILE"
+    get_luci_packages "$CONFIG_FILE" > "$AFTER_FILE"
     check_status "获取当前 LUCI 软件包列表失败"
     
     # 检查配置是否真的发生了变化
