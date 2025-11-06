@@ -88,9 +88,8 @@ create_directories() {
     )
     
     for dir in "${dirs[@]}"; do
-        if mkdir -p "$dir" 2>/dev/null; then
+        if safe_mkdir "$dir"; then
             log_success "创建目录: $dir"
-            ((SUCCESS_COUNT++))
         else
             log_error "创建目录失败: $dir"
             ((FAIL_COUNT++))
@@ -226,7 +225,7 @@ configure_argon_theme() {
         ((SKIP_COUNT++))
     else
         # 备份原文件
-        if cp "$css_file" "${css_file}.bak" 2>/dev/null; then
+        if safe_backup "$css_file"; then
             log_info "已备份CSS文件: ${css_file}.bak"
         else
             log_warning "无法备份CSS文件"
@@ -279,7 +278,7 @@ configure_argon_theme() {
         ((SKIP_COUNT++))
     else
         # 备份原文件
-        if cp "$js_file" "${js_file}.bak" 2>/dev/null; then
+        if safe_backup "$js_file"; then
             log_info "已备份JS文件: ${js_file}.bak"
         else
             log_warning "无法备份JS文件"
@@ -432,6 +431,10 @@ main() {
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     echo ""
     
+    # 显示磁盘使用情况
+    log_info "💾 当前磁盘使用情况:"
+    show_system_resources
+    
     # 执行配置流程
     if check_environment; then
         show_configuration
@@ -449,6 +452,10 @@ main() {
     
     # 生成摘要
     generate_summary
+    
+    # 显示磁盘使用情况
+    log_info "💾 配置后磁盘使用情况:"
+    show_system_resources
     
     # 计算执行时间
     local end_time=$(date +%s)
