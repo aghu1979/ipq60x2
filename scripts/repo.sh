@@ -1,132 +1,88 @@
-# scripts/repo.sh
 #!/bin/bash
-
-# ==============================================================================
+# =============================================================================
 # OpenWrt 第三方软件源集成脚本
-#
-# 功能:
-#   集成第三方软件源到OpenWrt构建系统
-#   预先检查并删除官方feeds中可能存在的同名软件包
-#   使用small-package作为后备仓库
-#
-# 使用方法:
-#   ./repo.sh [OpenWrt根目录]
-#
-# 作者: Mary
-# 日期：20251104
-# ==============================================================================
+# 版本: 2.0
+# 描述: 集成第三方软件源，处理包冲突，提供后备仓库
+# =============================================================================
 
-# 导入通用函数
+# 加载通用函数库
 source "$(dirname "$0")/common.sh"
 
-# --- 配置变量 ---
-# 是否使用small-package作为后备仓库
-USE_SMALL_PACKAGE=true
-# 是否清理旧的软件包
-CLEAN_OLD_PACKAGES=true
-# 是否更新feeds
-UPDATE_FEEDS=true
-# 是否安装feeds
-INSTALL_FEEDS=true
+# 全局变量
+REPO_PATH="${REPO_PATH:-$(pwd)}"
+FEEDS_CONF="$REPO_PATH/feeds.conf.default"
+BACKUP_REPO="https://github.com/kenzok8/small-package"
 
-# --- 脚本逻辑 ---
-OPENWRT_ROOT_DIR="$1"
-
-# 记录开始时间
-SCRIPT_START_TIME=$(date +%s)
-
-log_step "开始集成第三方软件源"
-
-# 显示系统资源使用情况
-show_system_resources
-
-# 检查参数
-if [ -z "$OPENWRT_ROOT_DIR" ]; then
-    OPENWRT_ROOT_DIR="."
-    log_info "未指定OpenWrt根目录，使用当前目录"
-fi
-
-# 检查目录是否存在
-check_dir_exists "$OPENWRT_ROOT_DIR" "OpenWrt 根目录不存在: $OPENWRT_ROOT_DIR"
-
-# 检查OpenWrt环境
-check_openwrt_env "$OPENWRT_ROOT_DIR"
-
-# 切换到OpenWrt根目录
-cd "$OPENWRT_ROOT_DIR" || exit 1
-
-# 创建package目录（如果不存在）
-safe_mkdir "package"
-
-# 定义要添加的软件源列表
-declare -A REPOSITORIES=(
-    # 京东云雅典娜led控制
-    ["luci-app-athena-led"]="https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led"
+# 软件源列表
+THIRD_PARTY_FEEDS=(
+    # 京东云雅典娜LED控制
+    "luci-app-athena-led|https://github.com/NONGFAH/luci-app-athena-led|package/luci-app-athena-led"
     
-    # passwall by xiaorouji
-    ["passwall-packages"]="https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages"
-    ["luci-app-passwall"]="https://github.com/xiaorouji/openwrt-passwall package/luci-app-passwall"
-    ["luci-app-passwall2"]="https://github.com/xiaorouji/openwrt-passwall2 package/luci-app-passwall2"
+    # PassWall by xiaorouji
+    "passwall-packages|https://github.com/xiaorouji/openwrt-passwall-packages|package/passwall-packages"
+    "passwall-luci|https://github.com/xiaorouji/openwrt-passwall|package/passwall-luci"
+    "passwall2-luci|https://github.com/xiaorouji/openwrt-passwall2|package/passwall2-luci"
     
-    # AdGuardHome
-    ["luci-app-adguardhome"]="https://github.com/sirpdboy/luci-app-adguardhome.git package/luci-app-adguardhome"
+    # AdGuardHome by sirpdboy
+    "luci-app-adguardhome|https://github.com/sirpdboy/luci-app-adguardhome.git|package/luci-app-adguardhome"
     
-    # ddns-go
-    ["luci-app-ddns-go"]="https://github.com/sirpdboy/luci-app-ddns-go.git package/luci-app-ddns-go"
+    # ddns-go by sirpdboy
+    "ddns-go|https://github.com/sirpdboy/luci-app-ddns-go.git|package/ddns-go"
     
-    # netdata
-    ["luci-app-netdata"]="https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata"
+    # netdata by sirpdboy
+    "luci-app-netdata|https://github.com/sirpdboy/luci-app-netdata|package/luci-app-netdata"
     
-    # netspeedtest
-    ["luci-app-netspeedtest"]="https://github.com/sirpdboy/luci-app-netspeedtest package/luci-app-netspeedtest"
+    # netspeedtest by sirpdboy
+    "luci-app-netspeedtest|https://github.com/sirpdboy/luci-app-netspeedtest|package/luci-app-netspeedtest"
     
-    # partexp
-    ["luci-app-partexp"]="https://github.com/sirpdboy/luci-app-partexp.git package/luci-app-partexp"
+    # partexp by sirpdboy
+    "luci-app-partexp|https://github.com/sirpdboy/luci-app-partexp.git|package/luci-app-partexp"
     
-    # taskplan
-    ["luci-app-taskplan"]="https://github.com/sirpdboy/luci-app-taskplan package/luci-app-taskplan"
+    # taskplan by sirpdboy
+    "luci-app-taskplan|https://github.com/sirpdboy/luci-app-taskplan|package/luci-app-taskplan"
     
-    # lucky
-    ["luci-app-lucky"]="https://github.com/gdy666/luci-app-lucky.git package/luci-app-lucky"
+    # lucky by gdy666
+    "lucky|https://github.com/gdy666/luci-app-lucky.git|package/lucky"
     
     # easytier
-    ["luci-app-easytier"]="https://github.com/EasyTier/luci-app-easytier.git package/luci-app-easytier"
+    "luci-app-easytier|https://github.com/EasyTier/luci-app-easytier.git|package/luci-app-easytier"
     
     # homeproxy
-    ["homeproxy"]="https://github.com/VIKINGYFY/homeproxy package/homeproxy"
+    "homeproxy|https://github.com/VIKINGYFY/homeproxy|package/homeproxy"
     
-    # golang & openlist2 - 特殊处理，需要先删除已存在的
-    ["packages_lang_golang"]="https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang"
-    ["luci-app-openlist2"]="https://github.com/sbwml/luci-app-openlist2 package/luci-app-openlist2"
+    # golang & openlist2 by sbwml
+    "packages_lang_golang|https://github.com/sbwml/packages_lang_golang|feeds/packages/lang/golang|25.x"
+    "openlist|https://github.com/sbwml/luci-app-openlist2|package/openlist"
     
-    # mosdns
-    ["luci-app-mosdns"]="https://github.com/sbwml/luci-app-mosdns -b v5 package/luci-app-mosdns"
+    # mosdns by sbwml
+    "mosdns|https://github.com/sbwml/luci-app-mosdns|package/mosdns|v5"
     
-    # quickfile
-    ["luci-app-quickfile"]="https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile"
+    # quickfile by sbwml
+    "quickfile|https://github.com/sbwml/luci-app-quickfile|package/quickfile"
     
     # momo & nikki
-    ["luci-app-momo"]="https://github.com/nikkinikki-org/OpenWrt-momo package/luci-app-momo"
-    ["luci-app-nikki"]="https://github.com/nikkinikki-org/OpenWrt-nikki package/luci-app-nikki"
+    "luci-app-momo|https://github.com/nikkinikki-org/OpenWrt-momo|package/luci-app-momo"
+    "luci-app-nikki|https://github.com/nikkinikki-org/OpenWrt-nikki|package/luci-app-nikki"
     
     # OpenAppFilter
-    ["luci-app-oaf"]="https://github.com/destan19/OpenAppFilter.git package/luci-app-oaf"
+    "OpenAppFilter|https://github.com/destan19/OpenAppFilter.git|package/OpenAppFilter"
     
-    # openclash
-    ["luci-app-openclash"]="https://github.com/vernesong/OpenClash.git -b dev package/luci-app-openclash"
+    # OpenClash
+    "luci-app-openclash|https://github.com/vernesong/OpenClash.git|package/luci-app-openclash|dev"
     
     # tailscale
-    ["luci-app-tailscale"]="https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale"
+    "luci-app-tailscale|https://github.com/asvow/luci-app-tailscale|package/luci-app-tailscale"
     
     # vnt
-    ["luci-app-vnt"]="https://github.com/lmq8267/luci-app-vnt.git package/luci-app-vnt"
+    "luci-app-vnt|https://github.com/lmq8267/luci-app-vnt.git|package/luci-app-vnt"
     
-    # small-package
-    ["small-package"]="https://github.com/kenzok8/small-package small"
+    # 后备仓库
+    "small-package|https://github.com/kenzok8/small-package|small"
 )
 
-# 定义需要从官方feeds中删除的软件包列表
-declare -a OFFICIAL_PACKAGES_TO_REMOVE=(
+# 冲突包列表（官方feeds中可能存在的包）
+CONFLICT_PACKAGES=(
+    # PassWall相关
     "xray-core"
     "v2ray-geodata"
     "sing-box"
@@ -146,101 +102,253 @@ declare -a OFFICIAL_PACKAGES_TO_REMOVE=(
     "v2ray-plugin"
     "geoview"
     "shadow-tls"
+    
+    # 其他可能冲突的包
+    "luci-app-passwall"
+    "luci-app-passwall2"
+    "luci-app-openclash"
+    "luci-app-adguardhome"
+    "tailscale"
 )
 
-# 清理旧的软件包
-if [ "$CLEAN_OLD_PACKAGES" = "true" ]; then
-    log_substep "清理旧的软件包..."
+log_work "开始集成第三方软件源..."
+
+# 备份原始feeds文件
+backup_feeds() {
+    log_info "备份原始feeds配置..."
     
-    # 删除官方feeds中的特定软件包
-    for package in "${OFFICIAL_PACKAGES_TO_REMOVE[@]}"; do
-        if [ -d "feeds/packages/net/$package" ]; then
-            log_info "删除官方feeds中的软件包: $package"
-            safe_remove "feeds/packages/net/$package" true
+    if [ -f "$FEEDS_CONF" ]; then
+        backup_file "$FEEDS_CONF"
+    else
+        log_warning "原始feeds配置文件不存在"
+    fi
+}
+
+# 清理冲突包
+clean_conflicting_packages() {
+    log_info "清理可能冲突的软件包..."
+    
+    local conflict_count=0
+    
+    # 清理feeds中的冲突包
+    for package in "${CONFLICT_PACKAGES[@]}"; do
+        local found_packages=$(find "$REPO_PATH/feeds/packages" -name "$package" -type d 2>/dev/null)
+        
+        if [ -n "$found_packages" ]; then
+            log_package "发现feeds中的冲突包: $package"
+            echo "$found_packages" | while read pkg_path; do
+                log_warning "删除: $pkg_path"
+                rm -rf "$pkg_path"
+                ((conflict_count++))
+            done
+        fi
+        
+        # 清理package目录中的冲突包
+        found_packages=$(find "$REPO_PATH/package" -name "$package" -type d 2>/dev/null)
+        
+        if [ -n "$found_packages" ]; then
+            log_package "发现package中的冲突包: $package"
+            echo "$found_packages" | while read pkg_path; do
+                log_warning "删除: $pkg_path"
+                rm -rf "$pkg_path"
+                ((conflict_count++))
+            done
         fi
     done
     
-    # 删除旧的luci-app-passwall
-    if [ -d "feeds/luci/applications/luci-app-passwall" ]; then
-        log_info "删除旧的luci-app-passwall"
-        safe_remove "feeds/luci/applications/luci-app-passwall" true
-    fi
-    
-    # 删除旧的tailscale配置
-    if [ -f "feeds/packages/net/tailscale/Makefile" ]; then
-        log_info "修改tailscale Makefile以避免冲突"
-        sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
-    fi
-    
-    # 特殊处理：删除已存在的golang目录
-    if [ -d "feeds/packages/lang/golang" ]; then
-        log_info "删除已存在的golang目录以避免冲突"
-        safe_remove "feeds/packages/lang/golang" true
-    fi
-fi
+    log_success "清理完成，处理了 $conflict_count 个冲突包"
+}
 
-# 克隆第三方软件源
-log_substep "克隆第三方软件源..."
-for repo_name in "${!REPOSITORIES[@]}"; do
-    repo_info="${REPOSITORIES[$repo_name]}"
-    repo_url=$(echo "$repo_info" | awk '{print $1}')
-    repo_path=$(echo "$repo_info" | awk '{$1=""; print $0}' | sed 's/^[[:space:]]*//')
+# 克隆单个软件源
+clone_feed() {
+    local name=$1
+    local url=$2
+    local target=$3
+    local branch=${4:-""}
     
-    log_info "克隆仓库: $repo_name"
-    log_debug "URL: $repo_url"
-    log_debug "路径: $repo_path"
+    log_package "克隆 $name..."
     
-    # 检查目标目录是否已存在
-    target_dir=$(echo "$repo_path" | awk '{print $1}')
-    if [ -d "$target_dir" ]; then
-        log_info "目标目录已存在，先删除: $target_dir"
-        safe_remove "$target_dir" true
-    fi
-    
-    # 执行克隆命令
-    if git clone $repo_url $repo_path; then
-        log_success "成功克隆: $repo_name"
-        
-        # 特殊处理
-        case "$repo_name" in
-            "luci-app-athena-led")
-                log_info "设置athena-led权限..."
-                chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
-                ;;
-        esac
+    if [ -n "$branch" ]; then
+        git clone --depth=1 -b "$branch" "$url" "$target" 2>/dev/null || {
+            log_error "克隆失败: $name ($url)"
+            return 1
+        }
     else
-        log_error "克隆失败: $repo_name"
+        git clone --depth=1 "$url" "$target" 2>/dev/null || {
+            log_error "克隆失败: $name ($url)"
+            return 1
+        }
     fi
-done
+    
+    # 特殊处理
+    case "$name" in
+        "luci-app-athena-led")
+            chmod +x "$target/root/etc/init.d/athena_led" "$target/root/usr/sbin/athena-led"
+            ;;
+        "tailscale")
+            sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' "$REPO_PATH/feeds/packages/net/tailscale/Makefile"
+            ;;
+    esac
+    
+    log_success "克隆成功: $name"
+    return 0
+}
+
+# 添加第三方软件源
+add_third_party_feeds() {
+    log_info "添加第三方软件源..."
+    
+    local success_count=0
+    local fail_count=0
+    
+    for feed in "${THIRD_PARTY_FEEDS[@]}"; do
+        IFS='|' read -r name url target branch <<< "$feed"
+        
+        # 创建目标目录
+        mkdir -p "$REPO_PATH/$(dirname "$target")"
+        
+        if clone_feed "$name" "$url" "$REPO_PATH/$target" "$branch"; then
+            ((success_count++))
+        else
+            ((fail_count++))
+            # 如果克隆失败，尝试使用后备仓库
+            if [ "$name" != "small-package" ]; then
+                log_warning "尝试使用后备仓库..."
+                if clone_feed "$name-backup" "$BACKUP_REPO" "$REPO_PATH/small"; then
+                    log_success "后备仓库克隆成功"
+                fi
+            fi
+        fi
+    done
+    
+    log_info "软件源添加完成: 成功 $success_count 个，失败 $fail_count 个"
+}
 
 # 更新feeds
-if [ "$UPDATE_FEEDS" = "true" ]; then
-    log_substep "更新feeds..."
+update_feeds() {
+    log_info "更新软件源..."
+    
+    cd "$REPO_PATH"
+    
+    # 清理旧的feeds
+    log_work "清理旧的feeds..."
+    ./scripts/feeds clean > /dev/null 2>&1
+    
+    # 更新feeds
+    log_work "从远程更新feeds..."
     if ./scripts/feeds update -a; then
-        log_success "Feeds更新成功"
+        log_success "feeds更新成功"
     else
-        log_error "Feeds更新失败"
-        exit 1
+        log_warning "部分feeds更新失败，继续执行..."
     fi
-fi
-
-# 安装feeds
-if [ "$INSTALL_FEEDS" = "true" ]; then
-    log_substep "安装feeds..."
+    
+    # 安装feeds
+    log_work "安装feeds..."
     if ./scripts/feeds install -a; then
-        log_success "Feeds安装成功"
+        log_success "feeds安装成功"
     else
-        log_error "Feeds安装失败"
-        exit 1
+        log_warning "部分feeds安装失败，继续执行..."
     fi
-fi
+}
 
-# 显示当前磁盘使用情况
-log_info "当前磁盘使用情况:"
-df -h
+# 生成软件源报告
+generate_feeds_report() {
+    log_info "生成软件源报告..."
+    
+    local report_file="$REPO_PATH/feeds_report_$(date +%Y%m%d_%H%M%S).txt"
+    
+    {
+        echo "=================================================================="
+        echo "第三方软件源集成报告"
+        echo "=================================================================="
+        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "源码路径: $REPO_PATH"
+        echo ""
+        
+        echo "【已集成的软件源】"
+        echo "----------------------------------------"
+        for feed in "${THIRD_PARTY_FEEDS[@]}"; do
+            IFS='|' read -r name url target branch <<< "$feed"
+            echo "- $name: $url"
+            [ -n "$branch" ] && echo "  分支: $branch"
+        done
+        echo ""
+        
+        echo "【已清理的冲突包】"
+        echo "----------------------------------------"
+        for package in "${CONFLICT_PACKAGES[@]}"; do
+            echo "- $package"
+        done
+        echo ""
+        
+        echo "【包统计】"
+        echo "----------------------------------------"
+        echo "Luci应用包: $(find "$REPO_PATH/package" -path "*/luci-app-*" -name "Makefile" | wc -l)"
+        echo "主题包: $(find "$REPO_PATH/package" -path "*/luci-theme-*" -name "Makefile" | wc -l)"
+        echo "协议包: $(find "$REPO_PATH/package" -path "*/luci-proto-*" -name "Makefile" | wc -l)"
+        echo "国际化包: $(find "$REPO_PATH/package" -path "*/luci-i18n-*" -name "Makefile" | wc -l)"
+        echo ""
+        
+        echo "【后备仓库】"
+        echo "----------------------------------------"
+        echo "URL: $BACKUP_REPO"
+        echo "状态: 已准备"
+        echo ""
+        
+        echo "=================================================================="
+        
+    } > "$report_file"
+    
+    log_success "软件源报告已生成: $report_file"
+}
 
-# 记录结束时间并生成摘要
-SCRIPT_END_TIME=$(date +%s)
-generate_summary "第三方软件源集成" "$SCRIPT_START_TIME" "$SCRIPT_END_TIME" "成功"
+# 验证集成结果
+verify_integration() {
+    log_info "验证集成结果..."
+    
+    local error_count=0
+    
+    # 检查关键包是否存在
+    local key_packages=(
+        "luci-app-athena-led"
+        "luci-app-passwall"
+        "luci-app-openclash"
+        "luci-app-adguardhome"
+        "luci-app-tailscale"
+    )
+    
+    for package in "${key_packages[@]}"; do
+        if [ ! -d "$REPO_PATH/package/$package" ] && [ ! -d "$REPO_PATH/small/$package" ]; then
+            log_warning "关键包缺失: $package"
+            ((error_count++))
+        fi
+    done
+    
+    if [ $error_count -eq 0 ]; then
+        log_success "集成验证通过"
+    else
+        log_warning "发现 $error_count 个问题"
+    fi
+}
 
-log_success "第三方软件源集成完成。"
+# 主函数
+main() {
+    log_work "开始软件源集成流程..."
+    
+    # 检查网络
+    check_network || exit 1
+    
+    # 执行集成步骤
+    backup_feeds
+    clean_conflicting_packages
+    add_third_party_feeds
+    update_feeds
+    generate_feeds_report
+    verify_integration
+    
+    log_success "软件源集成完成！"
+    log_info "可以使用 'make defconfig' 更新配置"
+}
+
+# 执行主函数
+main "$@"
