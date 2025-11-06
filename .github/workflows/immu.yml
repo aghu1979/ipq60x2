@@ -15,7 +15,6 @@ env:
   CONFIG_FILE: configs/immu.config
   TZ: Asia/Shanghai
   CACHE_VERSION: v1
-  # 定义脚本路径环境变量，便于统一管理
   SCRIPTS_DIR: ${{ github.workspace }}/scripts
 
 jobs:
@@ -177,7 +176,6 @@ jobs:
       - name: 设置企业级缓存变量
         id: cache
         run: |
-          # 检查必要文件是否存在
           echo "🔍 检查必要文件..."
           
           if [ ! -f "$CONFIG_FILE" ]; then
@@ -318,6 +316,7 @@ jobs:
           echo "✅ 配置文件复制完成"
           
       - name: 更新第三方源
+        timeout-minutes: 15
         run: |
           echo "🔄 更新第三方源..."
           echo "当前工作目录: $(pwd)"
@@ -339,11 +338,38 @@ jobs:
             chmod +x "${{ env.SCRIPTS_DIR }}/repo.sh"
           fi
           
-          # 进入源码目录并执行脚本
+          # 进入源码目录
           cd "${{ env.REPO_PATH }}"
           echo "进入目录: $(pwd)"
-          echo "执行脚本: ${{ env.SCRIPTS_DIR }}/repo.sh"
-          bash "${{ env.SCRIPTS_DIR }}/repo.sh"
+          
+          # 添加重试机制
+          MAX_RETRIES=3
+          RETRY_DELAY=30
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "🔄 尝试执行第三方源更新 (第 $((RETRY_COUNT + 1))/$MAX_RETRIES 次)..."
+            
+            if bash "${{ env.SCRIPTS_DIR }}/repo.sh"; then
+              echo "✅ 第三方源更新成功"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              EXIT_CODE=$?
+              
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⚠️ 第 $RETRY_COUNT 次尝试失败 (退出代码: $EXIT_CODE)，等待 $RETRY_DELAY 秒后重试..."
+                echo "💡 这可能是网络临时问题，正在重试..."
+                sleep $RETRY_DELAY
+              else
+                echo "❌ 已达到最大重试次数 ($MAX_RETRIES)，第三方源更新失败"
+                echo "🔍 建议检查 scripts/repo.sh 脚本中的网络请求部分"
+                echo "🌐 可能需要检查网络连接或第三方源服务器状态"
+                exit $EXIT_CODE
+              fi
+            fi
+          done
+          
           echo "✅ 第三方源更新完成"
           
       - name: 更新 Feeds
@@ -398,7 +424,6 @@ jobs:
           echo "🔧 使用 $THREADS 线程编译"
           echo "CONFIG_CCACHE=y" >> .config
           
-          # 检查并执行diy.sh
           if [ -f "${{ env.SCRIPTS_DIR }}/diy.sh" ]; then
             echo "🔧 执行DIY脚本..."
             bash "${{ env.SCRIPTS_DIR }}/diy.sh"
@@ -442,7 +467,6 @@ jobs:
           DEVICES_LIST="${{ steps.devices.outputs.devices }}"
           REPO_BRANCH="${{ env.REPO_BRANCH }}"
           
-          # 使用printf生成README，避免heredoc和sed的复杂语法
           printf '# ImmortalWrt 固件\n\n' > README.md
           printf '## 构建信息\n' >> README.md
           printf '- 构建时间: %s\n' "$BUILD_TIME" >> README.md
