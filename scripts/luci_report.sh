@@ -86,15 +86,48 @@ print_section_header() {
 }
 
 # 获取并排序 LUCI 软件包列表
-# 从 .config 文件中获取
+# 从 .config 文件中获取所有启用的 LUCI 应用包
 get_luci_packages() {
     local config_file="$1"
     
     log_debug "从配置文件获取LUCI软件包列表: $config_file"
-    grep "^CONFIG_PACKAGE_luci-app.*=y$" "$config_file" | \
+    
+    # 使用更精确的正则表达式匹配所有启用的 LUCI 应用包
+    # 匹配格式: CONFIG_PACKAGE_luci-app-*=y
+    grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | \
     grep -v "_INCLUDE_" | \
-    sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
+    sed 's/^CONFIG_PACKAGE_\(.*\)=y.*$/\1/' | \
     sort
+}
+
+# 测试函数：显示所有匹配的行（用于调试）
+debug_luci_packages() {
+    local config_file="$1"
+    
+    echo -e "\n${COLOR_YELLOW}调试：显示所有LUCI相关配置行${COLOR_RESET}"
+    echo "================================"
+    
+    # 显示所有 CONFIG_PACKAGE_luci-app- 开头的行
+    echo -e "\n${COLOR_CYAN}1. 所有 CONFIG_PACKAGE_luci-app- 开头的行：${COLOR_RESET}"
+    grep "^CONFIG_PACKAGE_luci-app-" "$config_file" | head -20
+    
+    # 显示所有 =y 结尾的行
+    echo -e "\n${COLOR_CYAN}2. 所有 =y 结尾的 LUCI 包行：${COLOR_RESET}"
+    grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | head -20
+    
+    # 显示提取的包名
+    echo -e "\n${COLOR_CYAN}3. 提取的包名：${COLOR_RESET}"
+    grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | \
+    grep -v "_INCLUDE_" | \
+    sed 's/^CONFIG_PACKAGE_\(.*\)=y.*$/\1/' | head -20
+    
+    # 统计数量
+    local count=$(grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | \
+                 grep -v "_INCLUDE_" | \
+                 sed 's/^CONFIG_PACKAGE_\(.*\)=y.*$/\1/' | \
+                 wc -l)
+    echo -e "\n${COLOR_GREEN}总计 LUCI 应用包数量: $count${COLOR_RESET}"
+    echo "================================"
 }
 
 # 分析包的来源
@@ -164,7 +197,8 @@ print_list_with_source() {
     local title="$2"
     
     if [ -s "$file_path" ]; then
-        echo -e "\n${COLOR_BLUE}${SYMBOL_PACKAGE} $title (${COLOR_CYAN}$(cat "$file_path" | wc -l)${COLOR_BLUE} 个软件包)${COLOR_RESET}\n"
+        local count=$(cat "$file_path" | wc -l)
+        echo -e "\n${COLOR_BLUE}${SYMBOL_PACKAGE} $title (${COLOR_CYAN}$count${COLOR_BLUE} 个软件包)${COLOR_RESET}\n"
         
         while IFS= read -r package; do
             source=$(analyze_package_source "$package")
@@ -295,11 +329,17 @@ if [ ! -f "$BEFORE_FILE" ]; then
     log_info "配置文件信息:"
     log_info "  文件大小: $(stat -c%s "$CONFIG_FILE") 字节"
     log_info "  配置行数: $(wc -l < "$CONFIG_FILE")"
-    log_info "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" || echo "0")"
+    
+    # 调试：显示所有LUCI相关配置
+    debug_luci_packages "$CONFIG_FILE"
     
     # 基准配置从当前的 .config 获取
     get_luci_packages "$CONFIG_FILE" > "$BEFORE_FILE"
     check_status "获取 LUCI 软件包列表失败"
+    
+    # 显示实际提取的数量
+    local actual_count=$(cat "$BEFORE_FILE" | wc -l)
+    log_info "实际提取的LUCI软件包数: $actual_count"
     
     print_section_header "基准配置已成功捕获"
     print_list_with_source "$BEFORE_FILE" "基准配置中的LUCI软件包"
@@ -323,11 +363,17 @@ else
     log_info "当前 .config 文件信息:"
     log_info "  文件大小: $(stat -c%s "$CONFIG_FILE") 字节"
     log_info "  配置行数: $(wc -l < "$CONFIG_FILE")"
-    log_info "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" || echo "0")"
+    
+    # 调试：显示所有LUCI相关配置
+    debug_luci_packages "$CONFIG_FILE"
     
     # 从当前 .config 获取最新配置（make defconfig后的完整配置）
     get_luci_packages "$CONFIG_FILE" > "$AFTER_FILE"
     check_status "获取当前 LUCI 软件包列表失败"
+    
+    # 显示实际提取的数量
+    local actual_count=$(cat "$AFTER_FILE" | wc -l)
+    log_info "实际提取的LUCI软件包数: $actual_count"
     
     # 检查配置是否真的发生了变化
     if cmp -s "$BEFORE_FILE" "$AFTER_FILE"; then
