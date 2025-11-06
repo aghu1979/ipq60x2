@@ -77,27 +77,6 @@ jobs:
           echo "未发现可用的磁盘空间，继续使用默认配置"
         fi
 
-    # 暂时注释掉磁盘清理步骤，因为已经扩展了磁盘空间
-    # 如果后续磁盘空间仍然不足，可以取消注释以下步骤
-    # 注意：扩展磁盘后使用清理工具可能会删除扩展磁盘上的工具缓存
-    # 备选方案：sbwml/actions@free-disk
-    # - name: 清理磁盘空间
-    #   # 使用 jlumbroso/free-disk-space 清理磁盘，备选方案是 sbwml/actions@free-disk
-    #   # 注意：扩展磁盘后，此步骤可能会清理扩展磁盘上的工具缓存，影响编译环境
-    #   # 如果编译失败，请考虑注释掉此步骤或调整清理选项
-    #   uses: jlumbroso/free-disk-space@main
-    #   with:
-    #     # this might remove tools that are actually needed,
-    #     # if set to "true" but frees about 6 GB
-    #     tool-cache: true
-    #     # all of these default to true, but feel free to set to
-    #     # "false" if necessary for your workflow
-    #     android: true
-    #     dotnet: true
-    #     haskell: true
-    #     large-packages: true
-    #     swap-storage: true
-
     - name: 克隆源码
       working-directory: /workdir
       run: |
@@ -109,44 +88,60 @@ jobs:
         df -h
 
     - name: 加载自定义配置
-      working-directory: /workdir/immortalwrt
       run: |
-        # 检查源码目录中的配置文件
+        # 确保在正确的工作目录中
+        cd /workdir/immortalwrt
+        
         echo "当前工作目录: $(pwd)"
-        echo "GitHub workspace: ${{ github.workspace }}"
-        echo "查找配置文件..."
-        find ${{ github.workspace }} -name "immu.config" -type f 2>/dev/null
+        echo "当前磁盘使用情况:"
+        df -h
+        
+        # 检查源码目录中的配置文件
+        echo "检查源码配置文件:"
+        ls -la /workdir/immortalwrt/
         
         # 复制配置文件到 .config 作为基准
-        if [ -f "${{ github.workspace }}/configs/immu.config" ]; then
-          echo "找到配置文件: ${{ github.workspace }}/configs/immu.config"
-          cp "${{ github.workspace }}/configs/immu.config" .config
+        if [ -f ${{ github.workspace }}/$CONFIG_FILE ]; then
+          echo "发现用户配置文件: ${{ github.workspace }}/$CONFIG_FILE"
+          echo "用户配置文件大小: $(stat -c%s ${{ github.workspace }}/$CONFIG_FILE) 字节"
+          echo "用户配置文件行数: $(wc -l < ${{ github.workspace }}/$CONFIG_FILE)"
+          
+          # 复制到 .config
+          cp ${{ github.workspace }}/$CONFIG_FILE /workdir/immortalwrt/.config
           echo "已复制用户配置文件到 .config"
-          echo "配置文件行数: $(wc -l < .config)"
-          echo "LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" .config || echo "0")"
+          
+          # 验证复制结果
+          echo "验证复制结果:"
+          echo "  .config文件大小: $(stat -c%s /workdir/immortalwrt/.config) 字节"
+          echo "  .config文件行数: $(wc -l < /workdir/immortalwrt/.config)"
+          echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" /workdir/immortalwrt/.config || echo "0")"
+          
+          # 显示前10个LUCI软件包
           echo "前10个LUCI软件包:"
-          grep "^CONFIG_PACKAGE_luci-app.*=y$" .config | head -10
+          grep "^CONFIG_PACKAGE_luci-app-.*=y" /workdir/immortalwrt/.config | head -10
         else
-          echo "错误: 未找到用户配置文件 ${{ github.workspace }}/configs/immu.config"
+          echo "警告: 未找到用户配置文件 ${{ github.workspace }}/$CONFIG_FILE"
           echo "当前目录内容:"
           ls -la ${{ github.workspace }}/
-          echo "configs目录内容:"
-          ls -la ${{ github.workspace }}/configs/ 2>/dev/null || echo "configs目录不存在"
           exit 1
         fi
         
         # 复制脚本文件
-        [ -e ${{ github.workspace }}/scripts/diy.sh ] && cp ${{ github.workspace }}/scripts/diy.sh ./diy.sh
-        [ -e ${{ github.workspace }}/scripts/repo.sh ] && cp ${{ github.workspace }}/scripts/repo.sh ./repo.sh
-        [ -e ${{ github.workspace }}/scripts/common.sh ] && cp ${{ github.workspace }}/scripts/common.sh ./common.sh
-        [ -e ${{ github.workspace }}/scripts/luci_report.sh ] && cp ${{ github.workspace }}/scripts/luci_report.sh ./luci_report.sh
+        echo "复制脚本文件..."
+        [ -e ${{ github.workspace }}/$DIY_P1_SH ] && cp ${{ github.workspace }}/$DIY_P1_SH /workdir/immortalwrt/diy.sh
+        [ -e ${{ github.workspace }}/$DIY_P2_SH ] && cp ${{ github.workspace }}/$DIY_P2_SH /workdir/immortalwrt/repo.sh
+        [ -e ${{ github.workspace }}/scripts/common.sh ] && cp ${{ github.workspace }}/scripts/common.sh /workdir/immortalwrt/common.sh
+        [ -e ${{ github.workspace }}/scripts/luci_report.sh ] && cp ${{ github.workspace }}/scripts/luci_report.sh /workdir/immortalwrt/luci_report.sh
         
         # 设置执行权限
-        chmod +x diy.sh repo.sh common.sh luci_report.sh
+        chmod +x /workdir/immortalwrt/diy.sh /workdir/immortalwrt/repo.sh /workdir/immortalwrt/common.sh /workdir/immortalwrt/luci_report.sh
         
         # 确保configs目录存在
-        mkdir -p configs
-        cp "${{ github.workspace }}/configs/immu.config" configs/immu.config
+        mkdir -p /workdir/immortalwrt/configs
+        [ -f ${{ github.workspace }}/$CONFIG_FILE ] && cp ${{ github.workspace }}/$CONFIG_FILE /workdir/immortalwrt/configs/immu.config
+        
+        echo "配置加载完成，当前磁盘使用情况:"
+        df -h
 
     - name: 更新并安装Feeds
       working-directory: /workdir/immortalwrt
@@ -183,9 +178,9 @@ jobs:
         echo "当前.config文件信息:"
         echo "  文件大小: $(stat -c%s .config) 字节"
         echo "  配置行数: $(wc -l < .config)"
-        echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" .config || echo "0")"
+        echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" .config || echo "0")"
         echo "前10个LUCI软件包:"
-        grep "^CONFIG_PACKAGE_luci-app.*=y$" .config | head -10
+        grep "^CONFIG_PACKAGE_luci-app-.*=y" .config | head -10
         [ -e ./luci_report.sh ] && ./luci_report.sh
         echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
         df -h
@@ -195,7 +190,7 @@ jobs:
       run: |
         echo "执行make defconfig前:"
         echo "  .config文件大小: $(stat -c%s .config) 字节"
-        echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" .config || echo "0")"
+        echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" .config || echo "0")"
         
         echo "执行make defconfig..."
         make defconfig
@@ -203,7 +198,7 @@ jobs:
         echo "执行make defconfig后:"
         echo "  .config文件大小: $(stat -c%s .config) 字节"
         echo "  配置行数: $(wc -l < .config)"
-        echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" .config || echo "0")"
+        echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" .config || echo "0")"
         echo "make defconfig完成，当前磁盘使用情况:"
         df -h
 
@@ -236,8 +231,25 @@ jobs:
         echo "编译完成，当前磁盘使用情况:"
         df -h
         echo "======================="
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "TARGET_DEVICE=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        
+        # 提取设备名称，处理可能的格式问题
+        DEVICE_NAMES=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' | tr '\n' ' ')
+        echo "检测到的设备: $DEVICE_NAMES"
+        
+        # 选择第一个设备作为主设备
+        TARGET_DEVICE=$(echo "$DEVICE_NAMES" | awk '{print $1}')
+        
+        # 清理设备名称，移除非法字符
+        TARGET_DEVICE=$(echo "$TARGET_DEVICE" | sed 's/[^a-zA-Z0-9_-]//g')
+        
+        if [ -n "$TARGET_DEVICE" ]; then
+          echo "TARGET_DEVICE=$TARGET_DEVICE"
+          echo "TARGET_DEVICE=$TARGET_DEVICE" >> $GITHUB_ENV
+        else
+          echo "TARGET_DEVICE=unknown"
+          echo "TARGET_DEVICE=unknown" >> $GITHUB_ENV
+        fi
+        
         echo "======================="
         echo "当前磁盘使用情况:"
         df -h
