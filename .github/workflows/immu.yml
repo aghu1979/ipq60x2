@@ -159,7 +159,6 @@ jobs:
       - name: 设置缓存变量
         id: cache
         run: |
-          # 生成基于配置文件内容的哈希值作为缓存键
           CONFIG_HASH=$(sha256sum $CONFIG_FILE | cut -d' ' -f1)
           REPO_HASH=$(sha256sum scripts/repo.sh | cut -d' ' -f1)
           echo "cache-key-immwrt-${CONFIG_HASH}-${REPO_HASH}" >> $GITHUB_OUTPUT
@@ -316,23 +315,30 @@ jobs:
           cd ${{ env.REPO_PATH }}
           mkdir -p firmware
           find bin/targets -name "*.bin" -o -name "*.img" -o -name "manifest" | xargs -I {} cp {} firmware/
-          cat > firmware/README.md << 'EOF'
+          echo "✅ 固件文件整理完成"
+
+      - name: 生成固件README
+        if: steps.compile.outputs.compile_completed == 'true'
+        run: |
+          echo "📝 生成固件README..."
+          cd ${{ env.REPO_PATH }}/firmware
+          cat > README.md << EOF
 # ImmortalWrt 固件
-          
+
 ## 构建信息
 - 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
 - 源码分支: ${{ env.REPO_BRANCH }}
 - 提交哈希: $(git rev-parse --short HEAD)
-          
+
 ## 设备列表
  ${{ steps.devices.outputs.devices }}
-          
+
 ## 文件说明
 - *.bin: 固件文件
 - *.img: 镜像文件
 - manifest: 包清单
 EOF
-          echo "✅ 固件文件整理完成"
+          echo "✅ README生成完成"
 
       - name: 上传固件到Artifacts
         uses: actions/upload-artifact@v4
