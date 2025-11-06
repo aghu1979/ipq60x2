@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # ImmortalWrt DIY配置脚本
-# 版本: 1.2
+# 版本: 1.3 (简化版)
 # 作者: Mary
 # 描述: 配置设备初始管理IP/密码及系统优化
 # =============================================================================
@@ -12,7 +12,6 @@ source "$(dirname "$0")/common.sh"
 # 全局变量
 REPO_PATH="${REPO_PATH:-$(pwd)}"
 INIT_IP="192.168.111.1"
-INIT_PASSWORD=""  # 空密码
 HOSTNAME="WRT"
 AUTHOR="Mary"
 
@@ -51,7 +50,7 @@ uci set dropbear.@dropbear[0].RootPasswordAuth='on'
 uci set dropbear.@dropbear[0].PasswordAuth='on'
 uci commit dropbear
 
-# 设置时区
+# 设置时区和主机名
 uci set system.@system[0].zonename='Asia/Shanghai'
 uci set system.@system[0].timezone='CST-8'
 uci set system.@system[0].hostname='$HOSTNAME'
@@ -89,59 +88,6 @@ CONFIG_KERNEL_GIT_REF=""
 EOF
     
     log_success "编译配置优化完成"
-}
-
-# 添加自定义应用
-add_custom_applications() {
-    log_info "添加自定义应用..."
-    
-    # 创建自定义应用目录
-    mkdir -p "$REPO_PATH/package/custom"
-    
-    # 示例：添加自定义启动脚本
-    cat > "$REPO_PATH/package/custom/custom-init/Makefile" << 'EOF'
-include $(TOPDIR)/rules.mk
-
-PKG_NAME:=custom-init
-PKG_VERSION:=1.0
-PKG_RELEASE:=1
-
-include $(INCLUDE_DIR)/package.mk
-
-define Package/custom-init
-  SECTION:=utils
-  CATEGORY:=Utilities
-  TITLE:=Custom Initialization Scripts
-  DEPENDS:=+luci
-endef
-
-define Package/custom-init/install
-    $(INSTALL_DIR) $(1)/etc/init.d
-    $(INSTALL_BIN) ./files/custom-init.init $(1)/etc/init.d/custom-init
-endef
-
- $(eval $(call BuildPackage,custom-init))
-EOF
-    
-    mkdir -p "$REPO_PATH/package/custom/custom-init/files"
-    cat > "$REPO_PATH/package/custom/custom-init/files/custom-init.init" << 'EOF'
-#!/bin/sh /etc/rc.common
-
-START=99
-STOP=10
-
-start() {
-    echo "Custom initialization started..."
-    # 添加自定义启动逻辑
-}
-
-stop() {
-    echo "Custom initialization stopped..."
-}
-EOF
-    
-    chmod +x "$REPO_PATH/package/custom/custom-init/files/custom-init.init"
-    log_success "自定义应用添加完成"
 }
 
 # 配置系统优化
@@ -211,10 +157,9 @@ main() {
     # 检查必要目录
     mkdir -p "$REPO_PATH/files/etc/uci-defaults"
     
-    # 执行配置步骤
+    # 执行配置步骤（移除了多余的自定义应用）
     configure_initial_settings
     optimize_build_config
-    add_custom_applications
     configure_system_optimization
     generate_config_info
     
