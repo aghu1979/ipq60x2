@@ -25,39 +25,77 @@ export NC='\033[0m'           # 无颜色 - 重置颜色
 # --- 全局变量 ---
 export LOG_LEVEL=${LOG_LEVEL:-"INFO"}  # 默认日志级别
 export DEBUG_MODE=${DEBUG_MODE:-false} # 调试模式开关
+export SCRIPT_START_TIME=${SCRIPT_START_TIME:-$(date +%s)} # 脚本开始时间
+
+# --- 系统信息函数 ---
+# 获取系统CPU核心数
+get_cpu_cores() {
+    nproc
+}
+
+# 获取系统内存大小(MB)
+get_memory_mb() {
+    free -m | awk 'NR==2{print $2}'
+}
+
+# 获取磁盘使用情况
+get_disk_usage() {
+    local path=${1:-"/"}
+    df -h "$path" | awk 'NR==2{print $5}'
+}
+
+# 获取磁盘剩余空间(GB)
+get_disk_free() {
+    local path=${1:-"/"}
+    df -BG "$path" | awk 'NR==2{print $4}' | sed 's/G//'
+}
+
+# 显示系统资源使用情况
+show_system_resources() {
+    echo -e "${BLUE}系统资源使用情况:${NC}"
+    echo -e "  CPU核心数: ${CYAN}$(get_cpu_cores)${NC}"
+    echo -e "  内存总量: ${CYAN}$(get_memory_mb)MB${NC}"
+    echo -e "  磁盘使用: ${CYAN}$(get_disk_usage)${NC}"
+    echo -e "  磁盘剩余: ${CYAN}$(get_disk_free)GB${NC}"
+}
 
 # --- 日志记录函数 ---
 # 记录信息级别日志
 log_info() {
     if [[ "$LOG_LEVEL" == "INFO" || "$LOG_LEVEL" == "DEBUG" ]]; then
-        echo -e "${BLUE}[信息]${NC} $1"
+        echo -e "${BLUE}[$(get_timestamp)][信息]${NC} $1"
     fi
 }
 
 # 记录成功级别日志
 log_success() {
-    echo -e "${GREEN}[成功]${NC} $1"
+    echo -e "${GREEN}[$(get_timestamp)][成功]${NC} $1"
 }
 
 # 记录警告级别日志
 log_warn() {
-    echo -e "${YELLOW}[警告]${NC} $1"
+    echo -e "${YELLOW}[$(get_timestamp)][警告]${NC} $1"
 }
 
 # 记录错误级别日志
 log_error() {
-    echo -e "${RED}[错误]${NC} $1" >&2
+    echo -e "${RED}[$(get_timestamp)][错误]${NC} $1" >&2
 }
 
 # 记录调试级别日志
 log_debug() {
     if [[ "$DEBUG_MODE" == "true" ]]; then
-        echo -e "${PURPLE}[调试]${NC} $1"
+        echo -e "${PURPLE}[$(get_timestamp)][调试]${NC} $1"
     fi
 }
 
 # 记录步骤标题
 log_step() {
+    echo -e "\n${CYAN}========== $1 ==========${NC}\n"
+}
+
+# 记录子步骤
+log_substep() {
     echo -e "\n${CYAN}--- $1 ---${NC}\n"
 }
 
@@ -108,6 +146,17 @@ check_var_not_empty() {
     fi
 }
 
+# 检查命令是否存在
+check_command_exists() {
+    local cmd=$1
+    local message=${2:-"命令 $cmd 不存在"}
+    
+    if ! command -v "$cmd" &> /dev/null; then
+        log_error "$message"
+        exit 1
+    fi
+}
+
 # --- 文件操作函数 ---
 # 安全地创建目录
 safe_mkdir() {
@@ -145,6 +194,48 @@ safe_replace() {
         log_debug "替换文件内容: $file_path (搜索: $search_pattern, 替换: $replacement)"
     else
         log_warn "文件不存在，跳过替换: $file_path"
+    fi
+}
+
+# 安全地删除文件或目录
+safe_remove() {
+    local path=$1
+    local is_recursive=${2:-false}
+    
+    if [ -f "$path" ]; then
+        rm -f "$path"
+        log_debug "删除文件: $path"
+    elif [ -d "$path" ]; then
+        if [ "$is_recursive" = "true" ]; then
+            rm -rf "$path"
+            log_debug "递归删除目录: $path"
+        else
+            rmdir "$path" 2>/dev/null || log_warn "目录非空，无法删除: $path"
+        fi
+    else
+        log_debug "路径不存在，跳过删除: $path"
+    fi
+}
+
+# 安全地复制文件或目录
+safe_copy() {
+    local src=$1
+    local dst=$2
+    local is_recursive=${3:-false}
+    
+    if [ -f "$src" ]; then
+        cp "$src" "$dst"
+        log_debug "复制文件: $src -> $dst"
+    elif [ -d "$src" ]; then
+        if [ "$is_recursive" = "true" ]; then
+            cp -r "$src" "$dst"
+            log_debug "递归复制目录: $src -> $dst"
+        else
+            log_warn "目录复制需要递归标志: $src"
+        fi
+    else
+        log_error "源路径不存在: $src"
+        exit 1
     fi
 }
 
@@ -196,6 +287,28 @@ get_config_values() {
     fi
 }
 
+# 从配置文件中提取启用的LUCI软件包
+get_enabled_luci_packages() {
+    local config_file=$1
+    
+    if [ -f "$config_file" ]; then
+        grep "^CONFIG_PACKAGE_luci-app.*=y$" "$config_file" | \
+        grep -v "_INCLUDE_" | \
+        sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
+        sort
+    fi
+}
+
+# 从配置文件中提取设备配置
+extract_device_configs() {
+    local config_file=$1
+    
+    if [ -f "$config_file" ]; then
+        grep "^CONFIG_TARGET.*DEVICE.*=y$" "$config_file" | \
+        sed -r 's/.*DEVICE_(.*)=y/\1/'
+    fi
+}
+
 # --- 时间和日期函数 ---
 # 获取当前时间戳
 get_timestamp() {
@@ -207,21 +320,20 @@ get_date() {
     date '+%Y-%m-%d'
 }
 
-# --- 系统信息函数 ---
-# 获取系统CPU核心数
-get_cpu_cores() {
-    nproc
-}
-
-# 获取系统内存大小(MB)
-get_memory_mb() {
-    free -m | awk 'NR==2{print $2}'
-}
-
-# 获取磁盘使用情况
-get_disk_usage() {
-    local path=${1:-"/"}
-    df -h "$path" | awk 'NR==2{print $5}'
+# 格式化持续时间
+format_duration() {
+    local duration=$1
+    local hours=$((duration / 3600))
+    local minutes=$(((duration % 3600) / 60))
+    local seconds=$((duration % 60))
+    
+    if [ $hours -gt 0 ]; then
+        echo "${hours}小时${minutes}分${seconds}秒"
+    elif [ $minutes -gt 0 ]; then
+        echo "${minutes}分${seconds}秒"
+    else
+        echo "${seconds}秒"
+    fi
 }
 
 # --- 进程和任务函数 ---
@@ -284,18 +396,82 @@ confirm() {
 # 生成操作摘要报告
 generate_summary() {
     local title=$1
-    local start_time=$2
+    local start_time=${2:-$SCRIPT_START_TIME}
     local end_time=${3:-$(date +%s)}
     local status=${4:-"成功"}
     
     local duration=$((end_time - start_time))
-    local minutes=$((duration / 60))
-    local seconds=$((duration % 60))
+    local formatted_duration=$(format_duration $duration)
     
     echo -e "\n${CYAN}========== $title 摘要 ==========${NC}"
     echo -e "状态: ${GREEN}$status${NC}"
     echo -e "开始时间: $(date -d @$start_time '+%Y-%m-%d %H:%M:%S')"
     echo -e "结束时间: $(date -d @$end_time '+%Y-%m-%d %H:%M:%S')"
-    echo -e "耗时: ${minutes}分${seconds}秒"
+    echo -e "耗时: ${formatted_duration}"
+    echo -e "磁盘剩余空间: $(get_disk_free)GB"
     echo -e "${CYAN}=================================${NC}\n"
+}
+
+# --- 缓存管理函数 ---
+# 清理系统缓存
+clear_system_cache() {
+    log_info "清理系统缓存..."
+    
+    # 清理包管理器缓存
+    if command -v apt-get &> /dev/null; then
+        apt-get clean
+        log_debug "已清理apt-get缓存"
+    fi
+    
+    # 清理临时文件
+    find /tmp -type f -atime +7 -delete 2>/dev/null || true
+    log_debug "已清理临时文件"
+    
+    # 清理日志文件
+    find /var/log -type f -name "*.log" -atime +7 -delete 2>/dev/null || true
+    log_debug "已清理旧日志文件"
+    
+    log_success "系统缓存清理完成"
+}
+
+# --- OpenWrt特定函数 ---
+# 检查OpenWrt环境
+check_openwrt_env() {
+    local openwrt_root=${1:-"."}
+    
+    check_dir_exists "$openwrt_root" "OpenWrt根目录不存在: $openwrt_root"
+    check_file_exists "$openwrt_root/Makefile" "OpenWrt Makefile不存在，可能不是有效的OpenWrt源码目录"
+    
+    log_success "OpenWrt环境检查通过"
+}
+
+# 提取设备配置信息
+extract_device_info() {
+    local config_file=$1
+    local output_file=${2:-"device_info.txt"}
+    
+    if [ ! -f "$config_file" ]; then
+        log_error "配置文件不存在: $config_file"
+        return 1
+    fi
+    
+    # 提取目标架构
+    local target=$(grep "^CONFIG_TARGET_.*=y$" "$config_file" | head -1 | sed 's/^CONFIG_TARGET_\(.*\)=y$/\1/' | cut -d'_' -f1)
+    
+    # 提取子目标
+    local subtarget=$(grep "^CONFIG_TARGET_${target}_.*=y$" "$config_file" | head -1 | sed "s/^CONFIG_TARGET_${target}_\(.*\)=y$/\1/" | cut -d'_' -f1)
+    
+    # 提取设备名称
+    local devices=$(extract_device_configs "$config_file")
+    
+    {
+        echo "TARGET=$target"
+        echo "SUBTARGET=$subtarget"
+        echo "DEVICES=\"$devices\""
+    } > "$output_file"
+    
+    log_info "设备配置信息已保存到: $output_file"
+    log_debug "目标架构: $target"
+    log_debug "子目标: $subtarget"
+    log_debug "设备列表: $devices"
 }
