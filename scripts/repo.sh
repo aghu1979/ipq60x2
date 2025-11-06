@@ -1,85 +1,240 @@
-# 京东云雅典娜led控制
-git clone https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
-chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
+# scripts/repo.sh
+#!/bin/bash
 
-# passwall by xiaorouji，
-# 移除 openwrt feeds 自带的核心库
-rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
-git clone https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages
-# 移除 openwrt feeds 过时的luci版本
-rm -rf feeds/luci/applications/luci-app-passwall
-git clone https://github.com/xiaorouji/openwrt-passwall package/passwall-luci
-# passwall2 by xiaorouji，
-git clone https://github.com/xiaorouji/openwrt-passwall2 package/passwall2-luci
+# ==============================================================================
+# OpenWrt 第三方软件源集成脚本
+#
+# 功能:
+#   集成第三方软件源到OpenWrt构建系统
+#   预先检查并删除官方feeds中可能存在的同名软件包
+#   使用small-package作为后备仓库
+#
+# 使用方法:
+#   ./repo.sh [OpenWrt根目录]
+#
+# 作者: Mary
+# 日期：20251104
+# ==============================================================================
 
-# AdGuardHome，官方推荐OpenWrt LUCI app by @kongfl888 (originally by @rufengsuixing).
-# git clone https://github.com/kongfl888/luci-app-adguardhome package/luci-app-adguardhome
-# luci-app-adguardhome by sirpdboy
-git clone https://github.com/sirpdboy/luci-app-adguardhome.git package/luci-app-adguardhome
+# 导入通用函数
+source "$(dirname "$0")/common.sh"
 
-# ddns-go by sirpdboy，自带luci-app
-git clone https://github.com/sirpdboy/luci-app-ddns-go.git package/ddns-go
+# --- 配置变量 ---
+# 是否使用small-package作为后备仓库
+USE_SMALL_PACKAGE=true
+# 是否清理旧的软件包
+CLEAN_OLD_PACKAGES=true
+# 是否更新feeds
+UPDATE_FEEDS=true
+# 是否安装feeds
+INSTALL_FEEDS=true
 
-# luci-app-netdata by sirpdboy
-git clone https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata
+# --- 脚本逻辑 ---
+OPENWRT_ROOT_DIR="$1"
 
-# luci-app-netspeedtest by sirpdboy
-git clone https://github.com/sirpdboy/luci-app-netspeedtest package/luci-app-netspeedtest
+# 记录开始时间
+SCRIPT_START_TIME=$(date +%s)
 
-# luci-app-partexp by sirpdboy
-git clone https://github.com/sirpdboy/luci-app-partexp.git package/luci-app-partexp
+log_step "开始集成第三方软件源"
 
-# luci-app-taskplan by sirpdboy
-git clone https://github.com/sirpdboy/luci-app-taskplan package/luci-app-taskplan
+# 显示系统资源使用情况
+show_system_resources
 
-# lucky by gdy666，自带luci-app，sirpdboy也有luci-app但是可能与原作者有冲突
-git clone https://github.com/gdy666/luci-app-lucky.git package/lucky
-#git clone https://github.com/sirpdboy/luci-app-lucky.git package/lucky
+# 检查参数
+if [ -z "$OPENWRT_ROOT_DIR" ]; then
+    OPENWRT_ROOT_DIR="."
+    log_info "未指定OpenWrt根目录，使用当前目录"
+fi
 
-# luci-app-easytier
-git clone https://github.com/EasyTier/luci-app-easytier.git package/luci-app-easytier
+# 检查目录是否存在
+check_dir_exists "$OPENWRT_ROOT_DIR" "OpenWrt 根目录不存在: $OPENWRT_ROOT_DIR"
 
-# frp https://github.com/fatedier/frp，无luci-app，建议使用small-package更新
+# 检查OpenWrt环境
+check_openwrt_env "$OPENWRT_ROOT_DIR"
 
-# homeproxy immortalwrt官方出品，无luci-app，建议使用https://github.com/VIKINGYFY/homeproxy更新
-git clone https://github.com/VIKINGYFY/homeproxy package/homeproxy
-# 一个更方便地生成 ImmortalWrt/OpenWrt(23.05.x+) HomeProxy 插件大多数常用配置的脚本。
-# (必备) 通过私密 Gist 或其它可被正常访问的私有链接定制你的专属 rules.sh 配置内容；
-# 执行以下命令（脚本执行期间会向你索要你的定制配置URL）：bash -c "$(curl -fsSl https://raw.githubusercontent.com/thisIsIan-W/homeproxy-autogen-configuration/refs/heads/main/generate_homeproxy_rules.sh)"
+# 切换到OpenWrt根目录
+cd "$OPENWRT_ROOT_DIR" || exit 1
 
-# golang & luci-app-openlist2 by sbwml
-git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
-git clone https://github.com/sbwml/luci-app-openlist2 package/openlist
+# 创建package目录（如果不存在）
+safe_mkdir "package"
 
-# luci-app-mosdns by sbwml
-git clone -b v5 https://github.com/sbwml/luci-app-mosdns package/mosdns
+# 定义要添加的软件源列表
+declare -A REPOSITORIES=(
+    # 京东云雅典娜led控制
+    ["luci-app-athena-led"]="https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led"
+    
+    # passwall by xiaorouji
+    ["passwall-packages"]="https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages"
+    ["luci-app-passwall"]="https://github.com/xiaorouji/openwrt-passwall package/luci-app-passwall"
+    ["luci-app-passwall2"]="https://github.com/xiaorouji/openwrt-passwall2 package/luci-app-passwall2"
+    
+    # AdGuardHome
+    ["luci-app-adguardhome"]="https://github.com/sirpdboy/luci-app-adguardhome.git package/luci-app-adguardhome"
+    
+    # ddns-go
+    ["luci-app-ddns-go"]="https://github.com/sirpdboy/luci-app-ddns-go.git package/luci-app-ddns-go"
+    
+    # netdata
+    ["luci-app-netdata"]="https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata"
+    
+    # netspeedtest
+    ["luci-app-netspeedtest"]="https://github.com/sirpdboy/luci-app-netspeedtest package/luci-app-netspeedtest"
+    
+    # partexp
+    ["luci-app-partexp"]="https://github.com/sirpdboy/luci-app-partexp.git package/luci-app-partexp"
+    
+    # taskplan
+    ["luci-app-taskplan"]="https://github.com/sirpdboy/luci-app-taskplan package/luci-app-taskplan"
+    
+    # lucky
+    ["luci-app-lucky"]="https://github.com/gdy666/luci-app-lucky.git package/luci-app-lucky"
+    
+    # easytier
+    ["luci-app-easytier"]="https://github.com/EasyTier/luci-app-easytier.git package/luci-app-easytier"
+    
+    # homeproxy
+    ["homeproxy"]="https://github.com/VIKINGYFY/homeproxy package/homeproxy"
+    
+    # golang & openlist2
+    ["packages_lang_golang"]="https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang"
+    ["luci-app-openlist2"]="https://github.com/sbwml/luci-app-openlist2 package/luci-app-openlist2"
+    
+    # mosdns
+    ["luci-app-mosdns"]="https://github.com/sbwml/luci-app-mosdns -b v5 package/luci-app-mosdns"
+    
+    # quickfile
+    ["luci-app-quickfile"]="https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile"
+    
+    # momo & nikki
+    ["luci-app-momo"]="https://github.com/nikkinikki-org/OpenWrt-momo package/luci-app-momo"
+    ["luci-app-nikki"]="https://github.com/nikkinikki-org/OpenWrt-nikki package/luci-app-nikki"
+    
+    # OpenAppFilter
+    ["luci-app-oaf"]="https://github.com/destan19/OpenAppFilter.git package/luci-app-oaf"
+    
+    # openclash
+    ["luci-app-openclash"]="https://github.com/vernesong/OpenClash.git -b dev package/luci-app-openclash"
+    
+    # tailscale
+    ["luci-app-tailscale"]="https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale"
+    
+    # vnt
+    ["luci-app-vnt"]="https://github.com/lmq8267/luci-app-vnt.git package/luci-app-vnt"
+    
+    # small-package
+    ["small-package"]="https://github.com/kenzok8/small-package small"
+)
 
-# luci-app-quickfile by sbwml
-git clone https://github.com/sbwml/luci-app-quickfile package/quickfile
+# 定义需要从官方feeds中删除的软件包列表
+declare -a OFFICIAL_PACKAGES_TO_REMOVE=(
+    "xray-core"
+    "v2ray-geodata"
+    "sing-box"
+    "chinadns-ng"
+    "dns2socks"
+    "hysteria"
+    "ipt2socks"
+    "microsocks"
+    "naiveproxy"
+    "shadowsocks-libev"
+    "shadowsocks-rust"
+    "shadowsocksr-libev"
+    "simple-obfs"
+    "tcping"
+    "trojan-plus"
+    "tuic-client"
+    "v2ray-plugin"
+    "geoview"
+    "shadow-tls"
+)
 
-# luci-app-istorex（向导模式及主体）/luci-app-quickstart（网络向导和首页界面）/luci-app-diskman （磁盘管理），建议使用small-package更新
+# 清理旧的软件包
+if [ "$CLEAN_OLD_PACKAGES" = "true" ]; then
+    log_substep "清理旧的软件包..."
+    
+    # 删除官方feeds中的特定软件包
+    for package in "${OFFICIAL_PACKAGES_TO_REMOVE[@]}"; do
+        if [ -d "feeds/packages/net/$package" ]; then
+            log_info "删除官方feeds中的软件包: $package"
+            safe_remove "feeds/packages/net/$package" true
+        fi
+    done
+    
+    # 删除旧的luci-app-passwall
+    if [ -d "feeds/luci/applications/luci-app-passwall" ]; then
+        log_info "删除旧的luci-app-passwall"
+        safe_remove "feeds/luci/applications/luci-app-passwall" true
+    fi
+    
+    # 删除旧的tailscale配置
+    if [ -f "feeds/packages/net/tailscale/Makefile" ]; then
+        log_info "修改tailscale Makefile以避免冲突"
+        sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
+    fi
+fi
 
-# momo在 OpenWrt 上使用 sing-box 进行透明代理/nikki在 OpenWrt 上使用 Mihomo 进行透明代理。
-# echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main" >> "feeds.conf.default"
-# echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
-git clone https://github.com/nikkinikki-org/OpenWrt-momo package/luci-app-momo
-git clone https://github.com/nikkinikki-org/OpenWrt-nikki package/luci-app-nikki
+# 克隆第三方软件源
+log_substep "克隆第三方软件源..."
+for repo_name in "${!REPOSITORIES[@]}"; do
+    repo_info="${REPOSITORIES[$repo_name]}"
+    repo_url=$(echo "$repo_info" | awk '{print $1}')
+    repo_path=$(echo "$repo_info" | awk '{$1=""; print $0}' | sed 's/^[[:space:]]*//')
+    
+    log_info "克隆仓库: $repo_name"
+    log_debug "URL: $repo_url"
+    log_debug "路径: $repo_path"
+    
+    # 检查目标目录是否已存在
+    target_dir=$(echo "$repo_path" | awk '{print $1}')
+    if [ -d "$target_dir" ]; then
+        log_info "目标目录已存在，跳过: $target_dir"
+        continue
+    fi
+    
+    # 执行克隆命令
+    if git clone $repo_url $repo_path; then
+        log_success "成功克隆: $repo_name"
+        
+        # 特殊处理
+        case "$repo_name" in
+            "luci-app-athena-led")
+                log_info "设置athena-led权限..."
+                chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
+                ;;
+        esac
+    else
+        log_error "克隆失败: $repo_name"
+    fi
+done
 
-# OpenAppFilter（OAF），自带luci-app
-git clone https://github.com/destan19/OpenAppFilter.git package/OpenAppFilter
+# 更新feeds
+if [ "$UPDATE_FEEDS" = "true" ]; then
+    log_substep "更新feeds..."
+    if ./scripts/feeds update -a; then
+        log_success "Feeds更新成功"
+    else
+        log_error "Feeds更新失败"
+        exit 1
+    fi
+fi
 
-# luci-app-openclash by vernesong
-git clone -b dev https://github.com/vernesong/OpenClash.git package/luci-app-openclash
+# 安装feeds
+if [ "$INSTALL_FEEDS" = "true" ]; then
+    log_substep "安装feeds..."
+    if ./scripts/feeds install -a; then
+        log_success "Feeds安装成功"
+    else
+        log_error "Feeds安装失败"
+        exit 1
+    fi
+fi
 
-# tailscale，官方推荐luci-app-tailscale by asvow
-sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
-git clone https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
+# 显示当前磁盘使用情况
+log_info "当前磁盘使用情况:"
+df -h
 
-# vnt，官方https://github.com/vnt-dev/vnt，无luci-app，使用lmq8267
-git clone https://github.com/lmq8267/luci-app-vnt.git package/luci-app-vnt
+# 记录结束时间并生成摘要
+SCRIPT_END_TIME=$(date +%s)
+generate_summary "第三方软件源集成" "$SCRIPT_START_TIME" "$SCRIPT_END_TIME" "成功"
 
-# kenzok8/small-package，后备之选，只有上述的ipk地址缺失才会用到。
-git clone https://github.com/kenzok8/small-package small
-
-./scripts/feeds update -a
-./scripts/feeds install -a
+log_success "第三方软件源集成完成。"
