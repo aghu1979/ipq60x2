@@ -95,7 +95,7 @@ declare -A REPOSITORIES=(
     # homeproxy
     ["homeproxy"]="https://github.com/VIKINGYFY/homeproxy package/homeproxy"
     
-    # golang & openlist2
+    # golang & openlist2 - 特殊处理，需要先删除已存在的
     ["packages_lang_golang"]="https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang"
     ["luci-app-openlist2"]="https://github.com/sbwml/luci-app-openlist2 package/luci-app-openlist2"
     
@@ -171,6 +171,12 @@ if [ "$CLEAN_OLD_PACKAGES" = "true" ]; then
         log_info "修改tailscale Makefile以避免冲突"
         sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
     fi
+    
+    # 特殊处理：删除已存在的golang目录
+    if [ -d "feeds/packages/lang/golang" ]; then
+        log_info "删除已存在的golang目录以避免冲突"
+        safe_remove "feeds/packages/lang/golang" true
+    fi
 fi
 
 # 克隆第三方软件源
@@ -187,8 +193,8 @@ for repo_name in "${!REPOSITORIES[@]}"; do
     # 检查目标目录是否已存在
     target_dir=$(echo "$repo_path" | awk '{print $1}')
     if [ -d "$target_dir" ]; then
-        log_info "目标目录已存在，跳过: $target_dir"
-        continue
+        log_info "目标目录已存在，先删除: $target_dir"
+        safe_remove "$target_dir" true
     fi
     
     # 执行克隆命令
