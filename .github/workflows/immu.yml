@@ -1,4 +1,5 @@
-# .github/workflows/immu.yml
+# .github/workflows/immu.yml (完整版，仔细检查每一步)
+
 name: ImmortalWrt 自动构建工作流
 
 on:
@@ -55,18 +56,12 @@ jobs:
         df -h
         lsblk
         
-        # 检查磁盘情况
-        # /dev/sda1 是根分区 (/)
-        # /dev/sdb1 是额外磁盘，挂载在 /mnt
-        
         if [ -e /dev/sdb1 ] && mountpoint -q /mnt; then
           echo "发现 /dev/sdb1 挂载在 /mnt，准备使用其空间"
           
-          # 创建工作目录在 /mnt 下
           sudo mkdir -p /mnt/workdir
           sudo chown $USER:$GROUPS /mnt/workdir
           
-          # 创建符号链接，将 /workdir 指向 /mnt/workdir
           sudo rm -rf /workdir
           sudo ln -sf /mnt/workdir /workdir
           
@@ -96,49 +91,59 @@ jobs:
         echo "当前磁盘使用情况:"
         df -h
         
-        # 检查源码目录中的配置文件
-        echo "检查源码配置文件:"
-        ls -la /workdir/immortalwrt/
-        
-        # 复制配置文件到 .config 作为基准
-        if [ -f ${{ github.workspace }}/$CONFIG_FILE ]; then
-          echo "发现用户配置文件: ${{ github.workspace }}/$CONFIG_FILE"
-          echo "用户配置文件大小: $(stat -c%s ${{ github.workspace }}/$CONFIG_FILE) 字节"
-          echo "用户配置文件行数: $(wc -l < ${{ github.workspace }}/$CONFIG_FILE)"
+        # 检查用户配置文件
+        echo "检查用户配置文件路径: ${{ github.workspace }}/$CONFIG_FILE"
+        if [ -f "${{ github.workspace }}/$CONFIG_FILE" ]; then
+          echo "✅ 发现用户配置文件"
+          echo "用户配置文件大小: $(stat -c%s "${{ github.workspace }}/$CONFIG_FILE") 字节"
+          echo "用户配置文件行数: $(wc -l < "${{ github.workspace }}/$CONFIG_FILE")"
+          echo "用户配置文件中LUCI包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" "${{ github.workspace }}/$CONFIG_FILE" || echo "0")"
+          
+          # 显示用户配置文件的前10个LUCI包
+          echo "用户配置文件前10个LUCI软件包:"
+          grep "^CONFIG_PACKAGE_luci-app-.*=y" "${{ github.workspace }}/$CONFIG_FILE" | head -10 || echo "无LUCI包"
           
           # 复制到 .config
-          cp ${{ github.workspace }}/$CONFIG_FILE /workdir/immortalwrt/.config
-          echo "已复制用户配置文件到 .config"
+          cp "${{ github.workspace }}/$CONFIG_FILE" /workdir/immortalwrt/.config
+          echo "✅ 已复制用户配置文件到 .config"
           
           # 验证复制结果
           echo "验证复制结果:"
           echo "  .config文件大小: $(stat -c%s /workdir/immortalwrt/.config) 字节"
           echo "  .config文件行数: $(wc -l < /workdir/immortalwrt/.config)"
-          echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" /workdir/immortalwrt/.config || echo "0")"
+          echo "  .config中LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" /workdir/immortalwrt/.config || echo "0")"
           
-          # 显示前10个LUCI软件包
-          echo "前10个LUCI软件包:"
-          grep "^CONFIG_PACKAGE_luci-app-.*=y" /workdir/immortalwrt/.config | head -10
+          # 显示.config的前10个LUCI包
+          echo ".config前10个LUCI软件包:"
+          grep "^CONFIG_PACKAGE_luci-app-.*=y" /workdir/immortalwrt/.config | head -10 || echo "无LUCI包"
+          
+          # 对比两个文件是否一致
+          if cmp -s "${{ github.workspace }}/$CONFIG_FILE" /workdir/immortalwrt/.config; then
+            echo "✅ 配置文件复制成功，内容一致"
+          else
+            echo "❌ 配置文件复制失败，内容不一致"
+            exit 1
+          fi
         else
-          echo "警告: 未找到用户配置文件 ${{ github.workspace }}/$CONFIG_FILE"
+          echo "❌ 警告: 未找到用户配置文件 ${{ github.workspace }}/$CONFIG_FILE"
           echo "当前目录内容:"
-          ls -la ${{ github.workspace }}/
+          ls -la "${{ github.workspace }}/"
           exit 1
         fi
         
         # 复制脚本文件
         echo "复制脚本文件..."
-        [ -e ${{ github.workspace }}/$DIY_P1_SH ] && cp ${{ github.workspace }}/$DIY_P1_SH /workdir/immortalwrt/diy.sh
-        [ -e ${{ github.workspace }}/$DIY_P2_SH ] && cp ${{ github.workspace }}/$DIY_P2_SH /workdir/immortalwrt/repo.sh
-        [ -e ${{ github.workspace }}/scripts/common.sh ] && cp ${{ github.workspace }}/scripts/common.sh /workdir/immortalwrt/common.sh
-        [ -e ${{ github.workspace }}/scripts/luci_report.sh ] && cp ${{ github.workspace }}/scripts/luci_report.sh /workdir/immortalwrt/luci_report.sh
+        [ -e "${{ github.workspace }}/$DIY_P1_SH" ] && cp "${{ github.workspace }}/$DIY_P1_SH" /workdir/immortalwrt/diy.sh
+        [ -e "${{ github.workspace }}/$DIY_P2_SH" ] && cp "${{ github.workspace }}/$DIY_P2_SH" /workdir/immortalwrt/repo.sh
+        [ -e "${{ github.workspace }}/scripts/common.sh" ] && cp "${{ github.workspace }}/scripts/common.sh" /workdir/immortalwrt/common.sh
+        [ -e "${{ github.workspace }}/scripts/luci_report.sh" ] && cp "${{ github.workspace }}/scripts/luci_report.sh" /workdir/immortalwrt/luci_report.sh
         
         # 设置执行权限
         chmod +x /workdir/immortalwrt/diy.sh /workdir/immortalwrt/repo.sh /workdir/immortalwrt/common.sh /workdir/immortalwrt/luci_report.sh
         
         # 确保configs目录存在
         mkdir -p /workdir/immortalwrt/configs
-        [ -f ${{ github.workspace }}/$CONFIG_FILE ] && cp ${{ github.workspace }}/$CONFIG_FILE /workdir/immortalwrt/configs/immu.config
+        [ -f "${{ github.workspace }}/$CONFIG_FILE" ] && cp "${{ github.workspace }}/$CONFIG_FILE" /workdir/immortalwrt/configs/immu.config
         
         echo "配置加载完成，当前磁盘使用情况:"
         df -h
@@ -180,7 +185,7 @@ jobs:
         echo "  配置行数: $(wc -l < .config)"
         echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" .config || echo "0")"
         echo "前10个LUCI软件包:"
-        grep "^CONFIG_PACKAGE_luci-app-.*=y" .config | head -10
+        grep "^CONFIG_PACKAGE_luci-app-.*=y" .config | head -10 || echo "无LUCI包"
         [ -e ./luci_report.sh ] && ./luci_report.sh
         echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
         df -h
@@ -232,14 +237,11 @@ jobs:
         df -h
         echo "======================="
         
-        # 提取设备名称，处理可能的格式问题
+        # 提取设备名称
         DEVICE_NAMES=$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' | tr '\n' ' ')
         echo "检测到的设备: $DEVICE_NAMES"
         
-        # 选择第一个设备作为主设备
         TARGET_DEVICE=$(echo "$DEVICE_NAMES" | awk '{print $1}')
-        
-        # 清理设备名称，移除非法字符
         TARGET_DEVICE=$(echo "$TARGET_DEVICE" | sed 's/[^a-zA-Z0-9_-]//g')
         
         if [ -n "$TARGET_DEVICE" ]; then
@@ -270,9 +272,7 @@ jobs:
       id: organize
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        # 检查固件目录是否存在
         if [ -d "/workdir/immortalwrt/bin/targets" ]; then
-          # 找到第一个目标目录
           TARGET_DIR=$(find /workdir/immortalwrt/bin/targets -maxdepth 1 -type d | head -2 | tail -1)
           if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
             cd "$TARGET_DIR"
