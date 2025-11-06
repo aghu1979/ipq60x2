@@ -3,48 +3,31 @@
 
 # ==============================================================================
 # LUCI 软件包变更报告生成器
-#
-# 功能:
-#   此脚本用于生成 OpenWrt/ImmortalWrt 在执行 'make defconfig' 前后，
-#   .config 文件中 LUCI 软件包的详细变更报告。
-#
-# 使用方法:
-#   1. 在修改 feeds 或添加自定义软件包后，首次运行此脚本以建立基准配置。
-#   2. 执行 'make defconfig'。
-#   3. 再次运行此脚本，它将自动生成一份包含变更详情的完整报告。
-#
-# 注意: 请在 OpenWrt/ImmortalWrt 源码根目录下运行此脚本。
-# 作者: Mary
-# 日期：20251104
 # ==============================================================================
 
 # 导入通用函数
 source "$(dirname "$0")/common.sh"
 
 # --- 配置变量 ---
-# 文件路径定义
-CONFIG_FILE=".config"  # 始终使用 .config 作为配置文件
+CONFIG_FILE=".config"
 BEFORE_FILE=".luci_report_before.cfg"
 AFTER_FILE=".luci_report_after.cfg"
 REPORT_FILE=".luci_report.txt"
-DETAIL_REPORT_FILE=".luci_detailed_report.html"
 
 # --- 颜色和符号定义 ---
-COLOR_RED='\033[1;91m'       # 亮红色 - 用于移除项
-COLOR_GREEN='\033[1;92m'     # 亮绿色 - 用于新增项
-COLOR_YELLOW='\033[1;93m'    # 亮黄色 - 用于标题和警告
-COLOR_BLUE='\033[1;94m'      # 亮蓝色 - 用于信息
-COLOR_CYAN='\033[1;96m'      # 亮青色 - 用于列表项
-COLOR_WHITE='\033[1;97m'     # 亮白色 - 用于边框
-COLOR_MAGENTA='\033[1;95m'   # 洋红色 - 用于本地package
-COLOR_ORANGE='\033[0;33m'    # 橙色 - 用于特殊标记
-COLOR_RESET='\033[0m'        # 重置颜色
+COLOR_RED='\033[1;91m'
+COLOR_GREEN='\033[1;92m'
+COLOR_YELLOW='\033[1;93m'
+COLOR_BLUE='\033[1;94m'
+COLOR_CYAN='\033[1;96m'
+COLOR_WHITE='\033[1;97m'
+COLOR_MAGENTA='\033[1;95m'
+COLOR_ORANGE='\033[0;33m'
+COLOR_RESET='\033[0m'
 
 SYMBOL_ADD="${COLOR_GREEN}✅${COLOR_RESET}"
 SYMBOL_REMOVE="${COLOR_RED}❌${COLOR_RESET}"
 SYMBOL_BULLET="${COLOR_CYAN}▸${COLOR_RESET}"
-SYMBOL_INFO="${COLOR_BLUE}ℹ${COLOR_RESET}"
-SYMBOL_REPORT="${COLOR_YELLOW}📄${COLOR_RESET}"
 SYMBOL_WARNING="${COLOR_YELLOW}⚠️${COLOR_RESET}"
 SYMBOL_STAR="${COLOR_YELLOW}⭐${COLOR_RESET}"
 SYMBOL_PACKAGE="${COLOR_BLUE}📦${COLOR_RESET}"
@@ -53,19 +36,14 @@ SYMBOL_PACKAGE="${COLOR_BLUE}📦${COLOR_RESET}"
 SCRIPT_START_TIME=$(date +%s)
 
 log_step "开始生成 LUCI 软件包变更报告"
-
-# 显示系统资源使用情况
 show_system_resources
 
 # --- 检查依赖 ---
 check_command_exists "comm" "'comm' 命令未找到，此脚本无法运行。"
-
-# 检查配置文件是否存在
-check_file_exists "$CONFIG_FILE" "配置文件 '$CONFIG_FILE' 不存在。请确保在源码根目录下运行此脚本。"
+check_file_exists "$CONFIG_FILE" "配置文件 '$CONFIG_FILE' 不存在。"
 
 # --- 核心函数 ---
 
-# 打印带边框的标题
 print_header() {
     local title="$1"
     local title_color="$2"
@@ -80,88 +58,77 @@ print_header() {
     echo -e "${COLOR_RESET}"
 }
 
-# 打印小节标题
 print_section_header() {
     echo -e "\n${COLOR_YELLOW}--- $1 ---${COLOR_RESET}\n"
 }
 
-# 获取并排序 LUCI 软件包列表
-# 从 .config 文件中获取所有启用的 LUCI 应用包
 get_luci_packages() {
     local config_file="$1"
     
     log_debug "从配置文件获取LUCI软件包列表: $config_file"
     
-    # 修复正则表达式：正确匹配 luci-app- 开头的包
+    # 正确匹配 luci-app- 开头的包
     grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | \
     grep -v "_INCLUDE_" | \
     sed 's/^CONFIG_PACKAGE_\(.*\)=y.*$/\1/' | \
     sort
 }
 
-# 测试函数：显示所有匹配的行（用于调试）
 debug_luci_packages() {
     local config_file="$1"
     
     echo -e "\n${COLOR_YELLOW}调试：显示所有LUCI相关配置行${COLOR_RESET}"
     echo "================================"
     
-    # 显示所有 CONFIG_PACKAGE_luci-app- 开头的行
     echo -e "\n${COLOR_CYAN}1. 所有 CONFIG_PACKAGE_luci-app- 开头的行：${COLOR_RESET}"
     grep "^CONFIG_PACKAGE_luci-app-" "$config_file" | head -20
     
-    # 显示所有 =y 结尾的行
     echo -e "\n${COLOR_CYAN}2. 所有 =y 结尾的 LUCI 包行：${COLOR_RESET}"
     grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | head -20
     
-    # 显示提取的包名
     echo -e "\n${COLOR_CYAN}3. 提取的包名：${COLOR_RESET}"
     grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | \
     grep -v "_INCLUDE_" | \
     sed 's/^CONFIG_PACKAGE_\(.*\)=y.*$/\1/' | head -20
     
-    # 统计数量
-    local count=$(grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | \
-                 grep -v "_INCLUDE_" | \
-                 sed 's/^CONFIG_PACKAGE_\(.*\)=y.*$/\1/' | \
-                 wc -l)
+    local count
+    count=$(grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | \
+            grep -v "_INCLUDE_" | \
+            sed 's/^CONFIG_PACKAGE_\(.*\)=y.*$/\1/' | \
+            wc -l)
     echo -e "\n${COLOR_GREEN}总计 LUCI 应用包数量: $count${COLOR_RESET}"
     echo "================================"
 }
 
-# 分析包的来源
 analyze_package_source() {
     local package_name="$1"
     
-    # 检查是否在本地 package 目录中
     if [ -d "package/$package_name" ]; then
         echo "local"
         return 0
     fi
     
-    # 检查是否在 feeds/luci/applications 目录中
     if [ -d "feeds/luci/applications/$package_name" ]; then
         echo "feeds/luci"
         return 0
     fi
     
-    # 检查是否在 feeds/packages 目录中（递归查找）
-    local found_in_feeds=$(find feeds/packages -name "$package_name" -type d 2>/dev/null | head -1)
+    local found_in_feeds
+    found_in_feeds=$(find feeds/packages -name "$package_name" -type d 2>/dev/null | head -1)
     if [ -n "$found_in_feeds" ]; then
         echo "feeds/packages"
         return 0
     fi
     
-    # 检查是否在 package/feeds 目录中（安装后的feeds）
     if [ -d "package/feeds" ]; then
-        local found_in_package_feeds=$(find package/feeds -name "$package_name" -type d 2>/dev/null | head -1)
+        local found_in_package_feeds
+        found_in_package_feeds=$(find package/feeds -name "$package_name" -type d 2>/dev/null | head -1)
         if [ -n "$found_in_package_feeds" ]; then
             echo "package/feeds"
             return 0
         fi
     fi
     
-    # 检查是否在 small-package 目录中
     if [ -d "small/$package_name" ]; then
         echo "small-package"
         return 0
@@ -171,12 +138,10 @@ analyze_package_source() {
     return 1
 }
 
-# 获取包的描述信息
 get_package_description() {
     local package_name="$1"
     local makefile=""
     
-    # 查找Makefile
     if [ -f "package/$package_name/Makefile" ]; then
         makefile="package/$package_name/Makefile"
     elif [ -f "feeds/luci/applications/$package_name/Makefile" ]; then
@@ -190,20 +155,21 @@ get_package_description() {
     fi
 }
 
-# 打印软件包列表（带来源分析和描述）
 print_list_with_source() {
     local file_path="$1"
     local title="$2"
     
     if [ -s "$file_path" ]; then
-        local count=$(cat "$file_path" | wc -l)
+        local count
+        count=$(cat "$file_path" | wc -l)
         echo -e "\n${COLOR_BLUE}${SYMBOL_PACKAGE} $title (${COLOR_CYAN}$count${COLOR_BLUE} 个软件包)${COLOR_RESET}\n"
         
         while IFS= read -r package; do
+            local source
             source=$(analyze_package_source "$package")
+            local description
             description=$(get_package_description "$package")
             
-            # 根据来源选择图标和颜色
             case "$source" in
                 "local")
                     icon="🔧"
@@ -237,7 +203,6 @@ print_list_with_source() {
                     ;;
             esac
             
-            # 显示包名、来源和描述
             echo -e "  ${icon} ${color}${package}${COLOR_RESET} ${source_text}"
             if [ -n "$description" ]; then
                 echo -e "     ${COLOR_ORANGE}▸${COLOR_RESET} ${description}"
@@ -250,14 +215,12 @@ print_list_with_source() {
     fi
 }
 
-# 分析变更原因
 analyze_change_reason() {
     local package="$1"
-    local change_type="$2"  # "added" or "removed"
+    local change_type="$2"
     
     case "$change_type" in
         "added")
-            # 检查是否是新添加的第三方源
             if [ -d "package/$package" ]; then
                 echo "通过repo.sh添加的第三方软件包"
             elif [ -d "small/$package" ]; then
@@ -274,14 +237,16 @@ analyze_change_reason() {
     esac
 }
 
-# 生成文本报告文件
 generate_report_file() {
     local before_file="$1"
     local after_file="$2"
     local report_file="$3"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
+    local ADDED_PACKAGES
     ADDED_PACKAGES=$(comm -13 "$before_file" "$after_file")
+    local REMOVED_PACKAGES
     REMOVED_PACKAGES=$(comm -23 "$before_file" "$after_file")
     
     {
@@ -296,7 +261,9 @@ generate_report_file() {
         echo "✅ 新增的软件包:"
         if [ -n "$ADDED_PACKAGES" ]; then
             while IFS= read -r package; do
+                local source
                 source=$(analyze_package_source "$package")
+                local reason
                 reason=$(analyze_change_reason "$package" "added")
                 echo "  - $package [$source] - $reason"
             done <<< "$ADDED_PACKAGES"
@@ -307,6 +274,7 @@ generate_report_file() {
         echo "❌ 移除的软件包:"
         if [ -n "$REMOVED_PACKAGES" ]; then
             while IFS= read -r package; do
+                local reason
                 reason=$(analyze_change_reason "$package" "removed")
                 echo "  - $package - $reason"
             done <<< "$REMOVED_PACKAGES"
@@ -320,7 +288,6 @@ generate_report_file() {
 
 # --- 主逻辑 ---
 
-# 第一次运行 (make defconfig 之前)
 if [ ! -f "$BEFORE_FILE" ]; then
     log_substep "首次运行：建立 LUCI 软件包的基准配置"
     
@@ -329,21 +296,18 @@ if [ ! -f "$BEFORE_FILE" ]; then
     log_info "  文件大小: $(stat -c%s "$CONFIG_FILE") 字节"
     log_info "  配置行数: $(wc -l < "$CONFIG_FILE")"
     
-    # 调试：显示所有LUCI相关配置
     debug_luci_packages "$CONFIG_FILE"
     
-    # 基准配置从当前的 .config 获取
     get_luci_packages "$CONFIG_FILE" > "$BEFORE_FILE"
     check_status "获取 LUCI 软件包列表失败"
     
-    # 显示实际提取的数量
-    local actual_count=$(cat "$BEFORE_FILE" | wc -l)
+    local actual_count
+    actual_count=$(cat "$BEFORE_FILE" | wc -l)
     log_info "实际提取的LUCI软件包数: $actual_count"
     
     print_section_header "基准配置已成功捕获"
     print_list_with_source "$BEFORE_FILE" "基准配置中的LUCI软件包"
     
-    # 添加来源说明
     echo -e "\n${COLOR_BLUE}来源说明：${NC}"
     echo -e "  ${COLOR_MAGENTA}🔧 [本地package]${NC} - 手动添加到 package 目录的包"
     echo -e "  ${COLOR_GREEN}🌐 [官方luci]${NC} - 来自官方 luci feeds 的包"
@@ -355,7 +319,6 @@ if [ ! -f "$BEFORE_FILE" ]; then
     echo -e "\n${COLOR_BLUE}提示: 基准配置已保存到 '$BEFORE_FILE'。"
     echo -e "请运行 'make defconfig' 后再次执行本脚本以生成变更报告。${COLOR_RESET}"
 
-# 第二次运行 (make defconfig 之后)
 else
     log_substep "生成 LUCI 软件包变更报告"
     
@@ -363,18 +326,15 @@ else
     log_info "  文件大小: $(stat -c%s "$CONFIG_FILE") 字节"
     log_info "  配置行数: $(wc -l < "$CONFIG_FILE")"
     
-    # 调试：显示所有LUCI相关配置
     debug_luci_packages "$CONFIG_FILE"
     
-    # 从当前 .config 获取最新配置（make defconfig后的完整配置）
     get_luci_packages "$CONFIG_FILE" > "$AFTER_FILE"
     check_status "获取当前 LUCI 软件包列表失败"
     
-    # 显示实际提取的数量
-    local actual_count=$(cat "$AFTER_FILE" | wc -l)
+    local actual_count
+    actual_count=$(cat "$AFTER_FILE" | wc -l)
     log_info "实际提取的LUCI软件包数: $actual_count"
     
-    # 检查配置是否真的发生了变化
     if cmp -s "$BEFORE_FILE" "$AFTER_FILE"; then
         echo -e "\n${COLOR_YELLOW}${SYMBOL_WARNING} 检测到配置文件未发生变化。${COLOR_RESET}"
         echo -e "${COLOR_BLUE}可能的原因：${NC}"
@@ -397,33 +357,30 @@ else
             get_luci_packages "$CONFIG_FILE" > "$AFTER_FILE"
             ;;
           * )
-            rm -f "$AFTER_FILE" # 清理无用的 after 文件
+            rm -f "$AFTER_FILE"
             exit 0
             ;;
         esac
     fi
 
-    # 生成报告
-    REPORT_TITLE="LUCI 软件包变更报告"
+    local REPORT_TITLE="LUCI 软件包变更报告"
+    local TIMESTAMP
     TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
     
-    clear # 清屏以获得更好的报告显示效果
+    clear
     
     print_header "${REPORT_TITLE} - ${TIMESTAMP}" "$COLOR_YELLOW"
     
-    # 1. 基准配置
     print_list_with_source "$BEFORE_FILE" "📋 基准配置 (make defconfig 前)"
-    
-    # 2. 当前配置
     print_list_with_source "$AFTER_FILE" "📋 当前配置 (make defconfig 后)"
     
-    # 3. 变更摘要
     print_section_header "📊 变更摘要"
     
+    local ADDED_PACKAGES
     ADDED_PACKAGES=$(comm -13 "$BEFORE_FILE" "$AFTER_FILE")
+    local REMOVED_PACKAGES
     REMOVED_PACKAGES=$(comm -23 "$BEFORE_FILE" "$AFTER_FILE")
     
-    # 显示统计信息
     echo -e "${COLOR_BLUE}📈 统计信息:${NC}"
     echo -e "  ${SYMBOL_ADD} 新增: ${COLOR_GREEN}$(echo "$ADDED_PACKAGES" | grep -c .)${COLOR_RESET} 个"
     echo -e "  ${SYMBOL_REMOVE} 移除: ${COLOR_RED}$(echo "$REMOVED_PACKAGES" | grep -c .)${COLOR_RESET} 个"
@@ -433,11 +390,13 @@ else
     if [ -n "$ADDED_PACKAGES" ]; then
         echo -e "${COLOR_GREEN}${SYMBOL_STAR} 新增的软件包 (${COLOR_CYAN}$(echo "$ADDED_PACKAGES" | grep -c .)${COLOR_GREEN} 个)${COLOR_RESET}\n"
         while IFS= read -r package; do
+            local source
             source=$(analyze_package_source "$package")
+            local description
             description=$(get_package_description "$package")
+            local reason
             reason=$(analyze_change_reason "$package" "added")
             
-            # 根据来源选择图标和颜色
             case "$source" in
                 "local")
                     icon="🔧"
@@ -485,6 +444,7 @@ else
     if [ -n "$REMOVED_PACKAGES" ]; then
         echo -e "${COLOR_RED}${SYMBOL_STAR} 移除的软件包 (${COLOR_CYAN}$(echo "$REMOVED_PACKAGES" | grep -c .)${COLOR_RED} 个)${COLOR_RESET}\n"
         while IFS= read -r package; do
+            local reason
             reason=$(analyze_change_reason "$package" "removed")
             echo -e "  ${SYMBOL_REMOVE} ${COLOR_RED}${package}${COLOR_RESET}"
             echo -e "     ${COLOR_BLUE}原因:${COLOR_RESET} ${reason}"
@@ -496,10 +456,8 @@ else
     
     echo -e "${COLOR_WHITE}═══════════════════════════════════════════════════════════════${COLOR_RESET}"
     
-    # 生成报告文件
     generate_report_file "$BEFORE_FILE" "$AFTER_FILE" "$REPORT_FILE"
     
-    # 清理临时文件
     echo -e "\n${COLOR_BLUE}报告生成完毕。${NC}"
     echo -e "  📄 文本报告: ${COLOR_CYAN}$REPORT_FILE${NC}"
     echo ""
@@ -516,11 +474,9 @@ else
     esac
 fi
 
-# 显示当前磁盘使用情况
 log_info "当前磁盘使用情况:"
 df -h
 
-# 记录结束时间并生成摘要
 SCRIPT_END_TIME=$(date +%s)
 generate_summary "LUCI 软件包变更报告生成" "$SCRIPT_START_TIME" "$SCRIPT_END_TIME" "成功"
 
