@@ -7,14 +7,7 @@ on:
     branches: [ master, main ]
   workflow_dispatch:
     inputs:
-      variant:
-        description: '构建变体'
-        required: true
-        default: 'ultra'
-        type: choice
-        options:
-        - ultra
-        - max
+
       clean_build:
         description: '完全重新构建'
         required: false
