@@ -78,10 +78,10 @@ jobs:
         fi
 
     - name: 克隆源码
-      working-directory: /workdir
       run: |
         df -h
         echo "开始克隆源码..."
+        cd /workdir
         git clone $REPO_URL -b $REPO_BRANCH immortalwrt
         cd immortalwrt
         echo "源码克隆完成，当前磁盘使用情况:"
@@ -144,8 +144,8 @@ jobs:
         df -h
 
     - name: 更新并安装Feeds
-      working-directory: /workdir/immortalwrt
       run: |
+        cd /workdir/immortalwrt
         echo "开始更新Feeds..."
         ./scripts/feeds update -a
         echo "Feeds更新完成，当前磁盘使用情况:"
@@ -156,24 +156,24 @@ jobs:
         df -h
 
     - name: 运行自定义脚本
-      working-directory: /workdir/immortalwrt
       run: |
+        cd /workdir/immortalwrt
         echo "运行DIY脚本..."
         [ -e ./diy.sh ] && ./diy.sh .
         echo "DIY脚本执行完成，当前磁盘使用情况:"
         df -h
 
     - name: 更新第三方源
-      working-directory: /workdir/immortalwrt
       run: |
+        cd /workdir/immortalwrt
         echo "开始更新第三方源..."
         [ -e ./repo.sh ] && ./repo.sh .
         echo "第三方源更新完成，当前磁盘使用情况:"
         df -h
 
     - name: 生成LUCI软件包报告（defconfig前）
-      working-directory: /workdir/immortalwrt
       run: |
+        cd /workdir/immortalwrt
         echo "开始生成LUCI软件包报告（defconfig前）..."
         echo "当前.config文件信息:"
         echo "  文件大小: $(stat -c%s .config) 字节"
@@ -186,8 +186,8 @@ jobs:
         df -h
 
     - name: 执行make defconfig
-      working-directory: /workdir/immortalwrt
       run: |
+        cd /workdir/immortalwrt
         echo "执行make defconfig前:"
         echo "  .config文件大小: $(stat -c%s .config) 字节"
         echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app-.*=y" .config || echo "0")"
@@ -203,8 +203,8 @@ jobs:
         df -h
 
     - name: 生成LUCI软件包报告（defconfig后）
-      working-directory: /workdir/immortalwrt
       run: |
+        cd /workdir/immortalwrt
         echo "再次生成LUCI软件包报告..."
         [ -e ./luci_report.sh ] && ./luci_report.sh
         echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
@@ -212,8 +212,8 @@ jobs:
 
     - name: 下载编译所需依赖
       id: download
-      working-directory: /workdir/immortalwrt
       run: |
+        cd /workdir/immortalwrt
         echo "开始下载编译所需依赖..."
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
@@ -223,8 +223,8 @@ jobs:
 
     - name: 编译固件
       id: compile
-      working-directory: /workdir/immortalwrt
       run: |
+        cd /workdir/immortalwrt
         echo "开始编译固件..."
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 || make -j1 V=s
