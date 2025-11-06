@@ -346,16 +346,24 @@ jobs:
         run: |
           echo "📝 生成固件README..."
           cd ${{ env.REPO_PATH }}/firmware
-          cat > README.md << 'EOF'
+          
+          # 获取动态值
+          BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+          DEVICES_LIST="${{ steps.devices.outputs.devices }}"
+          REPO_BRANCH="${{ env.REPO_BRANCH }}"
+          
+          # 生成README文件
+          cat > README.md << EOF
 # ImmortalWrt 固件
 
 ## 构建信息
-- 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
-- 源码分支: ${{ env.REPO_BRANCH }}
-- 提交哈希: $(git rev-parse --short HEAD)
+- 构建时间: ${BUILD_TIME}
+- 源码分支: ${REPO_BRANCH}
+- 提交哈希: ${COMMIT_HASH}
 
 ## 设备列表
- ${{ steps.devices.outputs.devices }}
+ ${DEVICES_LIST}
 
 ## 文件说明
 - *.bin: 固件文件
