@@ -47,59 +47,40 @@ jobs:
           df -h
           lsblk
           
-          # 检查当前可用空间
           AVAILABLE_SPACE=$(df / | awk 'NR==2 {print $4}')
           echo "当前根分区可用空间: ${AVAILABLE_SPACE}KB"
           
-          # 如果空间足够(>50GB)，跳过扩展
           if [ "$AVAILABLE_SPACE" -gt 52428800 ]; then
             echo "✅ 磁盘空间充足，跳过扩展"
             exit 0
           fi
           
-          # 检查是否有额外的磁盘挂载在 /mnt
           if [ -e /dev/sdb1 ] && mountpoint -q /mnt; then
             echo "📋 发现 /dev/sdb1 挂载在 /mnt，准备使用其空间"
-            
             sudo mkdir -p /mnt/workdir
             sudo chown $USER:$GROUPS /mnt/workdir
-            
-            # 创建软链接
             sudo rm -rf /workdir
             sudo ln -sf /mnt/workdir /workdir
-            
-            # 更新环境变量
             echo "REPO_PATH=/workdir/immortalwrt" >> $GITHUB_ENV
-            
             echo "✅ 磁盘空间重定向完成"
             df -h
             lsblk
           elif [ -e /dev/sda1 ] && mountpoint -q /mnt; then
             echo "📋 发现 /dev/sda1 挂载在 /mnt，准备使用其空间"
-            
             sudo mkdir -p /mnt/workdir
             sudo chown $USER:$GROUPS /mnt/workdir
-            
-            # 创建软链接
             sudo rm -rf /workdir
             sudo ln -sf /mnt/workdir /workdir
-            
-            # 更新环境变量
             echo "REPO_PATH=/workdir/immortalwrt" >> $GITHUB_ENV
-            
             echo "✅ 磁盘空间重定向完成"
             df -h
             lsblk
           else
             echo "⚠️ 未发现可用的磁盘空间，尝试其他方法"
-            
-            # 查找未挂载的磁盘
             EXTRA_DISK=""
             for disk in sda sdb sdc sdd; do
               if [ -b "/dev/$disk" ]; then
-                # 检查是否已挂载
                 if ! mount | grep -q "/dev/$disk"; then
-                  # 检查是否有分区
                   if [ -b "/dev/${disk}1" ]; then
                     EXTRA_DISK="/dev/${disk}1"
                   else
@@ -114,38 +95,22 @@ jobs:
             
             if [ -n "$EXTRA_DISK" ]; then
               echo "📋 找到额外磁盘: $EXTRA_DISK"
-              
-              # 检查磁盘是否已格式化
               if ! blkid $EXTRA_DISK; then
                 echo "🔧 格式化磁盘 $EXTRA_DISK..."
                 sudo mkfs.ext4 -F $EXTRA_DISK
               fi
-              
-              # 创建挂载点
               sudo mkdir -p /mnt/extra-space
-              
-              # 确保挂载点未被使用
               if mountpoint -q /mnt/extra-space; then
                 echo "🔧 卸载已存在的挂载..."
                 sudo umount /mnt/extra-space
               fi
-              
-              # 挂载磁盘
               sudo mount $EXTRA_DISK /mnt/extra-space
-              
-              # 设置权限
               sudo chown -R $USER:$USER /mnt/extra-space
-              
-              # 创建工作目录
               mkdir -p /mnt/extra-space/immortalwrt
-              
-              # 更新环境变量
               echo "REPO_PATH=/mnt/extra-space/immortalwrt" >> $GITHUB_ENV
-              
               echo "✅ 磁盘扩展完成"
             else
               echo "⚠️ 未找到任何可用磁盘，清理系统缓存"
-              # 清理系统缓存释放空间
               sudo apt-get clean
               sudo docker system prune -af --volumes || true
               echo "✅ 已清理系统缓存"
@@ -322,22 +287,7 @@ jobs:
         run: |
           echo "📝 生成固件README..."
           cd ${{ env.REPO_PATH }}/firmware
-          cat > README.md << EOF
-# ImmortalWrt 固件
-
-## 构建信息
-- 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
-- 源码分支: ${{ env.REPO_BRANCH }}
-- 提交哈希: $(git rev-parse --short HEAD)
-
-## 设备列表
- ${{ steps.devices.outputs.devices }}
-
-## 文件说明
-- *.bin: 固件文件
-- *.img: 镜像文件
-- manifest: 包清单
-EOF
+          printf '%s\n' '# ImmortalWrt 固件' '' '## 构建信息' "- 构建时间: $(date '+%Y-%m-%d %H:%M:%S')" "- 源码分支: ${{ env.REPO_BRANCH }}" "- 提交哈希: $(git rev-parse --short HEAD)" '' '## 设备列表' "${{ steps.devices.outputs.devices }}" '' '## 文件说明' '- *.bin: 固件文件' '- *.img: 镜像文件' '- manifest: 包清单' > README.md
           echo "✅ README生成完成"
 
       - name: 上传固件到Artifacts
