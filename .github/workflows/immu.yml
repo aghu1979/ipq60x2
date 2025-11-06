@@ -1,3 +1,4 @@
+# .github/workflows/immu.yml
 name: ImmortalWrt 自动构建工作流
 
 on:
@@ -72,11 +73,26 @@ jobs:
     - name: 加载自定义配置
       working-directory: /workdir/immortalwrt
       run: |
-        [ -e ${{ github.workspace }}/$CONFIG_FILE ] && cp ${{ github.workspace }}/$CONFIG_FILE .config
+        # 复制配置文件
+        if [ -f ${{ github.workspace }}/$CONFIG_FILE ]; then
+          cp ${{ github.workspace }}/$CONFIG_FILE .config
+          echo "已复制用户配置文件到 .config"
+        else
+          echo "警告: 未找到用户配置文件 ${{ github.workspace }}/$CONFIG_FILE"
+        fi
+        
+        # 复制脚本文件
         [ -e ${{ github.workspace }}/$DIY_P1_SH ] && cp ${{ github.workspace }}/$DIY_P1_SH ./diy.sh
         [ -e ${{ github.workspace }}/$DIY_P2_SH ] && cp ${{ github.workspace }}/$DIY_P2_SH ./repo.sh
         [ -e ${{ github.workspace }}/scripts/common.sh ] && cp ${{ github.workspace }}/scripts/common.sh ./common.sh
-        chmod +x diy.sh repo.sh common.sh
+        [ -e ${{ github.workspace }}/scripts/luci_report.sh ] && cp ${{ github.workspace }}/scripts/luci_report.sh ./luci_report.sh
+        
+        # 设置执行权限
+        chmod +x diy.sh repo.sh common.sh luci_report.sh
+        
+        # 确保configs目录存在
+        mkdir -p configs
+        [ -f ${{ github.workspace }}/$CONFIG_FILE ] && cp ${{ github.workspace }}/$CONFIG_FILE configs/immu.config
 
     - name: 更新并安装Feeds
       working-directory: /workdir/immortalwrt
@@ -102,17 +118,15 @@ jobs:
       working-directory: /workdir/immortalwrt
       run: |
         echo "开始更新第三方源..."
-        [ -e ./repo.sh ] && ./repo.sh
+        [ -e ./repo.sh ] && ./repo.sh .
         echo "第三方源更新完成，当前磁盘使用情况:"
         df -h
 
-    - name: 生成LUCI软件包报告
+    - name: 生成LUCI软件包报告（defconfig前）
       working-directory: /workdir/immortalwrt
       run: |
-        echo "开始生成LUCI软件包报告..."
-        [ -e ${{ github.workspace }}/scripts/luci_report.sh ] && cp ${{ github.workspace }}/scripts/luci_report.sh ./luci_report.sh
-        chmod +x luci_report.sh
-        ./luci_report.sh
+        echo "开始生成LUCI软件包报告（defconfig前）..."
+        [ -e ./luci_report.sh ] && ./luci_report.sh
         echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
         df -h
 
@@ -124,11 +138,11 @@ jobs:
         echo "make defconfig完成，当前磁盘使用情况:"
         df -h
 
-    - name: 再次生成LUCI软件包报告
+    - name: 生成LUCI软件包报告（defconfig后）
       working-directory: /workdir/immortalwrt
       run: |
         echo "再次生成LUCI软件包报告..."
-        ./luci_report.sh
+        [ -e ./luci_report.sh ] && ./luci_report.sh
         echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
         df -h
 
