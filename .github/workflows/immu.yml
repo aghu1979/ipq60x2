@@ -324,28 +324,20 @@ jobs:
           DEVICES_LIST="${{ steps.devices.outputs.devices }}"
           REPO_BRANCH="${{ env.REPO_BRANCH }}"
           
-          cat > README.md << 'EOF'
-# ImmortalWrt 固件
-
-## 构建信息
-- 构建时间: BUILD_TIME_PLACEHOLDER
-- 源码分支: REPO_BRANCH_PLACEHOLDER
-- 提交哈希: COMMIT_HASH_PLACEHOLDER
-
-## 设备列表
-DEVICES_LIST_PLACEHOLDER
-
-## 文件说明
-- *.bin: 固件文件
-- *.img: 镜像文件
-- manifest: 包清单
-EOF
-          
-          # 使用sed替换占位符，避免变量展开问题
-          sed -i "s/BUILD_TIME_PLACEHOLDER/${BUILD_TIME}/g" README.md
-          sed -i "s/REPO_BRANCH_PLACEHOLDER/${REPO_BRANCH}/g" README.md
-          sed -i "s/COMMIT_HASH_PLACEHOLDER/${COMMIT_HASH}/g" README.md
-          sed -i "s/DEVICES_LIST_PLACEHOLDER/${DEVICES_LIST}/g" README.md
+          # 使用printf生成README，避免heredoc和sed的复杂语法
+          printf '# ImmortalWrt 固件\n\n' > README.md
+          printf '## 构建信息\n' >> README.md
+          printf '- 构建时间: %s\n' "$BUILD_TIME" >> README.md
+          printf '- 源码分支: %s\n' "$REPO_BRANCH" >> README.md
+          printf '- 提交哈希: %s\n' "$COMMIT_HASH" >> README.md
+          printf '\n' >> README.md
+          printf '## 设备列表\n' >> README.md
+          printf '%s\n' "$DEVICES_LIST" >> README.md
+          printf '\n' >> README.md
+          printf '## 文件说明\n' >> README.md
+          printf '- *.bin: 固件文件\n' >> README.md
+          printf '- *.img: 镜像文件\n' >> README.md
+          printf '- manifest: 包清单\n' >> README.md
           
           echo "✅ README生成完成"
 
