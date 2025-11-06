@@ -111,20 +111,33 @@ jobs:
     - name: 加载自定义配置
       working-directory: /workdir/immortalwrt
       run: |
+        # 检查源码目录中的配置文件
+        echo "当前工作目录: $(pwd)"
+        echo "GitHub workspace: ${{ github.workspace }}"
+        echo "查找配置文件..."
+        find ${{ github.workspace }} -name "immu.config" -type f 2>/dev/null
+        
         # 复制配置文件到 .config 作为基准
-        if [ -f ${{ github.workspace }}/$CONFIG_FILE ]; then
-          cp ${{ github.workspace }}/$CONFIG_FILE .config
-          echo "已复制用户配置文件到 .config: $CONFIG_FILE"
+        if [ -f "${{ github.workspace }}/configs/immu.config" ]; then
+          echo "找到配置文件: ${{ github.workspace }}/configs/immu.config"
+          cp "${{ github.workspace }}/configs/immu.config" .config
+          echo "已复制用户配置文件到 .config"
           echo "配置文件行数: $(wc -l < .config)"
           echo "LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" .config || echo "0")"
+          echo "前10个LUCI软件包:"
+          grep "^CONFIG_PACKAGE_luci-app.*=y$" .config | head -10
         else
-          echo "警告: 未找到用户配置文件 ${{ github.workspace }}/$CONFIG_FILE"
+          echo "错误: 未找到用户配置文件 ${{ github.workspace }}/configs/immu.config"
+          echo "当前目录内容:"
+          ls -la ${{ github.workspace }}/
+          echo "configs目录内容:"
+          ls -la ${{ github.workspace }}/configs/ 2>/dev/null || echo "configs目录不存在"
           exit 1
         fi
         
         # 复制脚本文件
-        [ -e ${{ github.workspace }}/$DIY_P1_SH ] && cp ${{ github.workspace }}/$DIY_P1_SH ./diy.sh
-        [ -e ${{ github.workspace }}/$DIY_P2_SH ] && cp ${{ github.workspace }}/$DIY_P2_SH ./repo.sh
+        [ -e ${{ github.workspace }}/scripts/diy.sh ] && cp ${{ github.workspace }}/scripts/diy.sh ./diy.sh
+        [ -e ${{ github.workspace }}/scripts/repo.sh ] && cp ${{ github.workspace }}/scripts/repo.sh ./repo.sh
         [ -e ${{ github.workspace }}/scripts/common.sh ] && cp ${{ github.workspace }}/scripts/common.sh ./common.sh
         [ -e ${{ github.workspace }}/scripts/luci_report.sh ] && cp ${{ github.workspace }}/scripts/luci_report.sh ./luci_report.sh
         
@@ -133,7 +146,7 @@ jobs:
         
         # 确保configs目录存在
         mkdir -p configs
-        [ -f ${{ github.workspace }}/$CONFIG_FILE ] && cp ${{ github.workspace }}/$CONFIG_FILE configs/immu.config
+        cp "${{ github.workspace }}/configs/immu.config" configs/immu.config
 
     - name: 更新并安装Feeds
       working-directory: /workdir/immortalwrt
@@ -171,6 +184,8 @@ jobs:
         echo "  文件大小: $(stat -c%s .config) 字节"
         echo "  配置行数: $(wc -l < .config)"
         echo "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" .config || echo "0")"
+        echo "前10个LUCI软件包:"
+        grep "^CONFIG_PACKAGE_luci-app.*=y$" .config | head -10
         [ -e ./luci_report.sh ] && ./luci_report.sh
         echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
         df -h
