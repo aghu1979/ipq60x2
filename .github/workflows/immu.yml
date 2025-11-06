@@ -1,4 +1,4 @@
-name: ImmortalWrt IPQ60xx Ultra Build
+name: ImmortalWrt IPQ60xx Build
 
 on:
   push:
@@ -6,21 +6,12 @@ on:
   pull_request:
     branches: [ master, main ]
   workflow_dispatch:
-    inputs:
-
-      clean_build:
-        description: '完全重新构建'
-        required: false
-        default: false
-        type: boolean
 
 env:
   REPO_NAME: immortalwrt
   REPO_OWNER: laipeng668
   REPO_BRANCH: master
-  VARIANT: ${{ github.event.inputs.variant || 'ultra' }}
   REPO_PATH: ${{ github.workspace }}/immortalwrt
-  FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: configs/immu.config
   TZ: Asia/Shanghai
 
@@ -46,39 +37,124 @@ jobs:
           df -h
           echo "🔧 可用内存:"
           free -h
+          echo "📋 磁盘列表:"
+          lsblk
 
       - name: 扩展磁盘空间
         run: |
           echo "🔧 扩展磁盘空间..."
-          # 检查是否有额外的磁盘
-          if [ -b /dev/sda ]; then
-            DISK="/dev/sda"
-          elif [ -b /dev/sdb ]; then
-            DISK="/dev/sdb"
-          else
-            echo "⚠️ 未找到额外磁盘，跳过扩展"
+          echo "扩展磁盘空间前:"
+          df -h
+          lsblk
+          
+          # 检查当前可用空间
+          AVAILABLE_SPACE=$(df / | awk 'NR==2 {print $4}')
+          echo "当前根分区可用空间: ${AVAILABLE_SPACE}KB"
+          
+          # 如果空间足够(>50GB)，跳过扩展
+          if [ "$AVAILABLE_SPACE" -gt 52428800 ]; then
+            echo "✅ 磁盘空间充足，跳过扩展"
             exit 0
           fi
           
-          # 格式化磁盘（如果需要）
-          if ! blkid $DISK; then
-            echo "🔧 格式化磁盘 $DISK..."
-            sudo mkfs.ext4 -F $DISK
+          # 检查是否有额外的磁盘挂载在 /mnt
+          if [ -e /dev/sdb1 ] && mountpoint -q /mnt; then
+            echo "📋 发现 /dev/sdb1 挂载在 /mnt，准备使用其空间"
+            
+            sudo mkdir -p /mnt/workdir
+            sudo chown $USER:$GROUPS /mnt/workdir
+            
+            # 创建软链接
+            sudo rm -rf /workdir
+            sudo ln -sf /mnt/workdir /workdir
+            
+            # 更新环境变量
+            echo "REPO_PATH=/workdir/immortalwrt" >> $GITHUB_ENV
+            
+            echo "✅ 磁盘空间重定向完成"
+            df -h
+            lsblk
+          elif [ -e /dev/sda1 ] && mountpoint -q /mnt; then
+            echo "📋 发现 /dev/sda1 挂载在 /mnt，准备使用其空间"
+            
+            sudo mkdir -p /mnt/workdir
+            sudo chown $USER:$GROUPS /mnt/workdir
+            
+            # 创建软链接
+            sudo rm -rf /workdir
+            sudo ln -sf /mnt/workdir /workdir
+            
+            # 更新环境变量
+            echo "REPO_PATH=/workdir/immortalwrt" >> $GITHUB_ENV
+            
+            echo "✅ 磁盘空间重定向完成"
+            df -h
+            lsblk
+          else
+            echo "⚠️ 未发现可用的磁盘空间，尝试其他方法"
+            
+            # 查找未挂载的磁盘
+            EXTRA_DISK=""
+            for disk in sda sdb sdc sdd; do
+              if [ -b "/dev/$disk" ]; then
+                # 检查是否已挂载
+                if ! mount | grep -q "/dev/$disk"; then
+                  # 检查是否有分区
+                  if [ -b "/dev/${disk}1" ]; then
+                    EXTRA_DISK="/dev/${disk}1"
+                  else
+                    EXTRA_DISK="/dev/$disk"
+                  fi
+                  break
+                else
+                  echo "⚠️ /dev/$disk 已挂载，跳过"
+                fi
+              fi
+            done
+            
+            if [ -n "$EXTRA_DISK" ]; then
+              echo "📋 找到额外磁盘: $EXTRA_DISK"
+              
+              # 检查磁盘是否已格式化
+              if ! blkid $EXTRA_DISK; then
+                echo "🔧 格式化磁盘 $EXTRA_DISK..."
+                sudo mkfs.ext4 -F $EXTRA_DISK
+              fi
+              
+              # 创建挂载点
+              sudo mkdir -p /mnt/extra-space
+              
+              # 确保挂载点未被使用
+              if mountpoint -q /mnt/extra-space; then
+                echo "🔧 卸载已存在的挂载..."
+                sudo umount /mnt/extra-space
+              fi
+              
+              # 挂载磁盘
+              sudo mount $EXTRA_DISK /mnt/extra-space
+              
+              # 设置权限
+              sudo chown -R $USER:$USER /mnt/extra-space
+              
+              # 创建工作目录
+              mkdir -p /mnt/extra-space/immortalwrt
+              
+              # 更新环境变量
+              echo "REPO_PATH=/mnt/extra-space/immortalwrt" >> $GITHUB_ENV
+              
+              echo "✅ 磁盘扩展完成"
+            else
+              echo "⚠️ 未找到任何可用磁盘，清理系统缓存"
+              # 清理系统缓存释放空间
+              sudo apt-get clean
+              sudo docker system prune -af --volumes || true
+              echo "✅ 已清理系统缓存"
+            fi
           fi
           
-          # 创建挂载点并挂载
-          sudo mkdir -p /mnt/extra-space
-          sudo mount $DISK /mnt/extra-space
-          
-          # 移动工作目录到额外空间
-          sudo mkdir -p /mnt/extra-space/immortalwrt
-          sudo chown $USER:$USER /mnt/extra-space/immortalwrt
-          
-          # 更新环境变量
-          echo "REPO_PATH=/mnt/extra-space/immortalwrt" >> $GITHUB_ENV
-          
-          echo "✅ 磁盘扩展完成"
+          echo "最终磁盘状态:"
           df -h
+          lsblk
 
       - name: 设置缓存变量
         id: cache
@@ -86,7 +162,7 @@ jobs:
           # 生成基于配置文件内容的哈希值作为缓存键
           CONFIG_HASH=$(sha256sum $CONFIG_FILE | cut -d' ' -f1)
           REPO_HASH=$(sha256sum scripts/repo.sh | cut -d' ' -f1)
-          echo "cache-key-immwrt-${{ env.VARIANT }}-${CONFIG_HASH}-${REPO_HASH}" >> $GITHUB_OUTPUT
+          echo "cache-key-immwrt-${CONFIG_HASH}-${REPO_HASH}" >> $GITHUB_OUTPUT
           echo "cache-key-feeds-${CONFIG_HASH}-${REPO_HASH}" >> $GITHUB_OUTPUT
 
       - name: 缓存 ImmortalWrt 源码
@@ -96,8 +172,8 @@ jobs:
           path: ${{ env.REPO_PATH }}
           key: ${{ steps.cache.outputs.cache-key-immwrt }}
           restore-keys: |
-            cache-key-immwrt-${{ env.VARIANT }}-
             cache-key-immwrt-
+            cache-key-immwrt
 
       - name: 缓存 Feeds
         uses: actions/cache@v4
@@ -106,7 +182,7 @@ jobs:
           path: ${{ env.REPO_PATH }}/feeds
           key: ${{ steps.cache.outputs.cache-key-feeds }}
           restore-keys: |
-            cache-key-feeds-
+            cache-key-feeds
 
       - name: 克隆 ImmortalWrt 源码
         if: steps.cache-repo.outputs.cache-hit != 'true'
@@ -220,7 +296,7 @@ jobs:
       - name: 上传 LUCI 报告
         uses: actions/upload-artifact@v4
         with:
-          name: luci-report-${{ env.VARIANT }}-${{ github.run_number }}
+          name: luci-report-${{ github.run_number }}
           path: ${{ env.REPO_PATH }}/.luci_report.txt
           retention-days: 30
 
@@ -301,22 +377,21 @@ jobs:
           
           # 生成 README
           cat > firmware/README.md << 'EOF'
-          # ImmortalWrt ${{ env.VARIANT }} 固件
-          
-          ## 构建信息
-          - 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
-          - 构建变体: ${{ env.VARIANT }}
-          - 源码分支: ${{ env.REPO_BRANCH }}
-          - 提交哈希: $(git rev-parse --short HEAD)
-          
-          ## 设备列表
-          ${{ steps.devices.outputs.devices }}
-          
-          ## 文件说明
-          - *.bin: 固件文件
-          - *.img: 镜像文件
-          - manifest: 包清单
-          EOF
+# ImmortalWrt 固件
+
+## 构建信息
+- 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
+- 源码分支: ${{ env.REPO_BRANCH }}
+- 提交哈希: $(git rev-parse --short HEAD)
+
+## 设备列表
+ ${{ steps.devices.outputs.devices }}
+
+## 文件说明
+- *.bin: 固件文件
+- *.img: 镜像文件
+- manifest: 包清单
+EOF
           
           echo "✅ 固件文件整理完成"
 
@@ -324,7 +399,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: steps.compile.outputs.compile_completed == 'true'
         with:
-          name: immortalwrt-${{ env.VARIANT }}-${{ github.run_number }}
+          name: immortalwrt-${{ github.run_number }}
           path: ${{ env.REPO_PATH }}/firmware/
           retention-days: 30
 
@@ -332,8 +407,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: steps.compile.outputs.compile_completed == 'true' && github.event_name == 'push'
         with:
-          tag_name: ${{ env.VARIANT }}-${{ github.run_number }}
-          name: ImmortalWrt ${{ env.VARIANT }} Build ${{ github.run_number }}
+          tag_name: build-${{ github.run_number }}
+          name: ImmortalWrt Build ${{ github.run_number }}
           body_path: ${{ env.REPO_PATH }}/firmware/README.md
           files: ${{ env.REPO_PATH }}/firmware/*.*
           draft: false
