@@ -124,13 +124,10 @@ jobs:
       - name: 设置缓存变量
         id: cache
         run: |
-          CONFIG_HASH=$(sha256sum $CONFIG_FILE | cut -d' ' -f1)
-          REPO_HASH=$(sha256sum scripts/repo.sh | cut -d' ' -f1)
-          # 使用短哈希值，避免缓存键过长
-          CONFIG_SHORT=${CONFIG_HASH:0:8}
-          REPO_SHORT=${REPO_HASH:0:8}
-          echo "cache-key-immwrt-${CONFIG_SHORT}-${REPO_SHORT}" >> $GITHUB_OUTPUT
-          echo "cache-key-feeds-${CONFIG_SHORT}-${REPO_SHORT}" >> $GITHUB_OUTPUT
+          # 使用时间戳作为缓存键，简单有效
+          TIMESTAMP=$(date +%Y%m%d)
+          echo "cache-key-immwrt-${TIMESTAMP}" >> $GITHUB_OUTPUT
+          echo "cache-key-feeds-${TIMESTAMP}" >> $GITHUB_OUTPUT
 
       - name: 缓存 ImmortalWrt 源码
         uses: actions/cache@v4
@@ -140,7 +137,6 @@ jobs:
           key: ${{ steps.cache.outputs.cache-key-immwrt }}
           restore-keys: |
             cache-key-immwrt-
-            cache-key-immwrt
 
       - name: 缓存 Feeds
         uses: actions/cache@v4
