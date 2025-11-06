@@ -1,30 +1,35 @@
-name: ImmortalWrt IPQ60xx Auto Build
+name: ImmortalWrt IPQ60xx Ultra Build
 
 on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
   workflow_dispatch:
     inputs:
-      cache_version:
-        description: '缓存版本（用于强制更新缓存）'
+      variant:
+        description: '构建变体'
+        required: true
+        default: 'ultra'
+        type: choice
+        options:
+        - ultra
+        - max
+      clean_build:
+        description: '完全重新构建'
         required: false
-        default: 'v1'
-        type: string
+        default: false
+        type: boolean
 
 env:
-  REPO_URL: https://github.com/laipeng668/immortalwrt.git
+  REPO_NAME: immortalwrt
+  REPO_OWNER: laipeng668
   REPO_BRANCH: master
+  VARIANT: ${{ github.event.inputs.variant || 'ultra' }}
+  REPO_PATH: ${{ github.workspace }}/immortalwrt
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: configs/immu.config
-  DIY_P1_SH: scripts/diy.sh
-  DIY_P2_SH: scripts/repo.sh
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_COWTRANSFER: false
-  UPLOAD_WETRANSFER: false
-  UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
-  VARIANT: 'Max'
-  DEBUG: false
-  CACHE_VERSION: ${{ github.event.inputs.cache_version || 'v1' }}
 
 jobs:
   build:
@@ -32,267 +37,295 @@ jobs:
     permissions:
       contents: write
       packages: write
-      
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: 设置缓存变量
+      - name: 设置时区
+        run: sudo timedatectl set-timezone $TZ
+
+      - name: 显示系统信息
         run: |
-          # 生成高命中率的缓存键
-          SOURCE_HASH=$(echo "${{ env.REPO_URL }}${{ env.REPO_BRANCH }}" | sha256sum | cut -d' ' -f1)
-          CONFIG_HASH=$(sha256sum ${{ env.CONFIG_FILE }} | cut -d' ' -f1)
-          FEEDS_HASH=$(cat scripts/diy.sh scripts/repo.sh | sha256sum | cut -d' ' -f1)
-          
-          # 组合缓存键，包含版本控制
-          CACHE_KEY="immwrt-${{ env.CACHE_VERSION }}-${SOURCE_HASH:0:8}-${CONFIG_HASH:0:8}-${FEEDS_HASH:0:8}"
-          
-          echo "SOURCE_HASH=$SOURCE_HASH" >> $GITHUB_ENV
-          echo "CONFIG_HASH=$CONFIG_HASH" >> $GITHUB_ENV
-          echo "FEEDS_HASH=$FEEDS_HASH" >> $GITHUB_ENV
-          echo "CACHE_KEY=$CACHE_KEY" >> $GITHUB_ENV
-          
-          echo "🔑 缓存键生成完成: $CACHE_KEY"
-
-      - name: 缓存工具链和下载
-        uses: actions/cache@v4
-        id: cache
-        with:
-          path: |
-            ${{ env.WORKDIR }}/immortalwrt/tmp
-            ${{ env.WORKDIR }}/immortalwrt/staging_dir
-            ${{ env.WORKDIR }}/immortalwrt/dl
-            ${{ env.WORKDIR }}/immortalwrt/build_dir
-          key: ${{ env.CACHE_KEY }}
-          restore-keys: |
-            immwrt-${{ env.CACHE_VERSION }}-
-            immwrt-
-
-      - name: 初始化编译环境
-        run: |
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2204)
-          sudo -E apt-get -qq autoremove --purge
-          sudo -E apt-get -qq clean
-          sudo timedatectl set-timezone "$TZ"
-          sudo mkdir -p /workdir
-          sudo chown $USER:$GROUPS /workdir
+          echo "🖥️ 系统信息:"
+          uname -a
+          echo "💾 磁盘空间:"
+          df -h
+          echo "🔧 可用内存:"
+          free -h
 
       - name: 扩展磁盘空间
         run: |
-          # 检查可用磁盘空间
-          echo "📊 初始磁盘空间:"
+          echo "🔧 扩展磁盘空间..."
+          # 检查是否有额外的磁盘
+          if [ -b /dev/sda ]; then
+            DISK="/dev/sda"
+          elif [ -b /dev/sdb ]; then
+            DISK="/dev/sdb"
+          else
+            echo "⚠️ 未找到额外磁盘，跳过扩展"
+            exit 0
+          fi
+          
+          # 格式化磁盘（如果需要）
+          if ! blkid $DISK; then
+            echo "🔧 格式化磁盘 $DISK..."
+            sudo mkfs.ext4 -F $DISK
+          fi
+          
+          # 创建挂载点并挂载
+          sudo mkdir -p /mnt/extra-space
+          sudo mount $DISK /mnt/extra-space
+          
+          # 移动工作目录到额外空间
+          sudo mkdir -p /mnt/extra-space/immortalwrt
+          sudo chown $USER:$USER /mnt/extra-space/immortalwrt
+          
+          # 更新环境变量
+          echo "REPO_PATH=/mnt/extra-space/immortalwrt" >> $GITHUB_ENV
+          
+          echo "✅ 磁盘扩展完成"
           df -h
-          
-          # 扩展磁盘空间到最大
-          sudo apt-get clean
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo docker system prune -af
-          
-          # 创建临时工作目录
-          if [ -d /mnt/sda1 ]; then
-            sudo umount /mnt/sda1 2>/dev/null || true
-            sudo mkfs.ext4 -F /dev/sda1
-            sudo mount /dev/sda1 /mnt/sda1
-            sudo chown $USER:$GROUPS /mnt/sda1
-            export WORKDIR=/mnt/sda1
-          elif [ -d /mnt/sdb1 ]; then
-            sudo umount /mnt/sdb1 2>/dev/null || true
-            sudo mkfs.ext4 -F /dev/sdb1
-            sudo mount /dev/sdb1 /mnt/sdb1
-            sudo chown $USER:$GROUPS /mnt/sdb1
-            export WORKDIR=/mnt/sdb1
-          else
-            export WORKDIR=/workdir
-          fi
-          
-          echo "🔧 使用工作目录: $WORKDIR"
-          echo "WORKDIR=$WORKDIR" >> $GITHUB_ENV
 
-      - name: 克隆源码
-        working-directory: ${{ env.WORKDIR }}
+      - name: 设置缓存变量
+        id: cache
         run: |
-          df -h
-          echo "🔄 开始克隆源码..."
-          
-          # 如果缓存未命中，完整克隆
-          if [ "${{ steps.cache.outputs.cache-hit }}" != "true" ]; then
-            echo "📦 缓存未命中，执行完整克隆..."
-            git clone $REPO_URL -b $REPO_BRANCH immortalwrt
-          else
-            echo "💾 缓存命中，检查源码..."
-            if [ ! -d "immortalwrt" ]; then
-              git clone $REPO_URL -b $REPO_BRANCH immortalwrt
-            else
-              cd immortalwrt
-              git fetch origin
-              git reset --hard origin/$REPO_BRANCH
-            fi
-          fi
-          
-          cd immortalwrt
-          echo "📝 当前提交信息:"
-          git log -1 --oneline
-          echo "REPO_PATH=$WORKDIR/immortalwrt" >> $GITHUB_ENV
+          # 生成基于配置文件内容的哈希值作为缓存键
+          CONFIG_HASH=$(sha256sum $CONFIG_FILE | cut -d' ' -f1)
+          REPO_HASH=$(sha256sum scripts/repo.sh | cut -d' ' -f1)
+          echo "cache-key-immwrt-${{ env.VARIANT }}-${CONFIG_HASH}-${REPO_HASH}" >> $GITHUB_OUTPUT
+          echo "cache-key-feeds-${CONFIG_HASH}-${REPO_HASH}" >> $GITHUB_OUTPUT
 
-      - name: 缓存状态报告
-        run: |
-          echo "📊 缓存状态报告"
-          echo "=================="
-          echo "缓存键: ${{ env.CACHE_KEY }}"
-          echo "缓存命中: ${{ steps.cache.outputs.cache-hit }}"
-          echo "源码哈希: ${{ env.SOURCE_HASH }}"
-          echo "配置哈希: ${{ env.CONFIG_HASH }}"
-          echo "脚本哈希: ${{ env.FEEDS_HASH }}"
-          
-          if [ "${{ steps.cache.outputs.cache-hit }}" == "true" ]; then
-            echo "✅ 缓存命中，跳过下载步骤"
-          else
-            echo "⬇️ 缓存未命中，将执行完整下载"
-          fi
-
-      - name: 加载通用函数库
-        run: |
-          source scripts/common.sh
-          echo "✅ 通用函数库加载完成"
-
-      - name: 加载自定义配置
-        run: |
-          [ -e files ] && mv files $REPO_PATH/files
-          [ -e $DIY_P1_SH ] && chmod +x $DIY_P1_SH && cd $REPO_PATH && $GITHUB_WORKSPACE/$DIY_P1_SH
-          [ -e $CONFIG_FILE ] && cp $CONFIG_FILE $REPO_PATH/.config
-
-      - name: 更新软件源
-        id: update
-        run: |
-          cd $REPO_PATH
-          echo "📦 更新feeds..."
-          ./scripts/feeds update -a
-          echo "📦 安装feeds..."
-          ./scripts/feeds install -a
-          echo "feeds_updated=true" >> $GITHUB_OUTPUT
-
-      - name: 生成Luci软件包报告
-        id: report
-        run: |
-          cd $REPO_PATH
-          echo "📊 生成Luci软件包差异报告..."
-          chmod +x $GITHUB_WORKSPACE/scripts/luci_report.sh
-          $GITHUB_WORKSPACE/scripts/luci_report.sh
-          echo "report_generated=true" >> $GITHUB_OUTPUT
-
-      - name: 上传Luci报告
-        uses: actions/upload-artifact@v4
-        if: steps.report.outputs.report_generated == 'true'
+      - name: 缓存 ImmortalWrt 源码
+        uses: actions/cache@v4
+        id: cache-repo
         with:
-          name: luci-report-${{ env.VARIANT }}
-          path: ${{ env.REPO_PATH }}/luci_report_*.txt
-          retention-days: 7
+          path: ${{ env.REPO_PATH }}
+          key: ${{ steps.cache.outputs.cache-key-immwrt }}
+          restore-keys: |
+            cache-key-immwrt-${{ env.VARIANT }}-
+            cache-key-immwrt-
+
+      - name: 缓存 Feeds
+        uses: actions/cache@v4
+        id: cache-feeds
+        with:
+          path: ${{ env.REPO_PATH }}/feeds
+          key: ${{ steps.cache.outputs.cache-key-feeds }}
+          restore-keys: |
+            cache-key-feeds-
+
+      - name: 克隆 ImmortalWrt 源码
+        if: steps.cache-repo.outputs.cache-hit != 'true'
+        run: |
+          echo "📥 克隆 ImmortalWrt 源码..."
+          git clone https://github.com/${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}.git ${{ env.REPO_PATH }}
+          cd ${{ env.REPO_PATH }}
+          git checkout ${{ env.REPO_BRANCH }}
+          echo "✅ 源码克隆完成"
+
+      - name: 更新源码
+        if: steps.cache-repo.outputs.cache-hit == 'true'
+        run: |
+          echo "🔄 更新源码..."
+          cd ${{ env.REPO_PATH }}
+          git fetch origin
+          git checkout ${{ env.REPO_BRANCH }}
+          git pull origin ${{ env.REPO_BRANCH }}
+          echo "✅ 源码更新完成"
+
+      - name: 安装依赖
+        run: |
+          echo "📦 安装构建依赖..."
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ccache \
+            ecj \
+            fastjar \
+            file \
+            g++ \
+            gawk \
+            gettext \
+            java-runtime-common \
+            javascript \
+            libelf-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libssl-dev \
+            python3 \
+            python3-debian \
+            python3-distutils \
+            python3-lib2to3 \
+            python3-pyelftools \
+            python3-setuptools \
+            python3-unittest \
+            rsync \
+            subversion \
+            swig \
+            unzip \
+            wget \
+            python3-pip \
+            python3-pyelftools \
+            zlib1g-dev \
+            qemu-utils \
+            upx-ucl \
+            llvm \
+            clang \
+            flex \
+            bison \
+            curl
+          echo "✅ 依赖安装完成"
+
+      - name: 复制配置文件
+        run: |
+          echo "📋 复制配置文件..."
+          cp ${{ env.CONFIG_FILE }} ${{ env.REPO_PATH }}/.config
+          echo "✅ 配置文件复制完成"
+
+      - name: 显示磁盘使用情况
+        run: |
+          echo "💾 配置后磁盘使用情况:"
+          df -h
+
+      - name: 更新第三方源
+        run: |
+          echo "🔄 更新第三方源..."
+          cd ${{ env.REPO_PATH }}
+          bash ../scripts/repo.sh
+          echo "✅ 第三方源更新完成"
+
+      - name: 生成 LUCI 基准报告
+        run: |
+          echo "📄 生成 LUCI 基准报告..."
+          cd ${{ env.REPO_PATH }}
+          bash ../scripts/luci_report.sh
+          echo "✅ 基准报告生成完成"
+
+      - name: 更新 Feeds
+        run: |
+          echo "🔄 更新 Feeds..."
+          cd ${{ env.REPO_PATH }}
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          echo "✅ Feeds 更新完成"
+
+      - name: 执行 defconfig
+        run: |
+          echo "⚙️ 执行 defconfig..."
+          cd ${{ env.REPO_PATH }}
+          make defconfig
+          echo "✅ defconfig 完成"
+
+      - name: 生成 LUCI 软件包变更报告
+        run: |
+          echo "📄 生成 LUCI 软件包变更报告..."
+          cd ${{ env.REPO_PATH }}
+          bash ../scripts/luci_report.sh
+          echo "✅ 报告生成完成"
+
+      - name: 上传 LUCI 报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-report-${{ env.VARIANT }}-${{ github.run_number }}
+          path: ${{ env.REPO_PATH }}/.luci_report.txt
+          retention-days: 30
 
       - name: 提取设备配置
         id: devices
         run: |
-          source scripts/common.sh
-          devices=$(extract_devices_from_config $CONFIG_FILE)
-          echo "📱 检测到设备: $devices"
-          echo "devices=$devices" >> $GITHUB_OUTPUT
+          echo "🔍 提取设备配置..."
+          cd ${{ env.REPO_PATH }}
           
-          # 生成设备列表文件
-          echo "$devices" | tr ' ' '\n' > $REPO_PATH/device_list.txt
-          echo "device_list_path=$REPO_PATH/device_list.txt" >> $GITHUB_OUTPUT
-
-      - name: 配置编译选项
-        run: |
-          cd $REPO_PATH
-          echo "⚙️ 应用配置文件..."
-          make defconfig
+          # 提取设备列表
+          DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*=y$" .config | \
+            sed -r 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y$/\1/' | \
+            sort -u | \
+            tr '\n' ' ')
           
-          # 显示关键配置
-          echo "📋 编译配置摘要:"
-          grep -E "^CONFIG_TARGET_DEVICE|^CONFIG_ATH11K_MEM_PROFILE|^CONFIG_NSS_FIRMWARE_VERSION" .config || true
+          echo "devices=$DEVICES" >> $GITHUB_OUTPUT
+          echo "✅ 设备配置提取完成: $DEVICES"
 
-      - name: 下载依赖包
-        id: download
-        if: steps.cache.outputs.cache-hit != 'true'
+      - name: 显示磁盘使用情况
         run: |
-          cd $REPO_PATH
-          echo "⬇️ 下载依赖包..."
-          if [ "$DEBUG" == "true" ]; then
-            make download -j8 V=s 2>&1 | tee download.log
-          else
-            make download -j8
-          fi
-          echo "download_completed=true" >> $GITHUB_OUTPUT
+          echo "💾 当前磁盘使用情况:"
+          df -h
+
+      - name: 配置编译环境
+        run: |
+          echo "⚙️ 配置编译环境..."
+          cd ${{ env.REPO_PATH }}
+          
+          # 设置线程数
+          THREADS=$(nproc)
+          echo "THREADS=$THREADS" >> $GITHUB_ENV
+          echo "🔧 使用 $THREADS 线程编译"
+          
+          # 启用 ccache
+          echo "CONFIG_CCACHE=y" >> .config
+          
+          # 执行 DIY 脚本
+          bash ../scripts/diy.sh
+          
+          echo "✅ 编译环境配置完成"
 
       - name: 编译固件
         id: compile
         run: |
-          cd $REPO_PATH
           echo "🔨 开始编译固件..."
+          cd ${{ env.REPO_PATH }}
           
-          # 设置编译参数
-          if [ "$DEBUG" == "true" ]; then
-            make -j$(nproc) V=s 2>&1 | tee compile.log
+          # 设置编译完成标志
+          echo "compile_completed=false" >> $GITHUB_OUTPUT
+          
+          # 编译
+          if make -j${{ env.THREADS }}; then
+            echo "compile_completed=true" >> $GITHUB_OUTPUT
+            echo "✅ 固件编译成功"
           else
-            # 使用企业级错误控制
-            make IGNORE_ERRORS=1 -j$(nproc) || {
-              echo "⚠️ 编译出现错误，尝试单线程重新编译关键包..."
-              make IGNORE_ERRORS=1 -j1 V=s
-            }
+            echo "❌ 固件编译失败"
+            exit 1
           fi
-          
-          echo "compile_completed=true" >> $GITHUB_OUTPUT
 
-      - name: 显示磁盘空间
+      - name: 显示磁盘使用情况
+        if: always()
         run: |
-          echo "📊 编译后磁盘空间:"
+          echo "💾 编译后磁盘使用情况:"
           df -h
-          echo "📦 固件大小统计:"
-          cd $REPO_PATH
-          du -sh bin/targets/*/* 2>/dev/null || true
 
       - name: 整理固件文件
+        if: steps.compile.outputs.compile_completed == 'true'
         run: |
-          cd $REPO_PATH
+          echo "📦 整理固件文件..."
+          cd ${{ env.REPO_PATH }}
+          
+          # 创建固件目录
           mkdir -p firmware
           
           # 复制所有固件文件
-          find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.elf" | while read file; do
-            cp $file firmware/
-          done
+          find bin/targets -name "*.bin" -o -name "*.img" -o -name "manifest" | \
+            xargs -I {} cp {} firmware/
           
-          # 复制manifest文件
-          find bin/targets -name "manifest" | while read file; do
-            cp $file firmware/
-          done
-          
-          # 生成固件信息 - 修复语法错误
+          # 生成 README
           cat > firmware/README.md << EOF
-## 固件信息
+# ImmortalWrt ${{ env.VARIANT }} 固件
 
-- **变体**: $VARIANT
-- **源码**: $REPO_URL
-- **分支**: $REPO_BRANCH
-- **提交**: $(git rev-parse HEAD)
-- **编译时间**: $(date '+%Y-%m-%d %H:%M:%S')
-- **设备**: $(cat device_list.txt | tr '\n' ' ')
-- **缓存键**: $CACHE_KEY
-- **调试模式**: $DEBUG
+## 构建信息
+- 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
+- 构建变体: ${{ env.VARIANT }}
+- 源码分支: ${{ env.REPO_BRANCH }}
+- 提交哈希: $(git rev-parse --short HEAD)
 
-### 编译环境
-- **运行环境**: Ubuntu 22.04
-- **CPU核心数**: $(nproc)
-- **内存**: $(free -h | awk 'NR==2{print $2}')
-- **缓存命中**: ${{ steps.cache.outputs.cache-hit }}
+## 设备列表
+ ${{ steps.devices.outputs.devices }}
 
-### 文件说明
+## 文件说明
 - *.bin: 固件文件
 - *.img: 镜像文件
 - manifest: 包清单
 EOF
+          
+          echo "✅ 固件文件整理完成"
 
       - name: 上传固件到Artifacts
         uses: actions/upload-artifact@v4
@@ -304,7 +337,7 @@ EOF
 
       - name: 发布到GitHub Release
         uses: softprops/action-gh-release@v2
-        if: steps.compile.outputs.compile_completed == 'true'
+        if: steps.compile.outputs.compile_completed == 'true' && github.event_name == 'push'
         with:
           tag_name: ${{ env.VARIANT }}-${{ github.run_number }}
           name: ImmortalWrt ${{ env.VARIANT }} Build ${{ github.run_number }}
