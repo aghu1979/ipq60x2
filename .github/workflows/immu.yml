@@ -19,7 +19,7 @@ env:
   UPLOAD_FIRMWARE: true
   UPLOAD_COWTRANSFER: false
   UPLOAD_WETRANSFER: false
-  UPLOAD_RELEASE: true  # 默认上传到Release
+  UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
   SCRIPT_NAME: ImmortalWrt 自动构建
   PRODUCT_NAME: ImmortalWrt
@@ -48,6 +48,93 @@ jobs:
         echo "编译开始时间: $(date)"
         echo "当前磁盘使用情况:"
         df -h
+
+    - name: 扩展磁盘空间
+      run: |
+        echo "扩展磁盘空间前:"
+        df -h
+        lsblk
+        
+        # 检查是否有可用的磁盘空间
+        if [ -e /dev/sda1 ] && mountpoint -q /mnt; then
+          echo "发现 /dev/sda1 挂载在 /mnt，准备扩展根分区"
+          
+          # 卸载 /mnt
+          sudo umount /mnt
+          
+          # 删除 /mnt 的挂载点
+          sudo rmdir /mnt 2>/dev/null || true
+          
+          # 创建新的挂载点用于工作目录
+          sudo mkdir -p /workspace
+          
+          # 将 /dev/sda1 格式化为 ext4（如果尚未格式化）
+          sudo mkfs.ext4 -F /dev/sda1
+          
+          # 挂载到 /workspace
+          sudo mount /dev/sda1 /workspace
+          
+          # 设置权限
+          sudo chown $USER:$GROUPS /workspace
+          
+          # 创建工作目录
+          mkdir -p /workspace/immortalwrt
+          
+          # 创建符号链接
+          sudo ln -sf /workspace/immortalwrt /workdir
+          
+          echo "磁盘扩展完成:"
+          df -h
+          lsblk
+        elif [ -e /dev/sdb1 ] && ! mountpoint -q /mnt; then
+          echo "发现未挂载的 /dev/sdb1，准备使用"
+          
+          # 创建挂载点
+          sudo mkdir -p /workspace
+          
+          # 格式化磁盘
+          sudo mkfs.ext4 -F /dev/sdb1
+          
+          # 挂载到 /workspace
+          sudo mount /dev/sdb1 /workspace
+          
+          # 设置权限
+          sudo chown $USER:$GROUPS /workspace
+          
+          # 创建工作目录
+          mkdir -p /workspace/immortalwrt
+          
+          # 创建符号链接
+          sudo ln -sf /workspace/immortalwrt /workdir
+          
+          echo "磁盘扩展完成:"
+          df -h
+          lsblk
+        else
+          echo "未发现可用的磁盘空间，继续使用默认配置"
+        fi
+
+    # 暂时注释掉磁盘清理步骤，因为已经扩展了磁盘空间
+    # 如果后续磁盘空间仍然不足，可以取消注释以下步骤
+    # 注意：扩展磁盘后使用清理工具可能会删除扩展磁盘上的工具缓存
+    # 备选方案：sbwml/actions@free-disk
+    # - name: 清理磁盘空间
+    #   # 使用 jlumbroso/free-disk-space 清理磁盘，备选方案是 sbwml/actions@free-disk
+    #   # 注意：扩展磁盘后，此步骤可能会清理扩展磁盘上的工具缓存，影响编译环境
+    #   # 如果编译失败，请考虑注释掉此步骤或调整清理选项
+    #   uses: jlumbroso/free-disk-space@main
+    #   with:
+    #     # this might remove tools that are actually needed,
+    #     # if set to "true" but frees about 6 GB
+    #     tool-cache: true
+    #     # all of these default to true, but feel free to set to
+    #     # "false" if necessary for your workflow
+    #     android: true
+    #     dotnet: true
+    #     haskell: true
+    #     large-packages: true
+    #     swap-storage: true
+
     - name: 克隆源码
       working-directory: /workdir
       run: |
@@ -57,6 +144,7 @@ jobs:
         cd immortalwrt
         echo "源码克隆完成，当前磁盘使用情况:"
         df -h
+
     - name: 加载自定义配置
       working-directory: /workdir/immortalwrt
       run: |
@@ -81,6 +169,7 @@ jobs:
         # 确保configs目录存在
         mkdir -p configs
         [ -f ${{ github.workspace }}/$CONFIG_FILE ] && cp ${{ github.workspace }}/$CONFIG_FILE configs/immu.config
+
     - name: 更新并安装Feeds
       working-directory: /workdir/immortalwrt
       run: |
@@ -92,6 +181,7 @@ jobs:
         ./scripts/feeds install -a
         echo "Feeds安装完成，当前磁盘使用情况:"
         df -h
+
     - name: 运行自定义脚本
       working-directory: /workdir/immortalwrt
       run: |
@@ -99,6 +189,7 @@ jobs:
         [ -e ./diy.sh ] && ./diy.sh .
         echo "DIY脚本执行完成，当前磁盘使用情况:"
         df -h
+
     - name: 更新第三方源
       working-directory: /workdir/immortalwrt
       run: |
@@ -106,6 +197,7 @@ jobs:
         [ -e ./repo.sh ] && ./repo.sh .
         echo "第三方源更新完成，当前磁盘使用情况:"
         df -h
+
     - name: 生成LUCI软件包报告（defconfig前）
       working-directory: /workdir/immortalwrt
       run: |
@@ -113,6 +205,7 @@ jobs:
         [ -e ./luci_report.sh ] && ./luci_report.sh
         echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
         df -h
+
     - name: 执行make defconfig
       working-directory: /workdir/immortalwrt
       run: |
@@ -120,6 +213,7 @@ jobs:
         make defconfig
         echo "make defconfig完成，当前磁盘使用情况:"
         df -h
+
     - name: 生成LUCI软件包报告（defconfig后）
       working-directory: /workdir/immortalwrt
       run: |
@@ -127,6 +221,7 @@ jobs:
         [ -e ./luci_report.sh ] && ./luci_report.sh
         echo "LUCI软件包报告生成完成，当前磁盘使用情况:"
         df -h
+
     - name: 下载编译所需依赖
       id: download
       working-directory: /workdir/immortalwrt
@@ -137,6 +232,7 @@ jobs:
         find dl -size -1024c -exec rm -f {} \;
         echo "依赖下载完成，当前磁盘使用情况:"
         df -h
+
     - name: 编译固件
       id: compile
       working-directory: /workdir/immortalwrt
@@ -152,6 +248,7 @@ jobs:
         echo "======================="
         echo "当前磁盘使用情况:"
         df -h
+
     - name: 检查空间使用情况
       if: (!cancelled())
       run: df -h
@@ -172,6 +269,7 @@ jobs:
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
+
     - name: 发布固件到Release
       uses: softprops/action-gh-release@v2
       if: steps.organize.outputs.status == 'success' && !cancelled()
