@@ -92,8 +92,7 @@ get_luci_packages() {
     
     log_debug "从配置文件获取LUCI软件包列表: $config_file"
     
-    # 使用更精确的正则表达式匹配所有启用的 LUCI 应用包
-    # 匹配格式: CONFIG_PACKAGE_luci-app-*=y
+    # 修复正则表达式：正确匹配 luci-app- 开头的包
     grep "^CONFIG_PACKAGE_luci-app-.*=y" "$config_file" | \
     grep -v "_INCLUDE_" | \
     sed 's/^CONFIG_PACKAGE_\(.*\)=y.*$/\1/' | \
