@@ -1,167 +1,232 @@
-# scripts/diy.sh
 #!/bin/bash
-
-# ==============================================================================
-# DIY Part: OpenWrt 初始配置脚本
-#
-# 功能:
-#   修改默认IP、主机名、编译署名、主题样式等
-#   为OpenWrt固件提供初始配置
-#
-# 使用方法:
-#   ./diy.sh [OpenWrt根目录]
-#
+# =============================================================================
+# ImmortalWrt DIY配置脚本
+# 版本: 1.2
 # 作者: Mary
-# 日期：20251104
-# ==============================================================================
+# 描述: 配置设备初始管理IP/密码及系统优化
+# =============================================================================
 
-# 导入通用函数
+# 加载通用函数库
 source "$(dirname "$0")/common.sh"
 
-# --- 配置变量 ---
-# 默认 LAN IP 地址
-LAN_IP="192.168.111.1"
-# 默认主机名
+# 全局变量
+REPO_PATH="${REPO_PATH:-$(pwd)}"
+INIT_IP="192.168.111.1"
+INIT_PASSWORD=""  # 空密码
 HOSTNAME="WRT"
-# 默认 root 用户密码
-ROOT_PASSWORD="password"
-# 编译署名
-BUILDER_NAME="Mary"
-# 是否应用Argon主题优化 (true/false)
-APPLY_ARGON_TWEAKS=true
+AUTHOR="Mary"
 
-# --- 脚本逻辑 ---
-OPENWRT_ROOT_DIR="$1"
+log_work "开始执行DIY配置..."
 
-# 记录开始时间
-SCRIPT_START_TIME=$(date +%s)
+# 显示配置信息
+show_initial_config() {
+    log_info "初始配置信息:"
+    echo "  🌐 LAN IP: $INIT_IP"
+    echo "  🔑 Root密码: [空密码]"
+    echo "  🖥️  主机名: $HOSTNAME"
+    echo "  👤 作者: $AUTHOR"
+    echo ""
+}
 
-log_step "开始执行 DIY Part 初始配置"
-
-# 显示系统资源使用情况
-show_system_resources
-
-# 检查参数
-check_var_not_empty "OPENWRT_ROOT_DIR" "$OPENWRT_ROOT_DIR" "未指定 OpenWrt 根目录！"
-
-# 检查目录是否存在
-check_dir_exists "$OPENWRT_ROOT_DIR" "OpenWrt 根目录不存在: $OPENWRT_ROOT_DIR"
-
-# 检查OpenWrt环境
-check_openwrt_env "$OPENWRT_ROOT_DIR"
-
-# 提取设备配置信息
-extract_device_info "$OPENWRT_ROOT_DIR/.config" "$OPENWRT_ROOT_DIR/device_info.txt"
-
-# 1. 修改默认IP地址
-log_substep "设置 LAN IP 为: ${LAN_IP}"
-CONFIG_GENERATE_FILE="$OPENWRT_ROOT_DIR/package/base-files/files/bin/config_generate"
-check_file_exists "$CONFIG_GENERATE_FILE" "配置生成文件不存在: $CONFIG_GENERATE_FILE"
-safe_replace "$CONFIG_GENERATE_FILE" "192.168.1.1" "$LAN_IP"
-
-# 2. 修改主机名
-log_substep "设置主机名为: ${HOSTNAME}"
-safe_replace "$CONFIG_GENERATE_FILE" "hostname='.*'" "hostname='${HOSTNAME}'"
-
-# 3. 添加编译署名
-log_substep "添加编译署名: ${BUILDER_NAME}"
-STATUS_JS="$OPENWRT_ROOT_DIR/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js"
-if [ -f "$STATUS_JS" ]; then
-    safe_replace "$STATUS_JS" "(\(luciversion || ''\))" "(\1) + (' \/ Built by ${BUILDER_NAME}')"
-else
-    log_warn "状态页面JS文件未找到，跳过添加编译署名"
-fi
-
-# 4. 修改root密码
-log_substep "设置 root 密码"
-SHADOW_FILE="$OPENWRT_ROOT_DIR/package/base-files/files/etc/shadow"
-check_file_exists "$SHADOW_FILE" "Shadow文件不存在: $SHADOW_FILE"
-
-# 使用 openssl 生成密码哈希
-if command -v openssl &> /dev/null; then
-    PASSWORD_HASH=$(openssl passwd -1 "${ROOT_PASSWORD}")
-    safe_replace "$SHADOW_FILE" "root:\!" "root:${PASSWORD_HASH}"
-else
-    log_error "openssl 命令未找到，无法生成密码哈希"
-    exit 1
-fi
-
-# 5. 应用Argon主题优化
-if [ "$APPLY_ARGON_TWEAKS" = "true" ]; then
-    log_substep "应用Argon主题优化..."
+# 配置初始网络和认证
+configure_initial_settings() {
+    log_info "配置初始管理设置..."
     
-    # 调整在Argon主题下，概览页面显示/隐藏按钮的样式
-    ARGON_CSS="$OPENWRT_ROOT_DIR/feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css/cascade.css"
-    if [ -f "$ARGON_CSS" ]; then
-        log_info "修改Argon主题CSS样式..."
-        safe_backup "$ARGON_CSS"
-        
-        # 检查是否已经添加过样式，避免重复添加
-        if ! grep -q "cbi-section.fade-in .cbi-title" "$ARGON_CSS"; then
-            # 添加CSS样式
-            cat >> "$ARGON_CSS" << 'EOF'
+    # 创建初始配置文件
+    cat > "$REPO_PATH/files/etc/uci-defaults/99-initial-settings" << EOF
+#!/bin/sh
+# 初始配置脚本
+# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+# 作者: $AUTHOR
 
-/* 自定义Argon主题样式 - 由DIY脚本添加 */
-.cbi-section.fade-in .cbi-title {
-  position: relative;
-  min-height: 2.765rem;
-  display: flex;
-  align-items: center
+# 设置LAN IP
+uci set network.lan.ipaddr='$INIT_IP'
+uci commit network
+
+# 设置root密码为空
+passwd -d root
+
+# 配置SSH
+uci set dropbear.@dropbear[0].RootPasswordAuth='on'
+uci set dropbear.@dropbear[0].PasswordAuth='on'
+uci commit dropbear
+
+# 设置时区
+uci set system.@system[0].zonename='Asia/Shanghai'
+uci set system.@system[0].timezone='CST-8'
+uci set system.@system[0].hostname='$HOSTNAME'
+uci commit system
+
+# 启用必要的服务
+/etc/init.d/uhttpd enable
+/etc/init.d/dropbear enable
+/etc/init.d/network restart
+
+exit 0
+EOF
+    
+    chmod +x "$REPO_PATH/files/etc/uci-defaults/99-initial-settings"
+    log_success "初始配置设置完成"
 }
-.cbi-section.fade-in .cbi-title>div:last-child {
-  position: absolute;
-  right: 1rem
+
+# 优化编译配置
+optimize_build_config() {
+    log_info "优化编译配置..."
+    
+    # 添加编译优化选项
+    cat >> "$REPO_PATH/.config" << EOF
+
+# 编译优化
+CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -mcpu=cortex-a53"
+CONFIG_USE_GLIBC=y
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_ROOTFS_EXT4FS=y
+
+# 禁用不必要的功能
+CONFIG_IB=y
+CONFIG_KERNEL_GIT_CLONE_URI=""
+CONFIG_KERNEL_GIT_REF=""
+EOF
+    
+    log_success "编译配置优化完成"
 }
-.cbi-section.fade-in .cbi-title>div:last-child span {
-  display: inline-block;
-  position: relative;
-  font-size: 0
+
+# 添加自定义应用
+add_custom_applications() {
+    log_info "添加自定义应用..."
+    
+    # 创建自定义应用目录
+    mkdir -p "$REPO_PATH/package/custom"
+    
+    # 示例：添加自定义启动脚本
+    cat > "$REPO_PATH/package/custom/custom-init/Makefile" << 'EOF'
+include $(TOPDIR)/rules.mk
+
+PKG_NAME:=custom-init
+PKG_VERSION:=1.0
+PKG_RELEASE:=1
+
+include $(INCLUDE_DIR)/package.mk
+
+define Package/custom-init
+  SECTION:=utils
+  CATEGORY:=Utilities
+  TITLE:=Custom Initialization Scripts
+  DEPENDS:=+luci
+endef
+
+define Package/custom-init/install
+    $(INSTALL_DIR) $(1)/etc/init.d
+    $(INSTALL_BIN) ./files/custom-init.init $(1)/etc/init.d/custom-init
+endef
+
+ $(eval $(call BuildPackage,custom-init))
+EOF
+    
+    mkdir -p "$REPO_PATH/package/custom/custom-init/files"
+    cat > "$REPO_PATH/package/custom/custom-init/files/custom-init.init" << 'EOF'
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+start() {
+    echo "Custom initialization started..."
+    # 添加自定义启动逻辑
 }
-.cbi-section.fade-in .cbi-title>div:last-child span::after {
-  content: "\e90f";
-  font-family: 'argon' !important;
-  font-size: 1.1rem;
-  display: inline-block;
-  transition: transform 0.3s ease;
-  -webkit-font-smoothing: antialiased;
-  line-height: 1
-}
-.cbi-section.fade-in .cbi-title>div:last-child span[data-style='inactive']::after {
-  transform: rotate(90deg);
+
+stop() {
+    echo "Custom initialization stopped..."
 }
 EOF
-            log_debug "Argon主题CSS样式添加完成"
-        else
-            log_debug "Argon主题CSS样式已存在，跳过添加"
-        fi
-    else
-        log_warn "Argon主题CSS文件未找到，跳过主题样式修改"
-    fi
     
-    # 修改状态页面的按钮样式
-    INDEX_JS="$OPENWRT_ROOT_DIR/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/index.js"
-    if [ -f "$INDEX_JS" ]; then
-        log_info "修改状态页面按钮样式..."
-        safe_backup "$INDEX_JS"
-        
-        # 删除特定行
-        sed -i -e '/btn\.setAttribute(\x27class\x27, include\.hide ? \x27label notice\x27 : \x27label\x27);/d' \
-               -e "/\x27class\x27: includes\[i\]\.hide ? \x27label notice\x27 : \x27label\x27,/d" \
-               "$INDEX_JS"
-        log_debug "状态页面按钮样式修改完成"
-    else
-        log_warn "状态页面索引JS文件未找到，跳过按钮样式修改"
-    fi
-else
-    log_info "跳过Argon主题优化"
-fi
+    chmod +x "$REPO_PATH/package/custom/custom-init/files/custom-init.init"
+    log_success "自定义应用添加完成"
+}
 
-# 显示当前磁盘使用情况
-log_info "当前磁盘使用情况:"
-df -h
+# 配置系统优化
+configure_system_optimization() {
+    log_info "配置系统优化..."
+    
+    # 创建系统优化脚本
+    cat > "$REPO_PATH/files/etc/uci-defaults/98-system-optimization" << 'EOF'
+#!/bin/sh
+# 系统优化脚本
 
-# 记录结束时间并生成摘要
-SCRIPT_END_TIME=$(date +%s)
-generate_summary "DIY Part 初始配置" "$SCRIPT_START_TIME" "$SCRIPT_END_TIME" "成功"
+# 优化网络参数
+echo 'net.core.rmem_max = 16777216' >> /etc/sysctl.conf
+echo 'net.core.wmem_max = 16777216' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_rmem = 4096 87380 16777216' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_wmem = 4096 65536 16777216' >> /etc/sysctl.conf
 
-log_success "DIY Part 初始配置执行完成。"
+# 优化文件系统
+echo 'vm.dirty_ratio = 15' >> /etc/sysctl.conf
+echo 'vm.dirty_background_ratio = 5' >> /etc/sysctl.conf
+
+# 启用BBR
+echo 'net.core.default_qdisc=fq' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_congestion_control=bbr' >> /etc/sysctl.conf
+
+exit 0
+EOF
+    
+    chmod +x "$REPO_PATH/files/etc/uci-defaults/98-system-optimization"
+    log_success "系统优化配置完成"
+}
+
+# 生成配置说明文件
+generate_config_info() {
+    log_info "生成配置说明文件..."
+    
+    cat > "$REPO_PATH/files/etc/uci-defaults/README" << EOF
+# ImmortalWrt 初始配置说明
+# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+# 作者: $AUTHOR
+
+## 默认配置
+- LAN IP: $INIT_IP
+- Root密码: [空密码]
+- 主机名: $HOSTNAME
+
+## 常用命令
+- 修改密码: passwd
+- 重启网络: /etc/init.d/network restart
+- 查看日志: logread
+
+## Web界面
+访问地址: http://$INIT_IP
+
+EOF
+    
+    log_success "配置说明文件生成完成"
+}
+
+# 主函数
+main() {
+    log_work "开始DIY配置流程..."
+    
+    # 显示配置信息
+    show_initial_config
+    
+    # 检查必要目录
+    mkdir -p "$REPO_PATH/files/etc/uci-defaults"
+    
+    # 执行配置步骤
+    configure_initial_settings
+    optimize_build_config
+    add_custom_applications
+    configure_system_optimization
+    generate_config_info
+    
+    log_success "DIY配置完成！"
+    echo ""
+    log_info "📋 配置摘要:"
+    echo "  🌐 管理地址: http://$INIT_IP"
+    echo "  🔑 登录账号: root"
+    echo "  🔑 登录密码: [空密码]"
+    echo "  🖥️  主机名: $HOSTNAME"
+    echo ""
+}
+
+# 执行主函数
+main "$@"
