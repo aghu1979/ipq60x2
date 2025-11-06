@@ -14,7 +14,6 @@ env:
   REPO_PATH: ${{ github.workspace }}/immortalwrt
   CONFIG_FILE: configs/immu.config
   TZ: Asia/Shanghai
-  # 缓存版本，用于强制更新所有缓存
   CACHE_VERSION: v1
 
 jobs:
@@ -29,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 设置时区
-        run: sudo timedatectl set-timezone $TZ
+        run: sudo timedatectl set-timezone "$TZ"
 
       - name: 显示系统信息
         run: |
@@ -49,29 +48,24 @@ jobs:
           df -h
           lsblk
           
-          # 检查当前可用空间
           AVAILABLE_SPACE=$(df / | awk 'NR==2 {print $4}')
           echo "当前根分区可用空间: ${AVAILABLE_SPACE}KB"
           
-          # 如果空间足够(>50GB)，跳过扩展
           if [ "$AVAILABLE_SPACE" -gt 52428800 ]; then
             echo "✅ 磁盘空间充足，跳过扩展"
             exit 0
           fi
           
-          # 检查是否有额外的磁盘挂载在 /mnt
           if [ -e /dev/sdb1 ] && mountpoint -q /mnt; then
             echo "📋 发现 /dev/sdb1 挂载在 /mnt，准备使用其空间"
             
             sudo mkdir -p /mnt/workdir
-            sudo chown $USER:$GROUPS /mnt/workdir
+            sudo chown "$USER":"$USER" /mnt/workdir
             
-            # 创建软链接
             sudo rm -rf /workdir
             sudo ln -sf /mnt/workdir /workdir
             
-            # 更新环境变量
-            echo "REPO_PATH=/workdir/immortalwrt" >> $GITHUB_ENV
+            echo "REPO_PATH=/workdir/immortalwrt" >> "$GITHUB_ENV"
             
             echo "✅ 磁盘空间重定向完成"
             df -h
@@ -80,14 +74,12 @@ jobs:
             echo "📋 发现 /dev/sda1 挂载在 /mnt，准备使用其空间"
             
             sudo mkdir -p /mnt/workdir
-            sudo chown $USER:$GROUPS /mnt/workdir
+            sudo chown "$USER":"$USER" /mnt/workdir
             
-            # 创建软链接
             sudo rm -rf /workdir
             sudo ln -sf /mnt/workdir /workdir
             
-            # 更新环境变量
-            echo "REPO_PATH=/workdir/immortalwrt" >> $GITHUB_ENV
+            echo "REPO_PATH=/workdir/immortalwrt" >> "$GITHUB_ENV"
             
             echo "✅ 磁盘空间重定向完成"
             df -h
@@ -95,13 +87,10 @@ jobs:
           else
             echo "⚠️ 未发现可用的磁盘空间，尝试其他方法"
             
-            # 查找未挂载的磁盘
             EXTRA_DISK=""
             for disk in sda sdb sdc sdd; do
               if [ -b "/dev/$disk" ]; then
-                # 检查是否已挂载
                 if ! mount | grep -q "/dev/$disk"; then
-                  # 检查是否有分区
                   if [ -b "/dev/${disk}1" ]; then
                     EXTRA_DISK="/dev/${disk}1"
                   else
@@ -117,37 +106,29 @@ jobs:
             if [ -n "$EXTRA_DISK" ]; then
               echo "📋 找到额外磁盘: $EXTRA_DISK"
               
-              # 检查磁盘是否已格式化
-              if ! blkid $EXTRA_DISK; then
+              if ! blkid "$EXTRA_DISK"; then
                 echo "🔧 格式化磁盘 $EXTRA_DISK..."
-                sudo mkfs.ext4 -F $EXTRA_DISK
+                sudo mkfs.ext4 -F "$EXTRA_DISK"
               fi
               
-              # 创建挂载点
               sudo mkdir -p /mnt/extra-space
               
-              # 确保挂载点未被使用
               if mountpoint -q /mnt/extra-space; then
                 echo "🔧 卸载已存在的挂载..."
                 sudo umount /mnt/extra-space
               fi
               
-              # 挂载磁盘
-              sudo mount $EXTRA_DISK /mnt/extra-space
+              sudo mount "$EXTRA_DISK" /mnt/extra-space
               
-              # 设置权限
-              sudo chown -R $USER:$USER /mnt/extra-space
+              sudo chown -R "$USER":"$USER" /mnt/extra-space
               
-              # 创建工作目录
               mkdir -p /mnt/extra-space/immortalwrt
               
-              # 更新环境变量
-              echo "REPO_PATH=/mnt/extra-space/immortalwrt" >> $GITHUB_ENV
+              echo "REPO_PATH=/mnt/extra-space/immortalwrt" >> "$GITHUB_ENV"
               
               echo "✅ 磁盘扩展完成"
             else
               echo "⚠️ 未找到任何可用磁盘，清理系统缓存"
-              # 清理系统缓存释放空间
               sudo apt-get clean
               sudo docker system prune -af --volumes || true
               echo "✅ 已清理系统缓存"
@@ -161,7 +142,6 @@ jobs:
       - name: 设置企业级缓存变量
         id: cache
         run: |
-          # 检查必要文件是否存在
           if [ ! -f "$CONFIG_FILE" ]; then
             echo "❌ 配置文件 $CONFIG_FILE 不存在"
             exit 1
@@ -172,30 +152,22 @@ jobs:
             exit 1
           fi
           
-          # 生成文件哈希
           CONFIG_HASH=$(sha256sum "$CONFIG_FILE" | cut -d' ' -f1)
           REPO_HASH=$(sha256sum scripts/repo.sh | cut -d' ' -f1)
-          
-          # 获取当前日期作为缓存键的一部分（用于每日缓存刷新）
           CACHE_DATE=$(date +%Y%m%d)
           
-          # 生成精确的缓存键
-          # 格式: cache-{version}-{type}-{config_hash}-{repo_hash}-{date}
           IMMORTALWRT_CACHE_KEY="cache-${{ env.CACHE_VERSION }}-immwrt-${CONFIG_HASH}-${REPO_HASH}-${CACHE_DATE}"
           FEEDS_CACHE_KEY="cache-${{ env.CACHE_VERSION }}-feeds-${CONFIG_HASH}-${REPO_HASH}-${CACHE_DATE}"
           DL_CACHE_KEY="cache-${{ env.CACHE_VERSION }}-dl-${CONFIG_HASH}-${REPO_HASH}"
           
-          # 设置输出变量（修复格式问题）
-          echo "immortalwrt-key=${IMMORTALWRT_CACHE_KEY}" >> $GITHUB_OUTPUT
-          echo "feeds-key=${FEEDS_CACHE_KEY}" >> $GITHUB_OUTPUT
-          echo "dl-key=${DL_CACHE_KEY}" >> $GITHUB_OUTPUT
+          echo "immortalwrt-key=${IMMORTALWRT_CACHE_KEY}" >> "$GITHUB_OUTPUT"
+          echo "feeds-key=${FEEDS_CACHE_KEY}" >> "$GITHUB_OUTPUT"
+          echo "dl-key=${DL_CACHE_KEY}" >> "$GITHUB_OUTPUT"
           
-          # 设置恢复键（用于缓存未命中时的回退）
-          echo "immortalwrt-restore-key=cache-${{ env.CACHE_VERSION }}-immwrt-${CONFIG_HASH}-${REPO_HASH}-" >> $GITHUB_OUTPUT
-          echo "feeds-restore-key=cache-${{ env.CACHE_VERSION }}-feeds-${CONFIG_HASH}-${REPO_HASH}-" >> $GITHUB_OUTPUT
-          echo "dl-restore-key=cache-${{ env.CACHE_VERSION }}-dl-${CONFIG_HASH}-${REPO_HASH}" >> $GITHUB_OUTPUT
+          echo "immortalwrt-restore-key=cache-${{ env.CACHE_VERSION }}-immwrt-${CONFIG_HASH}-${REPO_HASH}-" >> "$GITHUB_OUTPUT"
+          echo "feeds-restore-key=cache-${{ env.CACHE_VERSION }}-feeds-${CONFIG_HASH}-${REPO_HASH}-" >> "$GITHUB_OUTPUT"
+          echo "dl-restore-key=cache-${{ env.CACHE_VERSION }}-dl-${CONFIG_HASH}-${REPO_HASH}" >> "$GITHUB_OUTPUT"
           
-          # 输出缓存键信息
           echo "🔑 ImmortalWrt 缓存键: ${IMMORTALWRT_CACHE_KEY}"
           echo "🔑 Feeds 缓存键: ${FEEDS_CACHE_KEY}"
           echo "🔑 DL 缓存键: ${DL_CACHE_KEY}"
@@ -234,8 +206,8 @@ jobs:
         if: steps.cache-repo.outputs.cache-hit != 'true'
         run: |
           echo "📥 克隆 ImmortalWrt 源码..."
-          git clone https://github.com/${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}.git ${{ env.REPO_PATH }}
-          cd ${{ env.REPO_PATH }}
+          git clone https://github.com/${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}.git "${{ env.REPO_PATH }}"
+          cd "${{ env.REPO_PATH }}"
           git checkout ${{ env.REPO_BRANCH }}
           echo "✅ 源码克隆完成"
           
@@ -243,7 +215,7 @@ jobs:
         if: steps.cache-repo.outputs.cache-hit == 'true'
         run: |
           echo "🔄 更新源码..."
-          cd ${{ env.REPO_PATH }}
+          cd "${{ env.REPO_PATH }}"
           git fetch origin
           git checkout ${{ env.REPO_BRANCH }}
           git pull origin ${{ env.REPO_BRANCH }}
@@ -259,20 +231,20 @@ jobs:
       - name: 复制配置文件
         run: |
           echo "📋 复制配置文件..."
-          cp ${{ env.CONFIG_FILE }} ${{ env.REPO_PATH }}/.config
+          cp "$CONFIG_FILE" "${{ env.REPO_PATH }}/.config"
           echo "✅ 配置文件复制完成"
           
       - name: 更新第三方源
         run: |
           echo "🔄 更新第三方源..."
-          cd ${{ env.REPO_PATH }}
+          cd "${{ env.REPO_PATH }}"
           bash ../scripts/repo.sh
           echo "✅ 第三方源更新完成"
           
       - name: 更新 Feeds
         run: |
           echo "🔄 更新 Feeds..."
-          cd ${{ env.REPO_PATH }}
+          cd "${{ env.REPO_PATH }}"
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           echo "✅ Feeds 更新完成"
@@ -280,14 +252,14 @@ jobs:
       - name: 执行 defconfig
         run: |
           echo "⚙️ 执行 defconfig..."
-          cd ${{ env.REPO_PATH }}
+          cd "${{ env.REPO_PATH }}"
           make defconfig
           echo "✅ defconfig 完成"
           
       - name: 生成 LUCI 报告
         run: |
           echo "📄 生成 LUCI 报告..."
-          cd ${{ env.REPO_PATH }}
+          cd "${{ env.REPO_PATH }}"
           bash ../scripts/luci_report.sh
           echo "✅ 报告生成完成"
           
@@ -302,17 +274,17 @@ jobs:
         id: devices
         run: |
           echo "🔍 提取设备配置..."
-          cd ${{ env.REPO_PATH }}
+          cd "${{ env.REPO_PATH }}"
           DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*=y$" .config | sed -r 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y$/\1/' | sort -u | tr '\n' ' ')
-          echo "devices=$DEVICES" >> $GITHUB_OUTPUT
+          echo "devices=$DEVICES" >> "$GITHUB_OUTPUT"
           echo "✅ 设备配置提取完成: $DEVICES"
           
       - name: 配置编译环境
         run: |
           echo "⚙️ 配置编译环境..."
-          cd ${{ env.REPO_PATH }}
+          cd "${{ env.REPO_PATH }}"
           THREADS=$(nproc)
-          echo "THREADS=$THREADS" >> $GITHUB_ENV
+          echo "THREADS=$THREADS" >> "$GITHUB_ENV"
           echo "🔧 使用 $THREADS 线程编译"
           echo "CONFIG_CCACHE=y" >> .config
           bash ../scripts/diy.sh
@@ -322,10 +294,10 @@ jobs:
         id: compile
         run: |
           echo "🔨 开始编译固件..."
-          cd ${{ env.REPO_PATH }}
-          echo "compile_completed=false" >> $GITHUB_OUTPUT
-          if make -j${{ env.THREADS }}; then
-            echo "compile_completed=true" >> $GITHUB_OUTPUT
+          cd "${{ env.REPO_PATH }}"
+          echo "compile_completed=false" >> "$GITHUB_OUTPUT"
+          if make -j"${{ env.THREADS }}"; then
+            echo "compile_completed=true" >> "$GITHUB_OUTPUT"
             echo "✅ 固件编译成功"
           else
             echo "❌ 固件编译失败"
@@ -336,7 +308,7 @@ jobs:
         if: steps.compile.outputs.compile_completed == 'true'
         run: |
           echo "📦 整理固件文件..."
-          cd ${{ env.REPO_PATH }}
+          cd "${{ env.REPO_PATH }}"
           mkdir -p firmware
           find bin/targets -name "*.bin" -o -name "*.img" -o -name "manifest" | xargs -I {} cp {} firmware/
           echo "✅ 固件文件整理完成"
@@ -345,31 +317,36 @@ jobs:
         if: steps.compile.outputs.compile_completed == 'true'
         run: |
           echo "📝 生成固件README..."
-          cd ${{ env.REPO_PATH }}/firmware
+          cd "${{ env.REPO_PATH }}/firmware"
           
-          # 获取动态值
           BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S')
           COMMIT_HASH=$(git rev-parse --short HEAD)
           DEVICES_LIST="${{ steps.devices.outputs.devices }}"
           REPO_BRANCH="${{ env.REPO_BRANCH }}"
           
-          # 生成README文件
-          cat > README.md << EOF
+          cat > README.md << 'EOF'
 # ImmortalWrt 固件
 
 ## 构建信息
-- 构建时间: ${BUILD_TIME}
-- 源码分支: ${REPO_BRANCH}
-- 提交哈希: ${COMMIT_HASH}
+- 构建时间: BUILD_TIME_PLACEHOLDER
+- 源码分支: REPO_BRANCH_PLACEHOLDER
+- 提交哈希: COMMIT_HASH_PLACEHOLDER
 
 ## 设备列表
- ${DEVICES_LIST}
+DEVICES_LIST_PLACEHOLDER
 
 ## 文件说明
 - *.bin: 固件文件
 - *.img: 镜像文件
 - manifest: 包清单
 EOF
+          
+          # 使用sed替换占位符，避免变量展开问题
+          sed -i "s/BUILD_TIME_PLACEHOLDER/${BUILD_TIME}/g" README.md
+          sed -i "s/REPO_BRANCH_PLACEHOLDER/${REPO_BRANCH}/g" README.md
+          sed -i "s/COMMIT_HASH_PLACEHOLDER/${COMMIT_HASH}/g" README.md
+          sed -i "s/DEVICES_LIST_PLACEHOLDER/${DEVICES_LIST}/g" README.md
+          
           echo "✅ README生成完成"
 
       - name: 上传固件到Artifacts
@@ -398,27 +375,26 @@ EOF
         run: |
           echo "🧹 执行企业级缓存清理..."
           
-          # 保留最近的5个缓存版本
           echo "🗑️ 清理旧的 ImmortalWrt 缓存..."
-          gh cache list --repo ${{ github.repository }} --limit 20 | \
+          gh cache list --repo "${{ github.repository }}" --limit 20 | \
             grep "cache-${{ env.CACHE_VERSION }}-immwrt-" | \
             tail -n +6 | \
             awk '{print $1}' | \
-            xargs -I {} gh cache delete --repo ${{ github.repository }} {} || true
+            xargs -I {} gh cache delete --repo "${{ github.repository }}" {} || true
           
           echo "🗑️ 清理旧的 Feeds 缓存..."
-          gh cache list --repo ${{ github.repository }} --limit 20 | \
+          gh cache list --repo "${{ github.repository }}" --limit 20 | \
             grep "cache-${{ env.CACHE_VERSION }}-feeds-" | \
             tail -n +6 | \
             awk '{print $1}' | \
-            xargs -I {} gh cache delete --repo ${{ github.repository }} {} || true
+            xargs -I {} gh cache delete --repo "${{ github.repository }}" {} || true
             
           echo "🗑️ 清理旧的 DL 缓存..."
-          gh cache list --repo ${{ github.repository }} --limit 20 | \
+          gh cache list --repo "${{ github.repository }}" --limit 20 | \
             grep "cache-${{ env.CACHE_VERSION }}-dl-" | \
             tail -n +6 | \
             awk '{print $1}' | \
-            xargs -I {} gh cache delete --repo ${{ github.repository }} {} || true
+            xargs -I {} gh cache delete --repo "${{ github.repository }}" {} || true
           
           echo "✅ 缓存清理完成"
         env:
@@ -428,6 +404,6 @@ EOF
         if: always()
         run: |
           echo "🧹 清理工作目录..."
-          sudo rm -rf $REPO_PATH
+          sudo rm -rf "${{ env.REPO_PATH }}"
           echo "📊 最终磁盘空间:"
           df -h
