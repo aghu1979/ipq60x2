@@ -207,43 +207,7 @@ jobs:
         run: |
           echo "📦 安装构建依赖..."
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            ccache \
-            ecj \
-            fastjar \
-            file \
-            g++ \
-            gawk \
-            gettext \
-            java-runtime-common \
-            javascript \
-            libelf-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            libssl-dev \
-            python3 \
-            python3-debian \
-            python3-distutils \
-            python3-lib2to3 \
-            python3-pyelftools \
-            python3-setuptools \
-            python3-unittest \
-            rsync \
-            subversion \
-            swig \
-            unzip \
-            wget \
-            python3-pip \
-            python3-pyelftools \
-            zlib1g-dev \
-            qemu-utils \
-            upx-ucl \
-            llvm \
-            clang \
-            flex \
-            bison \
-            curl
+          sudo apt-get install -y build-essential ccache ecj fastjar file g++ gawk gettext java-runtime-common javascript libelf-dev libncurses5-dev libncursesw5-dev libssl-dev python3 python3-debian python3-distutils python3-lib2to3 python3-pyelftools python3-setuptools python3-unittest rsync subversion swig unzip wget python3-pip python3-pyelftools zlib1g-dev qemu-utils upx-ucl llvm clang flex bison curl
           echo "✅ 依赖安装完成"
 
       - name: 复制配置文件
@@ -305,13 +269,7 @@ jobs:
         run: |
           echo "🔍 提取设备配置..."
           cd ${{ env.REPO_PATH }}
-          
-          # 提取设备列表
-          DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*=y$" .config | \
-            sed -r 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y$/\1/' | \
-            sort -u | \
-            tr '\n' ' ')
-          
+          DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*=y$" .config | sed -r 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y$/\1/' | sort -u | tr '\n' ' ')
           echo "devices=$DEVICES" >> $GITHUB_OUTPUT
           echo "✅ 设备配置提取完成: $DEVICES"
 
@@ -324,18 +282,11 @@ jobs:
         run: |
           echo "⚙️ 配置编译环境..."
           cd ${{ env.REPO_PATH }}
-          
-          # 设置线程数
           THREADS=$(nproc)
           echo "THREADS=$THREADS" >> $GITHUB_ENV
           echo "🔧 使用 $THREADS 线程编译"
-          
-          # 启用 ccache
           echo "CONFIG_CCACHE=y" >> .config
-          
-          # 执行 DIY 脚本
           bash ../scripts/diy.sh
-          
           echo "✅ 编译环境配置完成"
 
       - name: 编译固件
@@ -343,11 +294,7 @@ jobs:
         run: |
           echo "🔨 开始编译固件..."
           cd ${{ env.REPO_PATH }}
-          
-          # 设置编译完成标志
           echo "compile_completed=false" >> $GITHUB_OUTPUT
-          
-          # 编译
           if make -j${{ env.THREADS }}; then
             echo "compile_completed=true" >> $GITHUB_OUTPUT
             echo "✅ 固件编译成功"
@@ -367,32 +314,24 @@ jobs:
         run: |
           echo "📦 整理固件文件..."
           cd ${{ env.REPO_PATH }}
-          
-          # 创建固件目录
           mkdir -p firmware
-          
-          # 复制所有固件文件
-          find bin/targets -name "*.bin" -o -name "*.img" -o -name "manifest" | \
-            xargs -I {} cp {} firmware/
-          
-          # 生成 README
+          find bin/targets -name "*.bin" -o -name "*.img" -o -name "manifest" | xargs -I {} cp {} firmware/
           cat > firmware/README.md << 'EOF'
 # ImmortalWrt 固件
-
+          
 ## 构建信息
 - 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
 - 源码分支: ${{ env.REPO_BRANCH }}
 - 提交哈希: $(git rev-parse --short HEAD)
-
+          
 ## 设备列表
  ${{ steps.devices.outputs.devices }}
-
+          
 ## 文件说明
 - *.bin: 固件文件
 - *.img: 镜像文件
 - manifest: 包清单
 EOF
-          
           echo "✅ 固件文件整理完成"
 
       - name: 上传固件到Artifacts
@@ -420,12 +359,7 @@ EOF
         if: always()
         run: |
           echo "🧹 清理过期缓存..."
-          # 保留最近5个缓存
-          gh cache list --repo ${{ github.repository }} --limit 20 | \
-            grep "immwrt-" | \
-            tail -n +6 | \
-            awk '{print $1}' | \
-            xargs -I {} gh cache delete --repo ${{ github.repository }} {} || true
+          gh cache list --repo ${{ github.repository }} --limit 20 | grep "immwrt-" | tail -n +6 | awk '{print $1}' | xargs -I {} gh cache delete --repo ${{ github.repository }} {} || true
         env:
           GH_TOKEN: ${{ github.token }}
 
