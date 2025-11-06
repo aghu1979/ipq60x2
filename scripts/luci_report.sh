@@ -23,8 +23,7 @@ source "$(dirname "$0")/common.sh"
 
 # --- 配置变量 ---
 # 文件路径定义
-CONFIG_FILE=".config"
-USER_CONFIG_FILE="configs/immu.config"  # 用户提供的配置文件
+CONFIG_FILE=".config"  # 始终使用 .config 作为配置文件
 BEFORE_FILE=".luci_report_before.cfg"
 AFTER_FILE=".luci_report_after.cfg"
 REPORT_FILE=".luci_report.txt"
@@ -62,16 +61,7 @@ show_system_resources
 check_command_exists "comm" "'comm' 命令未找到，此脚本无法运行。"
 
 # 检查配置文件是否存在
-if [ ! -f "$CONFIG_FILE" ]; then
-    # 如果.config不存在，尝试从用户配置文件复制
-    if [ -f "$USER_CONFIG_FILE" ]; then
-        log_info "未找到 .config 文件，从用户配置文件复制: $USER_CONFIG_FILE"
-        cp "$USER_CONFIG_FILE" "$CONFIG_FILE"
-    else
-        log_error "未找到 '$CONFIG_FILE' 文件，也未找到用户配置文件 '$USER_CONFIG_FILE'。请确保在源码根目录下运行此脚本。"
-        exit 1
-    fi
-fi
+check_file_exists "$CONFIG_FILE" "配置文件 '$CONFIG_FILE' 不存在。请确保在源码根目录下运行此脚本。"
 
 # --- 核心函数 ---
 
@@ -96,27 +86,15 @@ print_section_header() {
 }
 
 # 获取并排序 LUCI 软件包列表
-# 优先从.config获取，如果.config没有变化则强制重新生成
+# 从 .config 文件中获取
 get_luci_packages() {
     local config_file="$1"
-    local force_refresh=${2:-false}
     
-    # 如果强制刷新或.config不存在，从用户配置文件获取
-    if [ "$force_refresh" = "true" ] || [ ! -f "$config_file" ]; then
-        if [ -f "$USER_CONFIG_FILE" ]; then
-            log_debug "从用户配置文件获取LUCI软件包列表"
-            grep "^CONFIG_PACKAGE_luci-app.*=y$" "$USER_CONFIG_FILE" | \
-            grep -v "_INCLUDE_" | \
-            sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
-            sort
-        fi
-    else
-        log_debug "从.config文件获取LUCI软件包列表"
-        grep "^CONFIG_PACKAGE_luci-app.*=y$" "$config_file" | \
-        grep -v "_INCLUDE_" | \
-        sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
-        sort
-    fi
+    log_debug "从配置文件获取LUCI软件包列表: $config_file"
+    grep "^CONFIG_PACKAGE_luci-app.*=y$" "$config_file" | \
+    grep -v "_INCLUDE_" | \
+    sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | \
+    sort
 }
 
 # 分析包的来源
@@ -254,149 +232,13 @@ analyze_change_reason() {
             elif [ -d "package/feeds" ]; then
                 echo "通过feeds安装的软件包"
             else
-                echo "可能是依赖项自动安装"
+                echo "系统依赖或自动安装的基础软件包"
             fi
             ;;
         "removed")
             echo "可能是不满足依赖条件或被手动禁用"
             ;;
     esac
-}
-
-# 生成HTML详细报告
-generate_html_report() {
-    local before_file="$1"
-    local after_file="$2"
-    local report_file="$3"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
-    ADDED_PACKAGES=$(comm -13 "$before_file" "$after_file")
-    REMOVED_PACKAGES=$(comm -23 "$before_file" "$after_file")
-    
-    cat > "$report_file" << EOF
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LUCI 软件包变更报告 - $timestamp</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 8px 8px 0 0; }
-        .section { padding: 20px; border-bottom: 1px solid #eee; }
-        .section:last-child { border-bottom: none; }
-        h1 { margin: 0; font-size: 28px; }
-        h2 { color: #333; margin-top: 0; }
-        .package-list { list-style: none; padding: 0; }
-        .package-item { padding: 15px; margin: 10px 0; border-radius: 6px; transition: transform 0.2s; }
-        .package-item:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        .added { background-color: #d4edda; border-left: 4px solid #28a745; }
-        .removed { background-color: #f8d7da; border-left: 4px solid #dc3545; }
-        .package-name { font-weight: bold; font-size: 18px; }
-        .package-source { color: #666; font-size: 14px; margin-top: 5px; }
-        .package-desc { color: #555; margin-top: 8px; line-height: 1.5; }
-        .package-reason { color: #888; font-style: italic; margin-top: 8px; font-size: 13px; }
-        .stats { display: flex; justify-content: space-around; margin: 20px 0; }
-        .stat-item { text-align: center; padding: 20px; background: #f8f9fa; border-radius: 6px; }
-        .stat-number { font-size: 36px; font-weight: bold; color: #333; }
-        .stat-label { color: #666; margin-top: 5px; }
-        .icon { margin-right: 8px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>📊 LUCI 软件包变更报告</h1>
-            <p>生成时间: $timestamp</p>
-        </div>
-        
-        <div class="section">
-            <div class="stats">
-                <div class="stat-item">
-                    <div class="stat-number" style="color: #28a745;">$(echo "$ADDED_PACKAGES" | grep -c .)</div>
-                    <div class="stat-label">新增软件包</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-number" style="color: #dc3545;">$(echo "$REMOVED_PACKAGES" | grep -c .)</div>
-                    <div class="stat-label">移除软件包</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-number" style="color: #007bff;">$(cat "$after_file" | wc -l)</div>
-                    <div class="stat-label">总计软件包</div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="section">
-            <h2>✅ 新增的软件包</h2>
-            <div class="package-list">
-EOF
-
-    # 添加新增的软件包
-    if [ -n "$ADDED_PACKAGES" ]; then
-        while IFS= read -r package; do
-            source=$(analyze_package_source "$package")
-            description=$(get_package_description "$package")
-            reason=$(analyze_change_reason "$package" "added")
-            
-            # 根据来源选择图标
-            case "$source" in
-                "local") icon="🔧" ;;
-                "feeds/luci") icon="🌐" ;;
-                "feeds/packages") icon="📦" ;;
-                "package/feeds") icon="📥" ;;
-                "small-package") icon="🔄" ;;
-                *) icon="❓" ;;
-            esac
-            
-            cat >> "$report_file" << EOF
-                <div class="package-item added">
-                    <div class="package-name">${icon} ${package}</div>
-                    <div class="package-source">来源: ${source}</div>
-                    <div class="package-desc">${description:-"无描述信息"}</div>
-                    <div class="package-reason">原因: ${reason}</div>
-                </div>
-EOF
-        done <<< "$ADDED_PACKAGES"
-    else
-        echo "                <p>没有新增的软件包。</p>" >> "$report_file"
-    fi
-
-    cat >> "$report_file" << EOF
-            </div>
-        </div>
-        
-        <div class="section">
-            <h2>❌ 移除的软件包</h2>
-            <div class="package-list">
-EOF
-
-    # 添加移除的软件包
-    if [ -n "$REMOVED_PACKAGES" ]; then
-        while IFS= read -r package; do
-            reason=$(analyze_change_reason "$package" "removed")
-            
-            cat >> "$report_file" << EOF
-                <div class="package-item removed">
-                    <div class="package-name">❌ ${package}</div>
-                    <div class="package-reason">原因: ${reason}</div>
-                </div>
-EOF
-        done <<< "$REMOVED_PACKAGES"
-    else
-        echo "                <p>没有移除的软件包。</p>" >> "$report_file"
-    fi
-
-    cat >> "$report_file" << EOF
-            </div>
-        </div>
-    </div>
-</body>
-</html>
-EOF
-
-    log_info "HTML详细报告已保存到: $report_file"
 }
 
 # 生成文本报告文件
@@ -449,15 +291,14 @@ generate_report_file() {
 if [ ! -f "$BEFORE_FILE" ]; then
     log_substep "首次运行：建立 LUCI 软件包的基准配置"
     
-    # 显示使用的配置文件
-    if [ -f "$USER_CONFIG_FILE" ]; then
-        log_info "使用用户配置文件: $USER_CONFIG_FILE"
-    else
-        log_info "使用默认配置文件: $CONFIG_FILE"
-    fi
+    log_info "使用 .config 作为基准配置文件"
+    log_info "配置文件信息:"
+    log_info "  文件大小: $(stat -c%s "$CONFIG_FILE") 字节"
+    log_info "  配置行数: $(wc -l < "$CONFIG_FILE")"
+    log_info "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" || echo "0")"
     
-    # 强制从用户配置文件获取基准配置
-    get_luci_packages "$CONFIG_FILE" true > "$BEFORE_FILE"
+    # 基准配置从当前的 .config 获取
+    get_luci_packages "$CONFIG_FILE" > "$BEFORE_FILE"
     check_status "获取 LUCI 软件包列表失败"
     
     print_section_header "基准配置已成功捕获"
@@ -479,8 +320,13 @@ if [ ! -f "$BEFORE_FILE" ]; then
 else
     log_substep "生成 LUCI 软件包变更报告"
     
-    # 强制从当前.config获取最新配置
-    get_luci_packages "$CONFIG_FILE" true > "$AFTER_FILE"
+    log_info "当前 .config 文件信息:"
+    log_info "  文件大小: $(stat -c%s "$CONFIG_FILE") 字节"
+    log_info "  配置行数: $(wc -l < "$CONFIG_FILE")"
+    log_info "  LUCI软件包数: $(grep -c "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" || echo "0")"
+    
+    # 从当前 .config 获取最新配置（make defconfig后的完整配置）
+    get_luci_packages "$CONFIG_FILE" > "$AFTER_FILE"
     check_status "获取当前 LUCI 软件包列表失败"
     
     # 检查配置是否真的发生了变化
@@ -490,6 +336,7 @@ else
         echo -e "  1. ${COLOR_CYAN}make defconfig${COLOR_RESET} 未执行或执行后配置无变化"
         echo -e "  2. ${COLOR_CYAN}feeds${COLOR_RESET} 更新后软件包列表无变化"
         echo -e "  3. ${COLOR_CYAN}第三方源${COLOR_RESET} 添加的软件包未生效"
+        echo -e "  4. ${COLOR_CYAN}系统依赖包${COLOR_RESET} 可能未在用户配置中显式声明"
         echo ""
         echo -e "${COLOR_BLUE}建议操作：${NC}"
         echo -e "  1. 检查 ${COLOR_CYAN}feeds${COLOR_RESET} 是否正确更新和安装"
@@ -502,7 +349,7 @@ else
           y|Y )
             echo -e "${COLOR_BLUE}强制重新生成报告...${COLOR_RESET}"
             rm -f "$AFTER_FILE"
-            get_luci_packages "$CONFIG_FILE" true > "$AFTER_FILE"
+            get_luci_packages "$CONFIG_FILE" > "$AFTER_FILE"
             ;;
           * )
             rm -f "$AFTER_FILE" # 清理无用的 after 文件
@@ -606,12 +453,10 @@ else
     
     # 生成报告文件
     generate_report_file "$BEFORE_FILE" "$AFTER_FILE" "$REPORT_FILE"
-    generate_html_report "$BEFORE_FILE" "$AFTER_FILE" "$DETAIL_REPORT_FILE"
     
     # 清理临时文件
     echo -e "\n${COLOR_BLUE}报告生成完毕。${NC}"
     echo -e "  📄 文本报告: ${COLOR_CYAN}$REPORT_FILE${NC}"
-    echo -e "  🌐 HTML报告: ${COLOR_CYAN}$DETAIL_REPORT_FILE${NC}"
     echo ""
     echo -e "${COLOR_BLUE}是否删除临时文件以便下次使用? (y/n)${COLOR_RESET}"
     read -r -p "> " choice
