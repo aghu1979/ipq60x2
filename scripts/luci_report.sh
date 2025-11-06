@@ -421,7 +421,7 @@ generate_report_file() {
         echo "✅ 新增的软件包:"
         if [ -n "$ADDED_PACKAGES" ]; then
             while IFS= read -r package; do
-                source=$(analyze_package_source "$package"
+                source=$(analyze_package_source "$package")
                 reason=$(analyze_change_reason "$package" "added")
                 echo "  - $package [$source] - $reason"
             done <<< "$ADDED_PACKAGES"
