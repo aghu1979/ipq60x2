@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # ImmortalWrt DIY配置脚本
-# 版本: 1.3 (简化版)
+# 版本: 2.0 (企业级优化版)
 # 作者: Mary
 # 描述: 配置设备初始管理IP/密码及系统优化
 # =============================================================================
@@ -9,34 +9,108 @@
 # 加载通用函数库
 source "$(dirname "$0")/common.sh"
 
-# 全局变量
-REPO_PATH="${REPO_PATH:-$(pwd)}"
-INIT_IP="192.168.111.1"
-HOSTNAME="WRT"
-AUTHOR="Mary"
+# 全局配置
+readonly SCRIPT_VERSION="2.0"
+readonly SCRIPT_AUTHOR="Mary"
+readonly REPO_PATH="${REPO_PATH:-$(pwd)}"
+readonly LOG_FILE="$REPO_PATH/diy_script.log"
 
-log_work "开始执行DIY配置..."
+# 配置参数
+readonly INIT_IP="192.168.111.1"
+readonly HOSTNAME="WRT"
+readonly INIT_PASSWORD=""  # 空密码
+
+# 操作统计
+declare -g SUCCESS_COUNT=0
+declare -g FAIL_COUNT=0
+declare -g SKIP_COUNT=0
+declare -g FAILED_OPERATIONS=()
+
+# =============================================================================
+# 核心功能函数
+# =============================================================================
+
+# 环境检查
+check_environment() {
+    log_info "🔍 检查执行环境..."
+    
+    local errors=0
+    
+    # 检查必要目录
+    if [ ! -d "$REPO_PATH" ]; then
+        log_error "源码目录不存在: $REPO_PATH"
+        ((errors++))
+    fi
+    
+    # 检查必要命令
+    local required_commands=("git" "chmod" "mkdir" "cat")
+    for cmd in "${required_commands[@]}"; do
+        if ! command_exists "$cmd"; then
+            log_error "缺少必要命令: $cmd"
+            ((errors++))
+        fi
+    done
+    
+    # 检查磁盘空间
+    if ! check_disk_space "$REPO_PATH" 1; then
+        log_error "磁盘空间不足"
+        ((errors++))
+    fi
+    
+    if [ $errors -eq 0 ]; then
+        log_success "✅ 环境检查通过"
+        return 0
+    else
+        log_error "❌ 环境检查失败，发现 $errors 个问题"
+        return 1
+    fi
+}
 
 # 显示配置信息
-show_initial_config() {
-    log_info "初始配置信息:"
+show_configuration() {
+    log_info "📋 配置信息:"
     echo "  🌐 LAN IP: $INIT_IP"
     echo "  🔑 Root密码: [空密码]"
     echo "  🖥️  主机名: $HOSTNAME"
-    echo "  👤 作者: $AUTHOR"
+    echo "  👤 作者: $SCRIPT_AUTHOR"
+    echo "  📝 脚本版本: $SCRIPT_VERSION"
+    echo "  📂 工作目录: $REPO_PATH"
     echo ""
+}
+
+# 创建必要目录
+create_directories() {
+    log_info "📁 创建必要目录..."
+    
+    local dirs=(
+        "$REPO_PATH/files/etc/uci-defaults"
+        "$REPO_PATH/package/custom"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        if mkdir -p "$dir" 2>/dev/null; then
+            log_success "创建目录: $dir"
+            ((SUCCESS_COUNT++))
+        else
+            log_error "创建目录失败: $dir"
+            ((FAIL_COUNT++))
+            FAILED_OPERATIONS+=("create_directory:$dir")
+        fi
+    done
 }
 
 # 配置初始网络和认证
 configure_initial_settings() {
-    log_info "配置初始管理设置..."
+    log_info "⚙️ 配置初始网络和认证设置..."
     
-    # 创建初始配置文件
-    cat > "$REPO_PATH/files/etc/uci-defaults/99-initial-settings" << EOF
+    local config_file="$REPO_PATH/files/etc/uci-defaults/99-initial-settings"
+    
+    if cat > "$config_file" << EOF; then
 #!/bin/sh
 # 初始配置脚本
 # 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
-# 作者: $AUTHOR
+# 作者: $SCRIPT_AUTHOR
+# 脚本版本: $SCRIPT_VERSION
 
 # 设置LAN IP
 uci set network.lan.ipaddr='$INIT_IP'
@@ -63,41 +137,54 @@ uci commit system
 
 exit 0
 EOF
-    
-    chmod +x "$REPO_PATH/files/etc/uci-defaults/99-initial-settings"
-    log_success "初始配置设置完成"
+        chmod +x "$config_file" && log_success "初始配置文件创建成功" && ((SUCCESS_COUNT++))
+    else
+        log_error "初始配置文件创建失败"
+        ((FAIL_COUNT++))
+        FAILED_OPERATIONS+=("configure_initial_settings")
+        return 1
+    fi
 }
 
 # 优化编译配置
 optimize_build_config() {
-    log_info "优化编译配置..."
+    log_info "🚀 优化编译配置..."
     
-    # 添加编译优化选项
-    cat >> "$REPO_PATH/.config" << EOF
-
-# 编译优化
-CONFIG_TARGET_OPTIMIZATION="-O2 -pipe -mcpu=cortex-a53"
+    local config_file="$REPO_PATH/.config"
+    local config_content="
+# 编译优化 - 添加于 $(date '+%Y-%m-%d %H:%M:%S')
+CONFIG_TARGET_OPTIMIZATION=\"-O2 -pipe -mcpu=cortex-a53\"
 CONFIG_USE_GLIBC=y
 CONFIG_TARGET_ROOTFS_SQUASHFS=y
 CONFIG_TARGET_ROOTFS_EXT4FS=y
 
 # 禁用不必要的功能
 CONFIG_IB=y
-CONFIG_KERNEL_GIT_CLONE_URI=""
-CONFIG_KERNEL_GIT_REF=""
-EOF
+CONFIG_KERNEL_GIT_CLONE_URI=\"\"
+CONFIG_KERNEL_GIT_REF=\"\"
+"
     
-    log_success "编译配置优化完成"
+    if echo "$config_content" >> "$config_file" 2>/dev/null; then
+        log_success "编译配置优化完成"
+        ((SUCCESS_COUNT++))
+    else
+        log_error "编译配置优化失败"
+        ((FAIL_COUNT++))
+        FAILED_OPERATIONS+=("optimize_build_config")
+        return 1
+    fi
 }
 
 # 配置系统优化
 configure_system_optimization() {
-    log_info "配置系统优化..."
+    log_info "⚡ 配置系统优化..."
     
-    # 创建系统优化脚本
-    cat > "$REPO_PATH/files/etc/uci-defaults/98-system-optimization" << 'EOF'
+    local opt_file="$REPO_PATH/files/etc/uci-defaults/98-system-optimization"
+    
+    if cat > "$opt_file" << 'EOF'; then
 #!/bin/sh
 # 系统优化脚本
+# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
 
 # 优化网络参数
 echo 'net.core.rmem_max = 16777216' >> /etc/sysctl.conf
@@ -115,19 +202,26 @@ echo 'net.ipv4.tcp_congestion_control=bbr' >> /etc/sysctl.conf
 
 exit 0
 EOF
-    
-    chmod +x "$REPO_PATH/files/etc/uci-defaults/98-system-optimization"
-    log_success "系统优化配置完成"
+        chmod +x "$opt_file" && log_success "系统优化配置完成" && ((SUCCESS_COUNT++))
+    else
+        log_error "系统优化配置失败"
+        ((FAIL_COUNT++))
+        FAILED_OPERATIONS+=("configure_system_optimization")
+        return 1
+    fi
 }
 
 # 生成配置说明文件
-generate_config_info() {
-    log_info "生成配置说明文件..."
+generate_documentation() {
+    log_info "📚 生成配置文档..."
     
-    cat > "$REPO_PATH/files/etc/uci-defaults/README" << EOF
+    local doc_file="$REPO_PATH/files/etc/uci-defaults/README"
+    
+    if cat > "$doc_file" << EOF; then
 # ImmortalWrt 初始配置说明
 # 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
-# 作者: $AUTHOR
+# 作者: $SCRIPT_AUTHOR
+# 脚本版本: $SCRIPT_VERSION
 
 ## 默认配置
 - LAN IP: $INIT_IP
@@ -142,36 +236,125 @@ generate_config_info() {
 ## Web界面
 访问地址: http://$INIT_IP
 
+## 配置文件说明
+- 99-initial-settings: 初始网络和认证配置
+- 98-system-optimization: 系统性能优化
 EOF
-    
-    log_success "配置说明文件生成完成"
+        log_success "配置文档生成完成" && ((SUCCESS_COUNT++))
+    else
+        log_error "配置文档生成失败"
+        ((FAIL_COUNT++))
+        FAILED_OPERATIONS+=("generate_documentation")
+        return 1
+    fi
 }
 
-# 主函数
-main() {
-    log_work "开始DIY配置流程..."
+# 验证配置结果
+verify_configuration() {
+    log_info "🔍 验证配置结果..."
     
-    # 显示配置信息
-    show_initial_config
+    local verification_items=(
+        "$REPO_PATH/files/etc/uci-defaults/99-initial-settings:初始配置文件"
+        "$REPO_PATH/files/etc/uci-defaults/98-system-optimization:系统优化文件"
+        "$REPO_PATH/files/etc/uci-defaults/README:配置文档"
+        "$REPO_PATH/.config:编译配置文件"
+    )
     
-    # 检查必要目录
-    mkdir -p "$REPO_PATH/files/etc/uci-defaults"
+    local verified_count=0
+    for item in "${verification_items[@]}"; do
+        local file="${item%:*}"
+        local desc="${item#*:}"
+        
+        if [ -f "$file" ]; then
+            echo "  ✅ $desc"
+            ((verified_count++))
+        else
+            echo "  ❌ $desc (缺失)"
+        fi
+    done
     
-    # 执行配置步骤（移除了多余的自定义应用）
-    configure_initial_settings
-    optimize_build_config
-    configure_system_optimization
-    generate_config_info
-    
-    log_success "DIY配置完成！"
+    if [ $verified_count -eq ${#verification_items[@]} ]; then
+        log_success "配置验证通过"
+        ((SUCCESS_COUNT++))
+    else
+        log_warning "配置验证部分通过 ($verified_count/${#verification_items[@]})"
+        ((SKIP_COUNT++))
+    fi
+}
+
+# 生成执行摘要
+generate_summary() {
     echo ""
-    log_info "📋 配置摘要:"
+    echo "=================================================================="
+    log_info "📊 执行摘要"
+    echo "=================================================================="
+    echo "✅ 成功操作: $SUCCESS_COUNT"
+    echo "❌ 失败操作: $FAIL_COUNT"
+    echo "⚠️  跳过操作: $SKIP_COUNT"
+    echo ""
+    
+    if [ $FAIL_COUNT -gt 0 ]; then
+        echo "失败的操作列表:"
+        for operation in "${FAILED_OPERATIONS[@]}"; do
+            echo "  - $operation"
+        done
+        echo ""
+    fi
+    
+    echo "配置摘要:"
     echo "  🌐 管理地址: http://$INIT_IP"
     echo "  🔑 登录账号: root"
     echo "  🔑 登录密码: [空密码]"
     echo "  🖥️  主机名: $HOSTNAME"
     echo ""
+    
+    if [ $FAIL_COUNT -eq 0 ]; then
+        log_success "🎉 所有配置任务完成！"
+    else
+        log_warning "⚠️  部分配置任务失败，请检查上述错误信息"
+    fi
+    echo "=================================================================="
 }
+
+# =============================================================================
+# 主执行流程
+# =============================================================================
+
+main() {
+    # 记录开始时间
+    local start_time=$(date +%s)
+    
+    echo ""
+    echo "=================================================================="
+    log_info "🚀 ImmortalWrt DIY配置脚本 v$SCRIPT_VERSION"
+    echo "=================================================================="
+    log_info "作者: $SCRIPT_AUTHOR"
+    log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo ""
+    
+    # 执行配置流程
+    if check_environment; then
+        show_configuration
+        create_directories
+        configure_initial_settings
+        optimize_build_config
+        configure_system_optimization
+        generate_documentation
+        verify_configuration
+    else
+        log_error "环境检查失败，终止执行"
+        exit 1
+    fi
+    
+    # 生成摘要
+    generate_summary
+    
+    # 计算执行时间
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    log_time "总执行时间: ${duration}秒"
+}
+
 
 # 执行主函数
 main "$@"
