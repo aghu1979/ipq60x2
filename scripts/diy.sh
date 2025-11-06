@@ -1,3 +1,4 @@
+# scripts/diy.sh
 #!/bin/bash
 
 # ==============================================================================
@@ -37,24 +38,33 @@ SCRIPT_START_TIME=$(date +%s)
 
 log_step "开始执行 DIY Part 初始配置"
 
+# 显示系统资源使用情况
+show_system_resources
+
 # 检查参数
 check_var_not_empty "OPENWRT_ROOT_DIR" "$OPENWRT_ROOT_DIR" "未指定 OpenWrt 根目录！"
 
 # 检查目录是否存在
 check_dir_exists "$OPENWRT_ROOT_DIR" "OpenWrt 根目录不存在: $OPENWRT_ROOT_DIR"
 
+# 检查OpenWrt环境
+check_openwrt_env "$OPENWRT_ROOT_DIR"
+
+# 提取设备配置信息
+extract_device_info "$OPENWRT_ROOT_DIR/.config" "$OPENWRT_ROOT_DIR/device_info.txt"
+
 # 1. 修改默认IP地址
-log_info "正在设置 LAN IP 为: ${LAN_IP}"
+log_substep "设置 LAN IP 为: ${LAN_IP}"
 CONFIG_GENERATE_FILE="$OPENWRT_ROOT_DIR/package/base-files/files/bin/config_generate"
 check_file_exists "$CONFIG_GENERATE_FILE" "配置生成文件不存在: $CONFIG_GENERATE_FILE"
 safe_replace "$CONFIG_GENERATE_FILE" "192.168.1.1" "$LAN_IP"
 
 # 2. 修改主机名
-log_info "正在设置主机名为: ${HOSTNAME}"
+log_substep "设置主机名为: ${HOSTNAME}"
 safe_replace "$CONFIG_GENERATE_FILE" "hostname='.*'" "hostname='${HOSTNAME}'"
 
 # 3. 添加编译署名
-log_info "正在添加编译署名: ${BUILDER_NAME}"
+log_substep "添加编译署名: ${BUILDER_NAME}"
 STATUS_JS="$OPENWRT_ROOT_DIR/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js"
 if [ -f "$STATUS_JS" ]; then
     safe_replace "$STATUS_JS" "(\(luciversion || ''\))" "(\1) + (' \/ Built by ${BUILDER_NAME}')"
@@ -63,7 +73,7 @@ else
 fi
 
 # 4. 修改root密码
-log_info "正在设置 root 密码"
+log_substep "设置 root 密码"
 SHADOW_FILE="$OPENWRT_ROOT_DIR/package/base-files/files/etc/shadow"
 check_file_exists "$SHADOW_FILE" "Shadow文件不存在: $SHADOW_FILE"
 
@@ -78,7 +88,7 @@ fi
 
 # 5. 应用Argon主题优化
 if [ "$APPLY_ARGON_TWEAKS" = "true" ]; then
-    log_info "正在应用Argon主题优化..."
+    log_substep "应用Argon主题优化..."
     
     # 调整在Argon主题下，概览页面显示/隐藏按钮的样式
     ARGON_CSS="$OPENWRT_ROOT_DIR/feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css/cascade.css"
@@ -145,6 +155,10 @@ EOF
 else
     log_info "跳过Argon主题优化"
 fi
+
+# 显示当前磁盘使用情况
+log_info "当前磁盘使用情况:"
+df -h
 
 # 记录结束时间并生成摘要
 SCRIPT_END_TIME=$(date +%s)
