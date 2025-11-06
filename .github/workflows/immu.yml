@@ -20,10 +20,10 @@ env:
   UPLOAD_FIRMWARE: true
   UPLOAD_COWTRANSFER: false
   UPLOAD_WETRANSFER: false
-  UPLOAD_RELEASE: true  # 默认发布到Release
+  UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
-  VARIANT: 'Max'  # 固定为Max变体
-  DEBUG: false  # 默认不启用调试模式
+  VARIANT: 'Max'
+  DEBUG: false
   CACHE_VERSION: ${{ github.event.inputs.cache_version || 'v1' }}
 
 jobs:
@@ -270,7 +270,7 @@ jobs:
           done
           
           # 生成固件信息
-          cat > firmware/README.md << EOF
+          cat > firmware/README.md << 'EOF'
 ## 固件信息
 
 - **变体**: $VARIANT
@@ -289,8 +289,8 @@ jobs:
 - **缓存命中**: ${{ steps.cache.outputs.cache-hit }}
 
 ### 文件说明
-- \*.bin: 固件文件
-- \*.img: 镜像文件
+- *.bin: 固件文件
+- *.img: 镜像文件
 - manifest: 包清单
 EOF
 
