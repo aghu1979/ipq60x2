@@ -307,23 +307,23 @@ jobs:
             xargs -I {} cp {} firmware/
           
           # 生成 README
-          cat > firmware/README.md << EOF
-# ImmortalWrt ${{ env.VARIANT }} 固件
-
-## 构建信息
-- 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
-- 构建变体: ${{ env.VARIANT }}
-- 源码分支: ${{ env.REPO_BRANCH }}
-- 提交哈希: $(git rev-parse --short HEAD)
-
-## 设备列表
- ${{ steps.devices.outputs.devices }}
-
-## 文件说明
-- *.bin: 固件文件
-- *.img: 镜像文件
-- manifest: 包清单
-EOF
+          cat > firmware/README.md << 'EOF'
+          # ImmortalWrt ${{ env.VARIANT }} 固件
+          
+          ## 构建信息
+          - 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
+          - 构建变体: ${{ env.VARIANT }}
+          - 源码分支: ${{ env.REPO_BRANCH }}
+          - 提交哈希: $(git rev-parse --short HEAD)
+          
+          ## 设备列表
+          ${{ steps.devices.outputs.devices }}
+          
+          ## 文件说明
+          - *.bin: 固件文件
+          - *.img: 镜像文件
+          - manifest: 包清单
+          EOF
           
           echo "✅ 固件文件整理完成"
 
