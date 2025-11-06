@@ -1,3 +1,4 @@
+# scripts/luci_report.sh
 #!/bin/bash
 
 # ==============================================================================
@@ -46,12 +47,13 @@ SYMBOL_REPORT="${COLOR_YELLOW}📄${COLOR_RESET}"
 # 记录开始时间
 SCRIPT_START_TIME=$(date +%s)
 
-# --- 检查依赖 ---
-if ! command -v comm &> /dev/null; then
-    log_error "'comm' 命令未找到，此脚本无法运行。"
-    exit 1
-fi
+log_step "开始生成 LUCI 软件包变更报告"
 
+# 显示系统资源使用情况
+show_system_resources
+
+# --- 检查依赖 ---
+check_command_exists "comm" "'comm' 命令未找到，此脚本无法运行。"
 check_file_exists "$CONFIG_FILE" "未找到 '$CONFIG_FILE' 文件。请确保在源码根目录下运行此脚本。"
 
 # --- 核心函数 ---
@@ -217,7 +219,7 @@ generate_report_file() {
 
 # 第一次运行 (make defconfig 之前)
 if [ ! -f "$BEFORE_FILE" ]; then
-    log_step "首次运行：建立 LUCI 软件包的基准配置"
+    log_substep "首次运行：建立 LUCI 软件包的基准配置"
     
     get_luci_packages > "$BEFORE_FILE"
     check_status "获取 LUCI 软件包列表失败"
@@ -239,7 +241,7 @@ if [ ! -f "$BEFORE_FILE" ]; then
 
 # 第二次运行 (make defconfig 之后)
 else
-    log_step "生成 LUCI 软件包变更报告"
+    log_substep "生成 LUCI 软件包变更报告"
     
     get_luci_packages > "$AFTER_FILE"
     check_status "获取当前 LUCI 软件包列表失败"
@@ -332,6 +334,10 @@ else
         ;;
     esac
 fi
+
+# 显示当前磁盘使用情况
+log_info "当前磁盘使用情况:"
+df -h
 
 # 记录结束时间并生成摘要
 SCRIPT_END_TIME=$(date +%s)
