@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # ImmortalWrt DIY配置脚本
-# 版本: 2.0 (企业级优化版)
+# 版本: 2.1 (企业级优化版)
 # 作者: Mary
 # 描述: 配置设备初始管理IP/密码及系统优化
 # =============================================================================
@@ -10,7 +10,7 @@
 source "$(dirname "$0")/common.sh"
 
 # 全局配置
-readonly SCRIPT_VERSION="2.0"
+readonly SCRIPT_VERSION="2.1"
 readonly SCRIPT_AUTHOR="Mary"
 readonly REPO_PATH="${REPO_PATH:-$(pwd)}"
 readonly LOG_FILE="$REPO_PATH/diy_script.log"
@@ -43,7 +43,7 @@ check_environment() {
     fi
     
     # 检查必要命令
-    local required_commands=("git" "chmod" "mkdir" "cat")
+    local required_commands=("git" "chmod" "mkdir" "cat" "sed")
     for cmd in "${required_commands[@]}"; do
         if ! command_exists "$cmd"; then
             log_error "缺少必要命令: $cmd"
@@ -211,6 +211,102 @@ EOF
     fi
 }
 
+# 配置Argon主题样式
+configure_argon_theme() {
+    log_info "🎨 配置Argon主题样式..."
+    
+    local css_file="$REPO_PATH/feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css/cascade.css"
+    local js_file="$REPO_PATH/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/index.js"
+    local css_modified=false
+    local js_modified=false
+    
+    # 检查文件是否存在
+    if [ ! -f "$css_file" ]; then
+        log_warning "Argon主题CSS文件不存在: $css_file"
+        ((SKIP_COUNT++))
+    else
+        # 备份原文件
+        if cp "$css_file" "${css_file}.bak" 2>/dev/null; then
+            log_info "已备份CSS文件: ${css_file}.bak"
+        else
+            log_warning "无法备份CSS文件"
+        fi
+        
+        # 修改CSS文件
+        if sed -i '/^\.td\.cbi-section-actions {$/,/^}$/ {
+            /^}$/a\
+.cbi-section.fade-in .cbi-title {\
+  position: relative;\
+  min-height: 2.765rem;\
+  display: flex;\
+  align-items: center\
+}\
+.cbi-section.fade-in .cbi-title>div:last-child {\
+  position: absolute;\
+  right: 1rem\
+}\
+.cbi-section.fade-in .cbi-title>div:last-child span {\
+  display: inline-block;\
+  position: relative;\
+  font-size: 0\
+}\
+.cbi-section.fade-in .cbi-title>div:last-child span::after {\
+  content: "\\e90f";\
+  font-family: '\''argon'\'' !important;\
+  font-size: 1.1rem;\
+  display: inline-block;\
+  transition: transform 0.3s ease;\
+  -webkit-font-smoothing: antialiased;\
+  line-height: 1\
+}\
+.cbi-section.fade-in .cbi-title>div:last-child span[data-style='\''inactive'\'']::after {\
+  transform: rotate(90deg);\
+}
+}' "$css_file" 2>/dev/null; then
+            log_success "Argon主题CSS样式修改成功"
+            css_modified=true
+            ((SUCCESS_COUNT++))
+        else
+            log_error "Argon主题CSS样式修改失败"
+            ((FAIL_COUNT++))
+            FAILED_OPERATIONS+=("configure_argon_theme_css")
+        fi
+    fi
+    
+    # 检查JS文件是否存在
+    if [ ! -f "$js_file" ]; then
+        log_warning "Argon主题JS文件不存在: $js_file"
+        ((SKIP_COUNT++))
+    else
+        # 备份原文件
+        if cp "$js_file" "${js_file}.bak" 2>/dev/null; then
+            log_info "已备份JS文件: ${js_file}.bak"
+        else
+            log_warning "无法备份JS文件"
+        fi
+        
+        # 修改JS文件
+        if sed -i -e '/btn\.setAttribute(\x27class\x27, include\.hide ? \x27label notice\x27 : \x27label\x27);/d' \
+                  -e "/\x27class\x27: includes\[i\]\.hide ? \x27label notice\x27 : \x27label\x27,/d" \
+                  "$js_file" 2>/dev/null; then
+            log_success "Argon主题JS代码修改成功"
+            js_modified=true
+            ((SUCCESS_COUNT++))
+        else
+            log_error "Argon主题JS代码修改失败"
+            ((FAIL_COUNT++))
+            FAILED_OPERATIONS+=("configure_argon_theme_js")
+        fi
+    fi
+    
+    # 如果至少有一个文件修改成功，则认为函数执行成功
+    if [ "$css_modified" = true ] || [ "$js_modified" = true ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # 生成配置说明文件
 generate_documentation() {
     log_info "📚 生成配置文档..."
@@ -239,6 +335,7 @@ generate_documentation() {
 ## 配置文件说明
 - 99-initial-settings: 初始网络和认证配置
 - 98-system-optimization: 系统性能优化
+- Argon主题样式: 优化概览页面显示/隐藏按钮样式
 EOF
         log_success "配置文档生成完成" && ((SUCCESS_COUNT++))
     else
@@ -258,6 +355,8 @@ verify_configuration() {
         "$REPO_PATH/files/etc/uci-defaults/98-system-optimization:系统优化文件"
         "$REPO_PATH/files/etc/uci-defaults/README:配置文档"
         "$REPO_PATH/.config:编译配置文件"
+        "$REPO_PATH/feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css/cascade.css:Argon主题CSS文件"
+        "$REPO_PATH/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/index.js:Argon主题JS文件"
     )
     
     local verified_count=0
@@ -306,6 +405,7 @@ generate_summary() {
     echo "  🔑 登录账号: root"
     echo "  🔑 登录密码: [空密码]"
     echo "  🖥️  主机名: $HOSTNAME"
+    echo "  🎨 Argon主题样式: 已优化"
     echo ""
     
     if [ $FAIL_COUNT -eq 0 ]; then
@@ -339,6 +439,7 @@ main() {
         configure_initial_settings
         optimize_build_config
         configure_system_optimization
+        configure_argon_theme
         generate_documentation
         verify_configuration
     else
@@ -354,7 +455,6 @@ main() {
     local duration=$((end_time - start_time))
     log_time "总执行时间: ${duration}秒"
 }
-
 
 # 执行主函数
 main "$@"
