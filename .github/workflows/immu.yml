@@ -55,59 +55,22 @@ jobs:
         df -h
         lsblk
         
-        # 检查是否有可用的磁盘空间
-        if [ -e /dev/sda1 ] && mountpoint -q /mnt; then
-          echo "发现 /dev/sda1 挂载在 /mnt，准备扩展根分区"
+        # 检查磁盘情况
+        # /dev/sda1 是根分区 (/)
+        # /dev/sdb1 是额外磁盘，挂载在 /mnt
+        
+        if [ -e /dev/sdb1 ] && mountpoint -q /mnt; then
+          echo "发现 /dev/sdb1 挂载在 /mnt，准备使用其空间"
           
-          # 卸载 /mnt
-          sudo umount /mnt
+          # 创建工作目录在 /mnt 下
+          sudo mkdir -p /mnt/workdir
+          sudo chown $USER:$GROUPS /mnt/workdir
           
-          # 删除 /mnt 的挂载点
-          sudo rmdir /mnt 2>/dev/null || true
+          # 创建符号链接，将 /workdir 指向 /mnt/workdir
+          sudo rm -rf /workdir
+          sudo ln -sf /mnt/workdir /workdir
           
-          # 创建新的挂载点用于工作目录
-          sudo mkdir -p /workspace
-          
-          # 将 /dev/sda1 格式化为 ext4（如果尚未格式化）
-          sudo mkfs.ext4 -F /dev/sda1
-          
-          # 挂载到 /workspace
-          sudo mount /dev/sda1 /workspace
-          
-          # 设置权限
-          sudo chown $USER:$GROUPS /workspace
-          
-          # 创建工作目录
-          mkdir -p /workspace/immortalwrt
-          
-          # 创建符号链接
-          sudo ln -sf /workspace/immortalwrt /workdir
-          
-          echo "磁盘扩展完成:"
-          df -h
-          lsblk
-        elif [ -e /dev/sdb1 ] && ! mountpoint -q /mnt; then
-          echo "发现未挂载的 /dev/sdb1，准备使用"
-          
-          # 创建挂载点
-          sudo mkdir -p /workspace
-          
-          # 格式化磁盘
-          sudo mkfs.ext4 -F /dev/sdb1
-          
-          # 挂载到 /workspace
-          sudo mount /dev/sdb1 /workspace
-          
-          # 设置权限
-          sudo chown $USER:$GROUPS /workspace
-          
-          # 创建工作目录
-          mkdir -p /workspace/immortalwrt
-          
-          # 创建符号链接
-          sudo ln -sf /workspace/immortalwrt /workdir
-          
-          echo "磁盘扩展完成:"
+          echo "磁盘空间重定向完成:"
           df -h
           lsblk
         else
@@ -265,10 +228,25 @@ jobs:
       id: organize
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        cd /workdir/immortalwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
+        # 检查固件目录是否存在
+        if [ -d "/workdir/immortalwrt/bin/targets" ]; then
+          # 找到第一个目标目录
+          TARGET_DIR=$(find /workdir/immortalwrt/bin/targets -maxdepth 1 -type d | head -2 | tail -1)
+          if [ -n "$TARGET_DIR" ] && [ -d "$TARGET_DIR" ]; then
+            cd "$TARGET_DIR"
+            rm -rf packages
+            echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "固件目录: $PWD"
+            ls -la
+          else
+            echo "未找到目标固件目录"
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "固件目录不存在，可能编译失败"
+          echo "status=failed" >> $GITHUB_OUTPUT
+        fi
 
     - name: 发布固件到Release
       uses: softprops/action-gh-release@v2
