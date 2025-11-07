@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # ImmortalWrt DIY配置脚本
-# 版本: 2.2 (企业级优化版)
+# 版本: 2.3 (企业级优化版)
 # 作者: Mary
 # 日期：20251107
 # 描述: 配置设备初始管理IP/密码及系统优化
@@ -20,7 +20,7 @@ else
 fi
 
 # 全局配置
-readonly SCRIPT_VERSION="2.2"
+readonly SCRIPT_VERSION="2.3"
 readonly SCRIPT_AUTHOR="Mary"
 readonly REPO_PATH="${REPO_PATH:-$(pwd)}"
 readonly LOG_FILE="$REPO_PATH/diy_script.log"
