@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：20251107
-# 版本: 2.1 - 网络检查优化版
+# 版本: 2.2 - 企业级优化版
 # ==============================================================================
 
 # 导入通用函数
@@ -22,8 +22,8 @@ source "$(dirname "$0")/common.sh"
 # --- 配置变量 ---
 # 软件源列表
 declare -A REPOS=(
-    ["luci-app-lucky"]="https://github.com/gdy666/luci-app-lucky.git"
-    ["luci-app-easytier"]="https://github.com/EasyTier/luci-app-easytier.git"
+    ["luci-app-lucky"]="https://github.com/gdy666/luci-app-lucky"
+    ["luci-app-easytier"]="https://github.com/EasyTier/luci-app-easytier"
     ["luci-app-homeproxy"]="https://github.com/VIKINGYFY/homeproxy"
     ["packages_lang_golang"]="https://github.com/sbwml/packages_lang_golang -b 25.x"
     ["luci-app-openlist2"]="https://github.com/sbwml/luci-app-openlist2"
@@ -31,10 +31,10 @@ declare -A REPOS=(
     ["luci-app-quickfile"]="https://github.com/sbwml/luci-app-quickfile"
     ["luci-app-momo"]="https://github.com/nikkinikki-org/OpenWrt-momo"
     ["luci-app-nikki"]="https://github.com/nikkinikki-org/OpenWrt-nikki"
-    ["luci-app-oaf"]="https://github.com/destan19/OpenAppFilter.git"
+    ["luci-app-oaf"]="https://github.com/destan19/OpenAppFilter"
     ["luci-app-openclash"]="https://github.com/vernesong/OpenClash.git -b dev"
     ["luci-app-tailscale"]="https://github.com/asvow/luci-app-tailscale"
-    ["luci-app-vnt"]="https://github.com/lmq8267/luci-app-vnt.git"
+    ["luci-app-vnt"]="https://github.com/lmq8267/luci-app-vnt"
     ["small-package"]="https://github.com/kenzok8/small-package"
 )
 
@@ -51,7 +51,7 @@ declare -A SPECIAL_HANDLING=(
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 2.1 - 网络检查优化版"
+    log_info "版本: 2.2 - 企业级优化版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
