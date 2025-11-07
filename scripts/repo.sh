@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：20251107
-# 版本: 2.9 - 特殊处理优化版
+# 版本: 2.10 - 软件源扩展版
 # ==============================================================================
 
 # 导入通用函数
@@ -22,6 +22,16 @@ source "$(dirname "$0")/common.sh"
 # --- 配置变量 ---
 # 软件源列表
 declare -A REPOS=(
+    ["luci-app-athena-led"]="https://github.com/NONGFAH/luci-app-athena-led"
+    ["luci-app-passwall"]="https://github.com/xiaorouji/openwrt-passwall"
+    ["luci-app-passwall2"]="https://github.com/xiaorouji/openwrt-passwall2"
+    ["passwall-packages"]="https://github.com/xiaorouji/openwrt-passwall-packages"
+    ["luci-app-adguardhome"]="https://github.com/sirpdboy/luci-app-adguardhome"
+    ["luci-app-ddns-go"]="https://github.com/sirpdboy/luci-app-ddns-go"
+    ["luci-app-netdata"]="https://github.com/sirpdboy/luci-app-netdata"
+    ["luci-app-netspeedtest"]="https://github.com/sirpdboy/luci-app-netspeedtest"
+    ["luci-app-partexp"]="https://github.com/sirpdboy/luci-app-partexp"
+    ["luci-app-taskplan"]="https://github.com/sirpdboy/luci-app-taskplan"
     ["luci-app-lucky"]="https://github.com/gdy666/luci-app-lucky"
     ["luci-app-easytier"]="https://github.com/EasyTier/luci-app-easytier"
     ["luci-app-homeproxy"]="https://github.com/VIKINGYFY/homeproxy"
@@ -43,6 +53,7 @@ declare -A SPECIAL_HANDLING=(
     ["packages_lang_golang"]="feeds/packages/lang/golang"
     ["luci-app-tailscale"]="pre_remove_feeds"
     ["luci-app-mosdns"]="mosdns_special"
+    ["passwall-packages"]="passwall_special"
     ["small-package"]="small"
 )
 
@@ -56,6 +67,9 @@ declare -A CONFLICTING_PACKAGES=(
     ["luci-app-momo"]="sing-box"
     ["luci-app-nikki"]="mihomo"
     ["luci-app-oaf"]="openappfilter"
+    ["luci-app-adguardhome"]="adguardhome"
+    ["luci-app-passwall"]="passwall"
+    ["luci-app-passwall2"]="passwall2"
 )
 
 # --- 主函数 ---
@@ -64,7 +78,7 @@ declare -A CONFLICTING_PACKAGES=(
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 2.9 - 特殊处理优化版"
+    log_info "版本: 2.10 - 软件源扩展版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
@@ -393,6 +407,68 @@ handle_mosdns_special() {
     return 0
 }
 
+# 特殊处理：passwall-packages
+handle_passwall_special() {
+    log_info "执行 passwall-packages 特殊处理..."
+    
+    # 1. 移除 openwrt feeds 自带的核心库
+    log_info "移除 openwrt feeds 自带的核心库..."
+    local core_packages=(
+        "xray-core"
+        "v2ray-geodata"
+        "sing-box"
+        "chinadns-ng"
+        "dns2socks"
+        "hysteria"
+        "ipt2socks"
+        "microsocks"
+        "naiveproxy"
+        "shadowsocks-libev"
+        "shadowsocks-rust"
+        "shadowsocksr-libev"
+        "simple-obfs"
+        "tcping"
+        "trojan-plus"
+        "tuic-client"
+        "v2ray-plugin"
+        "xray-plugin"
+        "geoview"
+        "shadow-tls"
+    )
+    
+    for package in "${core_packages[@]}"; do
+        local package_path="feeds/packages/net/$package"
+        if [ -d "$package_path" ]; then
+            log_info "删除核心库: $package_path"
+            safe_remove "$package_path" true
+        fi
+    done
+    
+    # 2. 移除 openwrt feeds 过时的luci版本
+    log_info "移除 openwrt feeds 过时的luci版本..."
+    local luci_passwall_path="feeds/luci/applications/luci-app-passwall"
+    if [ -d "$luci_passwall_path" ]; then
+        log_info "删除过时的luci版本: $luci_passwall_path"
+        safe_remove "$luci_passwall_path" true
+    fi
+    
+    log_success "passwall-packages 特殊处理完成"
+    return 0
+}
+
+# 特殊处理：athena-led
+handle_athena_led_special() {
+    log_info "执行 athena-led 特殊处理..."
+    
+    # 设置执行权限
+    log_info "设置 athena-led 执行权限..."
+    chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led 2>/dev/null || true
+    chmod +x package/luci-app-athena-led/root/usr/sbin/athena-led 2>/dev/null || true
+    
+    log_success "athena-led 特殊处理完成"
+    return 0
+}
+
 # 克隆或更新仓库
 clone_or_update_repo() {
     local repo_name="$1"
@@ -454,6 +530,11 @@ handle_special_repo() {
         "mosdns_special")
             # mosdns 特殊处理
             handle_mosdns_special "$repo_name" "package/luci-app-mosdns"
+            return $?
+            ;;
+        "passwall_special")
+            # passwall-packages 特殊处理
+            handle_passwall_special
             return $?
             ;;
         "small")
@@ -523,6 +604,11 @@ process_repos() {
         # 克隆或更新仓库
         if clone_or_update_repo "$repo_name" "$repo_url" "$target_dir" "$branch"; then
             ((success_count++))
+            
+            # athena-led 特殊处理（在克隆成功后执行）
+            if [ "$repo_name" = "luci-app-athena-led" ]; then
+                handle_athena_led_special
+            fi
         else
             ((failed_count++))
         fi
@@ -612,10 +698,42 @@ main "$@"
 # ==============================================================================
 
 # # 京东云雅典娜led控制
+# git clone https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
+# chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
+
+# # passwall by xiaorouji，
+# # 移除 openwrt feeds 自带的核心库
+# rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+# git clone https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages
+# # 移除 openwrt feeds 过时的luci版本
+# rm -rf feeds/luci/applications/luci-app-passwall
+# git clone https://github.com/xiaorouji/openwrt-passwall package/luci-app-passwall
+# # passwall2 by xiaorouji，
+# git clone https://github.com/xiaorouji/openwrt-passwall2 package/luci-app-passwall2
+
+# # AdGuardHome，官方推荐OpenWrt LUCI app by @kongfl888 (originally by @rufengsuixing).
+# # git clone https://github.com/kongfl888/luci-app-adguardhome package/luci-app-adguardhome
+# # luci-app-adguardhome by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-adguardhome package/luci-app-adguardhome
+
+# # ddns-go by sirpdboy，自带luci-app
+# git clone https://github.com/sirpdboy/luci-app-ddns-go package/luci-app-ddns-go
+
+# # luci-app-netdata by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata
+
+# # luci-app-netspeedtest by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-netspeedtest package/luci-app-netspeedtest
+
+# # luci-app-partexp by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-partexp package/luci-app-partexp
+
+# # luci-app-taskplan by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-taskplan package/luci-app-taskplan
 
 # # lucky by gdy666，自带luci-app，sirpdboy也有luci-app但是可能与原作者有冲突
-# git clone  https://github.com/gdy666/luci-app-lucky package/luci-app-lucky
-# #git clone https://github.com/sirpdboy/luci-app-lucky package/luci-app-lucky
+# git clone https://github.com/gdy666/luci-app-lucky package/lucky
+# #git clone https://github.com/sirpdboy/luci-app-lucky package/lucky
 
 # # luci-app-easytier
 # git clone https://github.com/EasyTier/luci-app-easytier package/luci-app-easytier
@@ -623,20 +741,17 @@ main "$@"
 # # frp https://github.com/fatedier/frp，无luci-app，建议使用small-package更新
 
 # # homeproxy immortalwrt官方出品，无luci-app，建议使用https://github.com/VIKINGYFY/homeproxy更新
-# git clone https://github.com/VIKINGYFY/homeproxy package/luci-app-homeproxy
-# #  一个更方便地生成 ImmortalWrt/OpenWrt(23.05.x+) HomeProxy 插件大多数常用配置的脚本。
+# git clone https://github.com/VIKINGYFY/homeproxy package/homeproxy
+# # 一个更方便地生成 ImmortalWrt/OpenWrt(23.05.x+) HomeProxy 插件大多数常用配置的脚本。
 # # (必备) 通过私密 Gist 或其它可被正常访问的私有链接定制你的专属 rules.sh 配置内容；
 # # 执行以下命令（脚本执行期间会向你索要你的定制配置URL）：bash -c "$(curl -fsSl https://raw.githubusercontent.com/thisIsIan-W/homeproxy-autogen-configuration/refs/heads/main/generate_homeproxy_rules.sh)"
 
 # # golang & luci-app-openlist2 by sbwml
 # git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
-# git clone https://github.com/sbwml/luci-app-openlist2 package/luci-app-openlist2
+# git clone https://github.com/sbwml/luci-app-openlist2 package/luci-app-openlist
 
-# # luci-app-mosdns  by sbwml
+# # luci-app-mosdns by sbwml
 # git clone -b v5 https://github.com/sbwml/luci-app-mosdns package/luci-app-mosdns
-# git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
-# make menuconfig # choose LUCI -> Applications -> luci-app-mosdns
-# make package/mosdns/luci-app-mosdns/compile V=s
 
 # # luci-app-quickfile by sbwml
 # git clone https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile
