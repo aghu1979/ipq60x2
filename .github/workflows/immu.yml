@@ -9,7 +9,7 @@
 #
 # 作者: Mary
 # 日期: 20251107
-# 版本: 3.0 - 企业级优化版
+# 版本: 3.1 - 语法修复版
 # ==============================================================================
 
 name: ImmortalWrt Auto Build
@@ -44,7 +44,7 @@ on:
 # 全局环境变量
 env:
   # === 版本控制 ===
-  WORKFLOW_VERSION: "3.0"
+  WORKFLOW_VERSION: "3.1"
   BUILD_DATE: "${{ github.run_number }}-${{ github.sha }}"
   
   # === 仓库配置 ===
@@ -70,7 +70,6 @@ env:
   
   # === 上传配置 ===
   UPLOAD_FIRMWARE: "true"
-  UPLOAD_RELEASE: "${{ github.event.inputs.upload_release || 'true' }}"
   RETAIN_DAYS: "7"
   KEEP_RELEASES: "5"
   
@@ -80,7 +79,6 @@ env:
   
   # === 缓存配置 ===
   CACHE_VERSION: "v3"
-  CACHE_KEY_PREFIX: "immortalwrt-${{ env.CACHE_VERSION }}"
 
 # 任务定义
 jobs:
@@ -108,7 +106,7 @@ jobs:
       id: init
       run: |
         echo "=================================================================="
-        echo "🔧 ImmortalWrt 自动编译工作流 v${{ env.WORKFLOW_VERSION }}"
+        echo "🔧 ImmortalWrt 自动编译工作流 ${{ env.WORKFLOW_VERSION }}"
         echo "=================================================================="
         echo "📅 编译时间: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "🔗 仓库地址: ${{ env.REPO_URL }}"
@@ -127,6 +125,7 @@ jobs:
         echo "SOURCE_PATH=${{ env.WORKSPACE_DIR }}/${{ env.REPO_NAME }}" >> $GITHUB_ENV
         echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
         echo "BUILD_ID=${{ github.run_number }}-${{ github.sha }}" >> $GITHUB_ENV
+        echo "CACHE_KEY_PREFIX=immortalwrt-${{ env.CACHE_VERSION }}" >> $GITHUB_ENV
         
         # 检查磁盘空间
         echo "📊 初始磁盘空间:"
@@ -215,10 +214,10 @@ jobs:
           ${{ env.WORKSPACE_DIR }}/${{ env.REPO_NAME }}
           ${{ env.WORKSPACE_DIR }}/ccache
           ${{ env.WORKSPACE_DIR }}/dl
-        key: "${{ env.CACHE_KEY_PREFIX }}-${{ env.BUILD_ID }}"
+        key: "immortalwrt-${{ env.CACHE_VERSION }}-${{ github.run_number }}-${{ github.sha }}"
         restore-keys: |
-          ${{ env.CACHE_KEY_PREFIX }}-
-          ${{ env.CACHE_KEY_PREFIX }}-${{ env.REPO_BRANCH }}-
+          immortalwrt-${{ env.CACHE_VERSION }}-
+          immortalwrt-${{ env.CACHE_VERSION }}-${{ env.REPO_BRANCH }}-
 
     # -------------------------------------------------------------------------
     # 4. 磁盘空间扩展（使用软链接）
@@ -641,7 +640,7 @@ jobs:
           ${{ env.WORKSPACE_DIR }}/${{ env.REPO_NAME }}
           ${{ env.WORKSPACE_DIR }}/ccache
           ${{ env.WORKSPACE_DIR }}/dl
-        key: "${{ env.CACHE_KEY_PREFIX }}-${{ env.BUILD_ID }}"
+        key: "immortalwrt-${{ env.CACHE_VERSION }}-${{ github.run_number }}-${{ github.sha }}"
 
     # -------------------------------------------------------------------------
     # 16. 整理固件文件
@@ -691,7 +690,7 @@ jobs:
     # -------------------------------------------------------------------------
     - name: 🚀 创建 Release
       id: release
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+      if: steps.compile.outputs.status == 'success' && github.event.inputs.upload_release == 'true'
       run: |
         echo "=================================================================="
         echo "🚀 创建 Release"
