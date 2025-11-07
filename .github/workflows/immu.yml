@@ -9,7 +9,7 @@
 #
 # 作者: Mary
 # 日期: 20251107
-# 版本: 3.3 - 路径彻底修复版
+# 版本: 3.3 - 完整修复版
 # ==============================================================================
 
 name: ImmortalWrt Auto Build
@@ -504,11 +504,29 @@ jobs:
         echo "📊 生成 defconfig 和 LUCI 对比报告"
         echo "=================================================================="
         
+        # 确保在正确的目录
         cd "${{ env.SOURCE_PATH }}"
+        
+        # 检查当前目录
+        echo "📍 当前工作目录: $(pwd)"
+        echo "📁 目录内容:"
+        ls -la
+        
+        # 检查 Makefile 是否存在
+        if [ ! -f "Makefile" ]; then
+          echo "❌ Makefile 不存在，可能路径错误"
+          exit 1
+        fi
         
         # 生成 defconfig
         echo "🔧 生成 defconfig..."
         make defconfig
+        
+        # 检查 defconfig 是否成功
+        if [ $? -ne 0 ]; then
+          echo "❌ defconfig 生成失败"
+          exit 1
+        fi
         
         # 生成 defconfig 后的软件包列表
         echo "📋 生成 defconfig 后的软件包列表..."
