@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：20251107
-# 版本: 1.0 - 初始版本
+# 版本: 1.1 - 配置优化版
 # ==============================================================================
 
 # 导入通用函数
@@ -21,9 +21,11 @@ source "$(dirname "$0")/common.sh"
 
 # --- 配置变量 ---
 # 默认IP地址
-DEFAULT_IP="192.168.1.1"
-# 默认密码
-DEFAULT_PASSWORD="password"
+DEFAULT_IP="192.168.111.1"
+# 默认密码（空）
+DEFAULT_PASSWORD=""
+# 默认主机名
+DEFAULT_HOSTNAME="WRT"
 # 默认主题
 DEFAULT_THEME="argon"
 
@@ -33,7 +35,7 @@ DEFAULT_THEME="argon"
 show_script_info() {
     log_step "OpenWrt/ImmortalWrt 自定义配置脚本"
     log_info "作者: Mary"
-    log_info "版本: 1.0 - 初始版本"
+    log_info "版本: 1.1 - 配置优化版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
@@ -57,18 +59,26 @@ configure_initial_settings() {
     
     local ip="${1:-$DEFAULT_IP}"
     local password="${2:-$DEFAULT_PASSWORD}"
+    local hostname="${3:-$DEFAULT_HOSTNAME}"
     
     # 修改默认IP
     log_info "设置默认IP: $ip"
     sed -i "s/192.168.1.1/$ip/g" package/base-files/files/bin/config_generate
     
-    # 生成密码哈希
-    local password_hash
-    password_hash=$(openssl passwd -1 "$password")
+    # 设置主机名
+    log_info "设置主机名: $hostname"
+    sed -i "s/OpenWrt/$hostname/g" package/base-files/files/bin/config_generate
     
-    # 修改默认密码
-    log_info "设置默认密码"
-    sed -i "s/root:::0:99999:7:::/root:$password_hash:18579:0:99999:7:::/g" package/base-files/files/etc/shadow
+    # 生成密码哈希（如果密码不为空）
+    if [ -n "$password" ]; then
+        log_info "设置默认密码"
+        local password_hash
+        password_hash=$(openssl passwd -1 "$password")
+        sed -i "s/root:::0:99999:7:::/root:$password_hash:18579:0:99999:7:::/g" package/base-files/files/etc/shadow
+    else
+        log_info "设置空密码（无密码登录）"
+        sed -i "s/root:::0:99999:7:::/root:::0:99999:7:::/g" package/base-files/files/etc/shadow
+    fi
     
     log_success "初始IP和密码配置完成"
 }
