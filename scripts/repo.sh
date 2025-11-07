@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：20251107
-# 版本: 2.2 - 企业级优化版
+# 版本: 2.2 - 优化版
 # ==============================================================================
 
 # 导入通用函数
@@ -22,8 +22,8 @@ source "$(dirname "$0")/common.sh"
 # --- 配置变量 ---
 # 软件源列表
 declare -A REPOS=(
-    ["luci-app-lucky"]="https://github.com/gdy666/luci-app-lucky"
-    ["luci-app-easytier"]="https://github.com/EasyTier/luci-app-easytier"
+    ["luci-app-lucky"]="https://github.com/gdy666/luci-app-lucky.git"
+    ["luci-app-easytier"]="https://github.com/EasyTier/luci-app-easytier.git"
     ["luci-app-homeproxy"]="https://github.com/VIKINGYFY/homeproxy"
     ["packages_lang_golang"]="https://github.com/sbwml/packages_lang_golang -b 25.x"
     ["luci-app-openlist2"]="https://github.com/sbwml/luci-app-openlist2"
@@ -31,10 +31,10 @@ declare -A REPOS=(
     ["luci-app-quickfile"]="https://github.com/sbwml/luci-app-quickfile"
     ["luci-app-momo"]="https://github.com/nikkinikki-org/OpenWrt-momo"
     ["luci-app-nikki"]="https://github.com/nikkinikki-org/OpenWrt-nikki"
-    ["luci-app-oaf"]="https://github.com/destan19/OpenAppFilter"
-    ["luci-app-openclash"]="https://github.com/vernesong/OpenClash -b dev"
+    ["luci-app-oaf"]="https://github.com/destan19/OpenAppFilter.git"
+    ["luci-app-openclash"]="https://github.com/vernesong/OpenClash.git -b dev"
     ["luci-app-tailscale"]="https://github.com/asvow/luci-app-tailscale"
-    ["luci-app-vnt"]="https://github.com/lmq8267/luci-app-vnt"
+    ["luci-app-vnt"]="https://github.com/lmq8267/luci-app-vnt.git"
     ["small-package"]="https://github.com/kenzok8/small-package"
 )
 
@@ -45,13 +45,25 @@ declare -A SPECIAL_HANDLING=(
     ["small-package"]="small"
 )
 
+# 可能冲突的软件包列表（不同名称但功能相同）
+declare -A CONFLICTING_PACKAGES=(
+    ["luci-app-lucky"]="luci-app-lucky-sirpdboy"
+    ["luci-app-homeproxy"]="homeproxy"
+    ["luci-app-openclash"]="luci-app-passwall luci-app-mosdns"
+    ["luci-app-tailscale"]="tailscale"
+    ["luci-app-vnt"]="vnt"
+    ["luci-app-momo"]="sing-box"
+    ["luci-app-nikki"]="mihomo"
+    ["luci-app-oaf"]="openappfilter"
+)
+
 # --- 主函数 ---
 
 # 显示脚本信息
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 2.2 - 企业级优化版"
+    log_info "版本: 2.2 - 优化版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
@@ -77,6 +89,53 @@ check_environment() {
     fi
     
     log_success "环境检查通过"
+}
+
+# 检查并删除冲突的软件包
+check_and_remove_conflicting_packages() {
+    local repo_name="$1"
+    local target_dir="$2"
+    
+    log_info "检查冲突软件包: $repo_name"
+    
+    # 获取可能冲突的软件包列表
+    local conflicting_packages="${CONFLICTING_PACKAGES[$repo_name]}"
+    
+    if [ -z "$conflicting_packages" ]; then
+        log_debug "无冲突软件包: $repo_name"
+        return 0
+    fi
+    
+    # 检查并删除冲突的软件包
+    for package in $conflicting_packages; do
+        log_info "检查冲突软件包: $package"
+        
+        # 在 package 目录中查找
+        local package_paths
+        package_paths=$(find package -name "$package" -type d 2>/dev/null)
+        
+        if [ -n "$package_paths" ]; then
+            log_warning "发现冲突软件包: $package"
+            for path in $package_paths; do
+                log_info "删除冲突软件包: $path"
+                safe_remove "$path" true
+            done
+        fi
+        
+        # 在 feeds 目录中查找
+        local feeds_paths
+        feeds_paths=$(find feeds -name "$package" -type d 2>/dev/null)
+        
+        if [ -n "$feeds_paths" ]; then
+            log_warning "发现冲突软件包在feeds中: $package"
+            for path in $feeds_paths; do
+                log_info "删除冲突软件包: $path"
+                safe_remove "$path" true
+            done
+        fi
+    done
+    
+    return 0
 }
 
 # 克隆或更新仓库
@@ -185,35 +244,14 @@ process_repos() {
 generate_final_summary() {
     log_step "生成执行摘要"
     
-    echo ""
-    echo "=================================================================="
-    log_info "📊 执行摘要"
-    echo "=================================================================="
-    echo "✅ 成功操作: $SUCCESS_COUNT"
-    echo "❌ 失败操作: $ERROR_COUNT"
-    echo "⚠️  警告操作: $WARN_COUNT"
-    echo ""
+    show_execution_summary
     
-    if [ $ERROR_COUNT -gt 0 ]; then
-        echo "失败的操作列表:"
-        for operation in "${FAILED_OPERATIONS[@]}"; do
-            echo "  - $operation"
-        done
-        echo ""
-    fi
-    
+    echo ""
     echo "处理的仓库列表:"
     for repo_name in "${!REPOS[@]}"; do
         echo "  - $repo_name: ${REPOS[$repo_name]}"
     done
     echo ""
-    
-    if [ $ERROR_COUNT -eq 0 ]; then
-        log_success "🎉 所有仓库处理完成！"
-    else
-        log_warning "⚠️  部分仓库处理失败，请检查上述错误信息"
-    fi
-    echo "=================================================================="
 }
 
 # =============================================================================
@@ -262,11 +300,11 @@ main "$@"
 # # 京东云雅典娜led控制
 
 # # lucky by gdy666，自带luci-app，sirpdboy也有luci-app但是可能与原作者有冲突
-# git clone  https://github.com/gdy666/luci-app-lucky package/luci-app-lucky
-# #git clone https://github.com/sirpdboy/luci-app-lucky package/luci-app-lucky
+# git clone  https://github.com/gdy666/luci-app-lucky.git package/luci-app-lucky
+# #git clone https://github.com/sirpdboy/luci-app-lucky.git package/luci-app-lucky
 
 # # luci-app-easytier
-# git clone https://github.com/EasyTier/luci-app-easytier package/luci-app-easytier
+# git clone https://github.com/EasyTier/luci-app-easytier.git package/luci-app-easytier
 
 # # frp https://github.com/fatedier/frp，无luci-app，建议使用small-package更新
 
@@ -289,23 +327,23 @@ main "$@"
 # # luci-app-istorex（向导模式及主体）/luci-app-quickstart（网络向导和首页界面）/luci-app-diskman （磁盘管理），建议使用small-package更新
 
 # # momo在 OpenWrt 上使用 sing-box 进行透明代理/nikki在 OpenWrt 上使用 Mihomo 进行透明代理。
-# # echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo;main" >> "feeds.conf.default"
-# # echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki;main" >> "feeds.conf.default"
+# # echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main" >> "feeds.conf.default"
+# # echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
 # git clone https://github.com/nikkinikki-org/OpenWrt-momo package/luci-app-momo
 # git clone https://github.com/nikkinikki-org/OpenWrt-nikki package/luci-app-nikki
 
 # # OpenAppFilter（OAF），自带luci-app
-# git clone https://github.com/destan19/OpenAppFilter package/luci-app-oaf
+# git clone https://github.com/destan19/OpenAppFilter.git package/luci-app-oaf
 
 # # luci-app-openclash by vernesong
-# git clone -b dev https://github.com/vernesong/OpenClash package/luci-app-openclash
+# git clone -b dev https://github.com/vernesong/OpenClash.git package/luci-app-openclash
 
 # # tailscale，官方推荐luci-app-tailscale by asvow
 # sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
 # git clone https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
 
 # # vnt，官方https://github.com/vnt-dev/vnt，无luci-app，使用lmq8267
-# git clone https://github.com/lmq8267/luci-app-vnt package/luci-app-vnt
+# git clone https://github.com/lmq8267/luci-app-vnt.git package/luci-app-vnt
 
 # # kenzok8/small-package，后备之选，只有上述的ipk地址缺失才会用到。
 # git clone https://github.com/kenzok8/small-package small
