@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：20251107
-# 版本: 2.10 - 软件源扩展版
+# 版本: 2.11 - URL修复版
 # ==============================================================================
 
 # 导入通用函数
@@ -42,7 +42,7 @@ declare -A REPOS=(
     ["luci-app-momo"]="https://github.com/nikkinikki-org/OpenWrt-momo"
     ["luci-app-nikki"]="https://github.com/nikkinikki-org/OpenWrt-nikki"
     ["luci-app-oaf"]="https://github.com/destan19/OpenAppFilter"
-    ["luci-app-openclash"]="https://github.com/vernesong/OpenClash -b dev"
+    ["luci-app-openclash"]="https://github.com/vernesong/OpenClash"
     ["luci-app-tailscale"]="https://github.com/asvow/luci-app-tailscale"
     ["luci-app-vnt"]="https://github.com/lmq8267/luci-app-vnt"
     ["small-package"]="https://github.com/kenzok8/small-package"
@@ -53,6 +53,7 @@ declare -A SPECIAL_HANDLING=(
     ["packages_lang_golang"]="feeds/packages/lang/golang"
     ["luci-app-tailscale"]="pre_remove_feeds"
     ["luci-app-mosdns"]="mosdns_special"
+    ["luci-app-openclash"]="openclash_special"
     ["passwall-packages"]="passwall_special"
     ["small-package"]="small"
 )
@@ -78,7 +79,7 @@ declare -A CONFLICTING_PACKAGES=(
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 2.10 - 软件源扩展版"
+    log_info "版本: 2.11 - URL修复版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
@@ -253,6 +254,9 @@ git_clone_enhanced() {
         log_error "仓库URL和目标目录不能为空"
         return 1
     fi
+    
+    # 清理URL中的空格
+    repo_url=$(echo "$repo_url" | sed 's/[[:space:]]*$//')
     
     log_info "克隆仓库: $repo_url"
     
@@ -456,6 +460,46 @@ handle_passwall_special() {
     return 0
 }
 
+# 特殊处理：OpenClash
+handle_openclash_special() {
+    log_info "执行 OpenClash 特殊处理..."
+    
+    # 创建目录
+    mkdir -p package/luci-app-openclash
+    
+    # 使用稀疏检出方式克隆
+    log_info "使用稀疏检出方式克隆 OpenClash..."
+    cd package/luci-app-openclash
+    
+    # 初始化仓库
+    git init
+    
+    # 添加远程仓库
+    git remote add -f origin https://github.com/vernesong/OpenClash.git
+    
+    # 设置稀疏检出
+    git config core.sparsecheckout true
+    echo "luci-app-openclash" >> .git/info/sparse-checkout
+    
+    # 拉取指定分支
+    local branch="master"
+    git pull --depth 1 origin "$branch"
+    
+    # 设置上游分支
+    git branch --set-upstream-to=origin/"$branch" "$branch"
+    
+    # 返回上级目录
+    cd - > /dev/null
+    
+    if [ -d "package/luci-app-openclash/luci-app-openclash" ]; then
+        log_success "OpenClash 稀疏检出成功"
+        return 0
+    else
+        log_error "OpenClash 稀疏检出失败"
+        return 1
+    fi
+}
+
 # 特殊处理：athena-led
 handle_athena_led_special() {
     log_info "执行 athena-led 特殊处理..."
@@ -532,6 +576,11 @@ handle_special_repo() {
             handle_mosdns_special "$repo_name" "package/luci-app-mosdns"
             return $?
             ;;
+        "openclash_special")
+            # OpenClash 特殊处理
+            handle_openclash_special
+            return $?
+            ;;
         "passwall_special")
             # passwall-packages 特殊处理
             handle_passwall_special
@@ -586,7 +635,7 @@ process_repos() {
             fi
             
             # 如果是特殊处理且成功，跳过常规克隆
-            if [ "$special_handling" = "mosdns_special" ] && [ $? -eq 0 ]; then
+            if [[ "$special_handling" =~ "mosdns_special|openclash_special|passwall_special" ]] && [ $? -eq 0 ]; then
                 continue
             fi
             
@@ -768,7 +817,44 @@ main "$@"
 # git clone https://github.com/destan19/OpenAppFilter package/luci-app-oaf
 
 # # luci-app-openclash by vernesong
-# git clone -b dev https://github.com/vernesong/OpenClash package/luci-app-openclash
+# # 从 OpenWrt 的 SDK 编译
+# # 解压下载好的 SDK
+# curl -SLk --connect-timeout 30 --retry 2 "https://archive.openwrt.org/chaos_calmer/15.05.1/ar71xx/generic/OpenWrt-SDK-15.05.1-ar71xx-generic_gcc-4.8-linaro_uClibc-0.9.33.2.Linux-x86_64.tar.bz2" -o "/tmp/SDK.tar.bz2"
+# cd \tmp
+# tar xjf SDK.tar.bz2
+# cd OpenWrt-SDK-15.05.1-*
+# 
+# # Clone 项目
+# mkdir package/luci-app-openclash
+# cd package/luci-app-openclash
+# git init
+# git remote add -f origin https://github.com/vernesong/OpenClash.git
+# git config core.sparsecheckout true
+# echo "luci-app-openclash" >> .git/info/sparse-checkout
+# git pull --depth 1 origin master
+# git branch --set-upstream-to=origin/master master
+# 
+# # 编译 po2lmo (如果有po2lmo可跳过)
+# pushd luci-app-openclash/tools/po2lmo
+# make && sudo make install
+# popd
+# 
+# # 开始编译
+# 
+# # 先回退到SDK主目录
+# cd ../..
+# make package/luci-app-openclash/luci-app-openclash/compile V=99
+# 
+# # IPK文件位置
+# ./bin/ar71xx/packages/base/luci-app-openclash_*-beta_all.ipk
+# # 同步源码
+# cd package/luci-app-openclash/luci-app-openclash
+# git pull
+# 
+# # 您也可以直接拷贝 `luci-app-openclash` 文件夹至其他 `OpenWrt` 项目的 `Package` 目录下随固件编译
+# 
+# make menuconfig
+# # 选择要编译的包 LuCI -> Applications -> luci-app-openclash
 
 # # tailscale，官方推荐luci-app-tailscale by asvow
 # sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
