@@ -12,8 +12,8 @@
 #   在 OpenWrt/ImmortalWrt 源码根目录下运行此脚本
 #
 # 作者: Mary
-# 日期：20251104
-# 版本: 2.0 - 企业级优化版
+# 日期：20251107
+# 版本: 2.1 - 网络检查优化版
 # ==============================================================================
 
 # 导入通用函数
@@ -51,7 +51,7 @@ declare -A SPECIAL_HANDLING=(
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 2.0 - 企业级优化版"
+    log_info "版本: 2.1 - 网络检查优化版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
@@ -65,11 +65,16 @@ check_environment() {
         check_command_exists "$cmd" || exit 1
     done
     
-    # 检查网络连接
-    check_network || {
-        log_error "网络连接异常，无法继续执行"
-        exit 1
-    }
+    # 检查网络连接（可跳过）
+    if [ "${SKIP_NETWORK_CHECK:-0}" != "1" ]; then
+        check_network || {
+            log_error "网络连接异常，无法继续执行"
+            log_info "提示: 可以设置 SKIP_NETWORK_CHECK=1 跳过网络检查"
+            exit 1
+        }
+    else
+        log_warn "跳过网络检查（SKIP_NETWORK_CHECK=1）"
+    fi
     
     log_success "环境检查通过"
 }
@@ -304,6 +309,3 @@ main "$@"
 
 # # kenzok8/small-package，后备之选，只有上述的ipk地址缺失才会用到。
 # git clone https://github.com/kenzok8/small-package small
-
-# ./scripts/feeds update -a
-# ./scripts/feeds install -a
