@@ -14,7 +14,7 @@
 #
 # 作者: Mary
 # 日期：20251107
-# 版本: 2.0 - 企业级优化版
+# 版本: 2.1 - 配置解析优化版
 # ==============================================================================
 
 # 导入通用函数
@@ -38,9 +38,9 @@ DETAIL_REPORT="$REPORT_DIR/luci_packages_detail.txt"
 
 # 显示脚本信息
 show_script_info() {
-    log_step "LUCI 软件包变更报告生成脚本 v2.0"
+    log_step "LUCI 软件包变更报告生成脚本 v2.1"
     log_info "作者: Mary"
-    log_info "版本: 2.0 - 企业级优化版"
+    log_info "版本: 2.1 - 配置解析优化版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     log_info "配置文件: $CONFIG_FILE"
 }
@@ -68,6 +68,35 @@ check_environment() {
     return 0
 }
 
+# 从配置文件中提取启用的 LUCI 软件包
+extract_enabled_luci_packages() {
+    log_info "从配置文件提取启用的 LUCI 软件包"
+    
+    # 提取不以#开头且以=y结尾的luci-app软件包
+    local enabled_packages
+    enabled_packages=$(grep "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" | sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | sort)
+    
+    if [ -z "$enabled_packages" ]; then
+        log_warning "未找到启用的 LUCI 软件包配置"
+        return 1
+    fi
+    
+    # 保存到文件
+    echo "$enabled_packages" > "$REPORT_DIR/enabled_luci_packages.txt"
+    
+    local count
+    count=$(wc -l < "$REPORT_DIR/enabled_luci_packages.txt")
+    log_success "配置文件中启用的 LUCI 软件包数量: $count"
+    
+    # 显示启用的软件包列表
+    log_info "启用的 LUCI 软件包列表:"
+    echo "$enabled_packages" | while read -r pkg; do
+        log_info "  - $pkg"
+    done
+    
+    return 0
+}
+
 # 获取当前可用的 LUCI 软件包列表
 get_current_luci_packages() {
     local list_file="$1"
@@ -90,29 +119,6 @@ get_current_luci_packages() {
     local count
     count=$(wc -l < "$list_file")
     log_success "$description 数量: $count"
-    
-    return 0
-}
-
-# 从配置文件中提取启用的 LUCI 软件包
-extract_enabled_luci_packages() {
-    log_info "从配置文件提取启用的 LUCI 软件包"
-    
-    # 提取不以#开头且以=y结尾的luci-app软件包
-    local enabled_packages
-    enabled_packages=$(grep "^CONFIG_PACKAGE_luci-app.*=y$" "$CONFIG_FILE" | sed 's/^CONFIG_PACKAGE_\(.*\)=y$/\1/' | sort)
-    
-    if [ -z "$enabled_packages" ]; then
-        log_warning "未找到启用的 LUCI 软件包配置"
-        return 1
-    fi
-    
-    # 保存到文件
-    echo "$enabled_packages" > "$REPORT_DIR/enabled_luci_packages.txt"
-    
-    local count
-    count=$(wc -l < "$REPORT_DIR/enabled_luci_packages.txt")
-    log_success "配置文件中启用的 LUCI 软件包数量: $count"
     
     return 0
 }
@@ -201,8 +207,8 @@ generate_detailed_report() {
             result=$(analyze_package_status "$package" "$before_packages" "$after_packages" "$enabled_packages")
             echo "$result" | sed 's/|/ | /g'
         done
-        
         echo ""
+        
         echo "=================================================================="
     } > "$DETAIL_REPORT"
     
@@ -226,6 +232,9 @@ generate_diff_report() {
     local after_count
     after_count=$(wc -l < "$AFTER_LIST")
     
+    local enabled_count
+    enabled_count=$(wc -l < "$REPORT_DIR/enabled_luci_packages.txt" 2>/dev/null || echo "0")
+    
     local change_count=$((after_count - before_count))
     
     # 生成对比报告
@@ -241,48 +250,87 @@ generate_diff_report() {
         echo "----------------------------------------"
         echo "defconfig 前软件包数量: $before_count"
         echo "defconfig 后软件包数量: $after_count"
+        echo "配置文件启用软件包数量: $enabled_count"
         echo "变更数量: $change_count"
         echo ""
         
-        # 新增的软件包
+        echo "📋 配置文件启用的软件包 ($enabled_count 个):"
+        echo "----------------------------------------"
+        if [ -f "$REPORT_DIR/enabled_luci_packages.txt" ]; then
+            cat "$REPORT_DIR/enabled_luci_packages.txt" | while read -r pkg; do
+                echo "  - $pkg"
+            done
+        else
+            echo "无启用的软件包"
+        fi
+        echo ""
+        
         echo "🆕 新增的软件包 (defconfig 后新增):"
         echo "----------------------------------------"
-        local new_packages
-        new_packages=$(comm -13 "$BEFORE_LIST" "$AFTER_LIST")
-        if [ -n "$new_packages" ]; then
-            echo "$new_packages"
-            echo ""
-            echo "新增数量: $(echo "$new_packages" | wc -l)"
+        if [ -f "$BEFORE_LIST" ] && [ -f "$AFTER_LIST" ]; then
+            local new_packages
+            new_packages=$(comm -13 "$BEFORE_LIST" "$AFTER_LIST")
+            if [ -n "$new_packages" ]; then
+                echo "$new_packages"
+                echo ""
+                echo "新增数量: $(echo "$new_packages" | wc -l)"
+            else
+                echo "无新增软件包"
+            fi
         else
-            echo "无新增软件包"
+            echo "无法生成对比（文件不存在）"
         fi
         echo ""
         
-        # 移除的软件包
         echo "🗑️  移除的软件包 (defconfig 后移除):"
         echo "----------------------------------------"
-        local removed_packages
-        removed_packages=$(comm -23 "$BEFORE_LIST" "$AFTER_LIST")
-        if [ -n "$removed_packages" ]; then
-            echo "$removed_packages"
-            echo ""
-            echo "移除数量: $(echo "$removed_packages" | wc -l)"
+        if [ -f "$BEFORE_LIST" ] && [ -f "$AFTER_LIST" ]; then
+            local removed_packages
+            removed_packages=$(comm -23 "$BEFORE_LIST" "$AFTER_LIST")
+            if [ -n "$removed_packages" ]; then
+                echo "$removed_packages"
+                echo ""
+                echo "移除数量: $(echo "$removed_packages" | wc -l)"
+            else
+                echo "无移除软件包"
+            fi
         else
-            echo "无移除软件包"
+            echo "无法生成对比（文件不存在）"
         fi
         echo ""
         
-        # 保持不变的软件包
         echo "✅ 保持不变的软件包:"
         echo "----------------------------------------"
-        local unchanged_packages
-        unchanged_packages=$(comm -12 "$BEFORE_LIST" "$AFTER_LIST")
-        if [ -n "$unchanged_packages" ]; then
-            echo "$unchanged_packages"
-            echo ""
-            echo "不变数量: $(echo "$unchanged_packages" | wc -l)"
+        if [ -f "$BEFORE_LIST" ] && [ -f "$AFTER_LIST" ]; then
+            local unchanged_packages
+            unchanged_packages=$(comm -12 "$BEFORE_LIST" "$AFTER_LIST")
+            if [ -n "$unchanged_packages" ]; then
+                echo "$unchanged_packages"
+                echo ""
+                echo "不变数量: $(echo "$unchanged_packages" | wc -l)"
+            else
+                echo "无保持不变的软件包"
+            fi
         else
-            echo "无保持不变的软件包"
+            echo "无法生成对比（文件不存在）"
+        fi
+        echo ""
+        
+        echo "⚠️  配置启用但不可用的软件包:"
+        echo "----------------------------------------"
+        if [ -f "$REPORT_DIR/enabled_luci_packages.txt" ] && [ -f "$AFTER_LIST" ]; then
+            local missing_packages
+            missing_packages=$(comm -23 "$REPORT_DIR/enabled_luci_packages.txt" "$AFTER_LIST")
+            if [ -n "$missing_packages" ]; then
+                echo "$missing_packages"
+                echo ""
+                echo "缺失数量: $(echo "$missing_packages" | wc -l)"
+                echo "⚠️  这些软件包在配置中启用但不可用，请检查软件源是否正确添加"
+            else
+                echo "无缺失软件包"
+            fi
+        else
+            echo "无法检查缺失软件包"
         fi
         echo ""
         
@@ -324,12 +372,13 @@ generate_final_summary() {
     echo "  - 详细报告: $DETAIL_REPORT"
     echo "  - defconfig 前列表: $BEFORE_LIST"
     echo "  - defconfig 后列表: $AFTER_LIST"
+    echo "  - 启用软件包列表: $REPORT_DIR/enabled_luci_packages.txt"
     echo ""
 }
 
 # =============================================================================
 # 主执行流程
-# ==============================================================================
+# =============================================================================
 
 main() {
     # 记录开始时间
@@ -340,11 +389,11 @@ main() {
     
     # 检查环境
     if check_environment; then
-        # 获取 defconfig 前的软件包列表
-        get_current_luci_packages "$BEFORE_LIST" "defconfig 前的 LUCI 软件包"
-        
         # 从配置文件提取启用的软件包
         extract_enabled_luci_packages
+        
+        # 获取 defconfig 前的软件包列表
+        get_current_luci_packages "$BEFORE_LIST" "defconfig 前的 LUCI 软件包"
         
         # 执行 defconfig
         log_info "执行 make defconfig..."
