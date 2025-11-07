@@ -1,250 +1,105 @@
 #!/bin/bash
-# =============================================================================
-# ImmortalWrt DIY配置脚本
-# 版本: 2.3 (企业级优化版)
+
+# ==============================================================================
+# OpenWrt/ImmortalWrt 自定义配置脚本
+#
+# 功能:
+#   配置设备初始管理IP/密码
+#   优化UI样式
+#   应用自定义配置
+#
+# 使用方法:
+#   在 OpenWrt/ImmortalWrt 源码根目录下运行此脚本
+#
 # 作者: Mary
 # 日期：20251107
-# 描述: 配置设备初始管理IP/密码及系统优化
-# =============================================================================
+# 版本: 1.0 - 初始版本
+# ==============================================================================
 
-# 获取脚本目录
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 导入通用函数
+source "$(dirname "$0")/common.sh"
 
-# 检查并导入通用函数库
-if [ -f "$SCRIPT_DIR/common.sh" ]; then
-    source "$SCRIPT_DIR/common.sh"
-else
-    echo "错误: 找不到 common.sh 文件"
-    echo "请确保 common.sh 与 diy.sh 在同一目录下"
-    exit 1
-fi
+# --- 配置变量 ---
+# 默认IP地址
+DEFAULT_IP="192.168.1.1"
+# 默认密码
+DEFAULT_PASSWORD="password"
+# 默认主题
+DEFAULT_THEME="argon"
 
-# 全局配置
-readonly SCRIPT_VERSION="2.3"
-readonly SCRIPT_AUTHOR="Mary"
-readonly REPO_PATH="${REPO_PATH:-$(pwd)}"
-readonly LOG_FILE="$REPO_PATH/diy_script.log"
+# --- 主函数 ---
 
-# 配置参数
-readonly INIT_IP="192.168.111.1"
-readonly HOSTNAME="WRT"
-readonly INIT_PASSWORD=""  # 空密码
+# 显示脚本信息
+show_script_info() {
+    log_step "OpenWrt/ImmortalWrt 自定义配置脚本"
+    log_info "作者: Mary"
+    log_info "版本: 1.0 - 初始版本"
+    log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+}
 
-# 操作统计
-declare -g SUCCESS_COUNT=0
-declare -g FAIL_COUNT=0
-declare -g SKIP_COUNT=0
-declare -g FAILED_OPERATIONS=()
-
-# =============================================================================
-# 核心功能函数
-# =============================================================================
-
-# 环境检查
+# 检查环境
 check_environment() {
-    log_info "🔍 检查执行环境..."
+    log_info "检查执行环境..."
     
-    local errors=0
-    
-    # 检查必要目录
-    if [ ! -d "$REPO_PATH" ]; then
-        log_error "源码目录不存在: $REPO_PATH"
-        ((errors++))
-    fi
-    
-    # 检查必要命令
-    local required_commands=("git" "chmod" "mkdir" "cat" "sed")
-    for cmd in "${required_commands[@]}"; do
-        if ! command -v "$cmd" &> /dev/null; then
-            log_error "缺少必要命令: $cmd"
-            ((errors++))
-        fi
-    done
-    
-    # 检查磁盘空间
-    if ! check_disk_space "$REPO_PATH" 1; then
-        log_error "磁盘空间不足"
-        ((errors++))
-    fi
-    
-    if [ $errors -eq 0 ]; then
-        log_success "✅ 环境检查通过"
-        return 0
-    else
-        log_error "❌ 环境检查失败，发现 $errors 个问题"
+    # 检查是否在源码根目录
+    if [ ! -f "Makefile" ] || ! grep -q "OpenWrt" Makefile; then
+        log_error "不在OpenWrt/ImmortalWrt源码根目录"
         return 1
     fi
-}
-
-# 显示配置信息
-show_configuration() {
-    log_info "📋 配置信息:"
-    echo "  🌐 LAN IP: $INIT_IP"
-    echo "  🔑 Root密码: [空密码]"
-    echo "  🖥️  主机名: $HOSTNAME"
-    echo "  👤 作者: $SCRIPT_AUTHOR"
-    echo "  📝 脚本版本: $SCRIPT_VERSION"
-    echo "  📂 工作目录: $REPO_PATH"
-    echo ""
-}
-
-# 创建必要目录
-create_directories() {
-    log_info "📁 创建必要目录..."
     
-    local dirs=(
-        "$REPO_PATH/files/etc/uci-defaults"
-        "$REPO_PATH/package/custom"
-    )
-    
-    for dir in "${dirs[@]}"; do
-        if safe_mkdir "$dir"; then
-            log_success "创建目录: $dir"
-            ((SUCCESS_COUNT++))
-        else
-            log_error "创建目录失败: $dir"
-            ((FAIL_COUNT++))
-            FAILED_OPERATIONS+=("create_directory:$dir")
-        fi
-    done
+    log_success "环境检查通过"
+    return 0
 }
 
-# 配置初始网络和认证
+# 配置初始IP和密码
 configure_initial_settings() {
-    log_info "⚙️ 配置初始网络和认证设置..."
+    log_info "配置初始IP和密码..."
     
-    local config_file="$REPO_PATH/files/etc/uci-defaults/99-initial-settings"
+    local ip="${1:-$DEFAULT_IP}"
+    local password="${2:-$DEFAULT_PASSWORD}"
     
-    if cat > "$config_file" << EOF; then
-#!/bin/sh
-# 初始配置脚本
-# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
-# 作者: $SCRIPT_AUTHOR
-# 脚本版本: $SCRIPT_VERSION
-
-# 设置LAN IP
-uci set network.lan.ipaddr='$INIT_IP'
-uci commit network
-
-# 设置root密码为空
-passwd -d root
-
-# 配置SSH
-uci set dropbear.@dropbear[0].RootPasswordAuth='on'
-uci set dropbear.@dropbear[0].PasswordAuth='on'
-uci commit dropbear
-
-# 设置时区和主机名
-uci set system.@system[0].zonename='Asia/Shanghai'
-uci set system.@system[0].timezone='CST-8'
-uci set system.@system[0].hostname='$HOSTNAME'
-uci commit system
-
-# 启用必要的服务
-/etc/init.d/uhttpd enable
-/etc/init.d/dropbear enable
-/etc/init.d/network restart
-
-exit 0
-EOF
-        chmod +x "$config_file" && log_success "初始配置文件创建成功" && ((SUCCESS_COUNT++))
-    else
-        log_error "初始配置文件创建失败"
-        ((FAIL_COUNT++))
-        FAILED_OPERATIONS+=("configure_initial_settings")
-        return 1
-    fi
+    # 修改默认IP
+    log_info "设置默认IP: $ip"
+    sed -i "s/192.168.1.1/$ip/g" package/base-files/files/bin/config_generate
+    
+    # 生成密码哈希
+    local password_hash
+    password_hash=$(openssl passwd -1 "$password")
+    
+    # 修改默认密码
+    log_info "设置默认密码"
+    sed -i "s/root:::0:99999:7:::/root:$password_hash:18579:0:99999:7:::/g" package/base-files/files/etc/shadow
+    
+    log_success "初始IP和密码配置完成"
 }
 
-# 优化编译配置
-optimize_build_config() {
-    log_info "🚀 优化编译配置..."
+# 优化UI样式
+optimize_ui_styles() {
+    log_info "优化UI样式..."
     
-    local config_file="$REPO_PATH/.config"
-    local config_content="
-# 编译优化 - 添加于 $(date '+%Y-%m-%d %H:%M:%S')
-CONFIG_TARGET_OPTIMIZATION=\"-O2 -pipe -mcpu=cortex-a53\"
-CONFIG_USE_GLIBC=y
-CONFIG_TARGET_ROOTFS_SQUASHFS=y
-CONFIG_TARGET_ROOTFS_EXT4FS=y
-
-# 禁用不必要的功能
-CONFIG_IB=y
-CONFIG_KERNEL_GIT_CLONE_URI=\"\"
-CONFIG_KERNEL_GIT_REF=\"\"
-"
-    
-    if echo "$config_content" >> "$config_file" 2>/dev/null; then
-        log_success "编译配置优化完成"
-        ((SUCCESS_COUNT++))
-    else
-        log_error "编译配置优化失败"
-        ((FAIL_COUNT++))
-        FAILED_OPERATIONS+=("optimize_build_config")
+    # 检查主题是否存在
+    local theme_dir="feeds/luci/themes/luci-theme-argon"
+    if [ ! -d "$theme_dir" ]; then
+        log_warning "Argon主题不存在，跳过UI优化"
         return 1
     fi
-}
-
-# 配置系统优化
-configure_system_optimization() {
-    log_info "⚡ 配置系统优化..."
     
-    local opt_file="$REPO_PATH/files/etc/uci-defaults/98-system-optimization"
+    local css_file="$theme_dir/htdocs/luci-static/argon/css/cascade.css"
     
-    if cat > "$opt_file" << 'EOF'; then
-#!/bin/sh
-# 系统优化脚本
-# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
-
-# 优化网络参数
-echo 'net.core.rmem_max = 16777216' >> /etc/sysctl.conf
-echo 'net.core.wmem_max = 16777216' >> /etc/sysctl.conf
-echo 'net.ipv4.tcp_rmem = 4096 87380 16777216' >> /etc/sysctl.conf
-echo 'net.ipv4.tcp_wmem = 4096 65536 16777216' >> /etc/sysctl.conf
-
-# 优化文件系统
-echo 'vm.dirty_ratio = 15' >> /etc/sysctl.conf
-echo 'vm.dirty_background_ratio = 5' >> /etc/sysctl.conf
-
-# 启用BBR
-echo 'net.core.default_qdisc=fq' >> /etc/sysctl.conf
-echo 'net.ipv4.tcp_congestion_control=bbr' >> /etc/sysctl.conf
-
-exit 0
-EOF
-        chmod +x "$opt_file" && log_success "系统优化配置完成" && ((SUCCESS_COUNT++))
-    else
-        log_error "系统优化配置失败"
-        ((FAIL_COUNT++))
-        FAILED_OPERATIONS+=("configure_system_optimization")
-        return 1
-    fi
-}
-
-# 配置Argon主题样式
-configure_argon_theme() {
-    log_info "🎨 配置Argon主题样式..."
-    
-    local css_file="$REPO_PATH/feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css/cascade.css"
-    local js_file="$REPO_PATH/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/index.js"
-    local css_modified=false
-    local js_modified=false
-    
-    # 检查文件是否存在
     if [ ! -f "$css_file" ]; then
-        log_warning "Argon主题CSS文件不存在: $css_file"
-        ((SKIP_COUNT++))
-    else
-        # 备份原文件
-        if safe_backup "$css_file"; then
-            log_info "已备份CSS文件: ${css_file}.bak"
-        else
-            log_warning "无法备份CSS文件"
-        fi
-        
-        # 修改CSS文件
-        if sed -i '/^\.td\.cbi-section-actions {$/,/^}$/ {
-            /^}$/a\
+        log_warning "Argon主题CSS文件不存在，跳过UI优化"
+        return 1
+    fi
+    
+    # 调整在Argon主题下，概览页面显示/隐藏按钮的样式
+    log_info "调整概览页面显示/隐藏按钮的样式"
+    
+    # 备份原文件
+    cp "$css_file" "$css_file.bak"
+    
+    # 修改CSS文件
+    sed -i '/^\.td\.cbi-section-actions {$/,/^}$/ {
+        /^}$/a\
 .cbi-section.fade-in .cbi-title {\
   position: relative;\
   min-height: 2.765rem;\
@@ -272,158 +127,42 @@ configure_argon_theme() {
 .cbi-section.fade-in .cbi-title>div:last-child span[data-style='\''inactive'\'']::after {\
   transform: rotate(90deg);\
 }
-}' "$css_file" 2>/dev/null; then
-            log_success "Argon主题CSS样式修改成功"
-            css_modified=true
-            ((SUCCESS_COUNT++))
-        else
-            log_error "Argon主题CSS样式修改失败"
-            ((FAIL_COUNT++))
-            FAILED_OPERATIONS+=("configure_argon_theme_css")
-        fi
-    fi
+}' "$css_file"
     
-    # 检查JS文件是否存在
-    if [ ! -f "$js_file" ]; then
-        log_warning "Argon主题JS文件不存在: $js_file"
-        ((SKIP_COUNT++))
-    else
+    # 修改状态页面JavaScript
+    local js_file="feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/index.js"
+    
+    if [ -f "$js_file" ]; then
+        log_info "修改状态页面JavaScript"
+        
         # 备份原文件
-        if safe_backup "$js_file"; then
-            log_info "已备份JS文件: ${js_file}.bak"
-        else
-            log_warning "无法备份JS文件"
-        fi
+        cp "$js_file" "$js_file.bak"
         
-        # 修改JS文件
-        if sed -i -e '/btn\.setAttribute(\x27class\x27, include\.hide ? \x27label notice\x27 : \x27label\x27);/d' \
-                  -e "/\x27class\x27: includes\[i\]\.hide ? \x27label notice\x27 : \x27label\x27,/d" \
-                  "$js_file" 2>/dev/null; then
-            log_success "Argon主题JS代码修改成功"
-            js_modified=true
-            ((SUCCESS_COUNT++))
-        else
-            log_error "Argon主题JS代码修改失败"
-            ((FAIL_COUNT++))
-            FAILED_OPERATIONS+=("configure_argon_theme_js")
-        fi
+        # 修改JavaScript文件
+        sed -i -e '/btn\.setAttribute(\x27class\x27, include\.hide ? \x27label notice\x27 : \x27label\x27);/d' \
+               -e "/\x27class\x27: includes\[i\]\.hide ? \x27label notice\x27 : \x27label\x27,/d" \
+               "$js_file"
+    else
+        log_warning "状态页面JavaScript文件不存在，跳过修改"
     fi
     
-    # 如果至少有一个文件修改成功，则认为函数执行成功
-    if [ "$css_modified" = true ] || [ "$js_modified" = true ]; then
-        return 0
-    else
-        return 1
-    fi
+    log_success "UI样式优化完成"
 }
 
-# 生成配置说明文件
-generate_documentation() {
-    log_info "📚 生成配置文档..."
+# 应用自定义配置
+apply_custom_configurations() {
+    log_info "应用自定义配置..."
     
-    local doc_file="$REPO_PATH/files/etc/uci-defaults/README"
+    # 这里可以添加其他自定义配置
     
-    if cat > "$doc_file" << EOF; then
-# ImmortalWrt 初始配置说明
-# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
-# 作者: $SCRIPT_AUTHOR
-# 脚本版本: $SCRIPT_VERSION
-
-## 默认配置
-- LAN IP: $INIT_IP
-- Root密码: [空密码]
-- 主机名: $HOSTNAME
-
-## 常用命令
-- 修改密码: passwd
-- 重启网络: /etc/init.d/network restart
-- 查看日志: logread
-
-## Web界面
-访问地址: http://$INIT_IP
-
-## 配置文件说明
-- 99-initial-settings: 初始网络和认证配置
-- 98-system-optimization: 系统性能优化
-- Argon主题样式: 优化概览页面显示/隐藏按钮样式
-EOF
-        log_success "配置文档生成完成" && ((SUCCESS_COUNT++))
-    else
-        log_error "配置文档生成失败"
-        ((FAIL_COUNT++))
-        FAILED_OPERATIONS+=("generate_documentation")
-        return 1
-    fi
+    log_success "自定义配置应用完成"
 }
 
-# 验证配置结果
-verify_configuration() {
-    log_info "🔍 验证配置结果..."
+# 生成摘要报告
+generate_final_summary() {
+    log_step "生成执行摘要"
     
-    local verification_items=(
-        "$REPO_PATH/files/etc/uci-defaults/99-initial-settings:初始配置文件"
-        "$REPO_PATH/files/etc/uci-defaults/98-system-optimization:系统优化文件"
-        "$REPO_PATH/files/etc/uci-defaults/README:配置文档"
-        "$REPO_PATH/.config:编译配置文件"
-        "$REPO_PATH/feeds/luci/themes/luci-theme-argon/htdocs/luci-static/argon/css/cascade.css:Argon主题CSS文件"
-        "$REPO_PATH/feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/index.js:Argon主题JS文件"
-    )
-    
-    local verified_count=0
-    for item in "${verification_items[@]}"; do
-        local file="${item%:*}"
-        local desc="${item#*:}"
-        
-        if [ -f "$file" ]; then
-            echo "  ✅ $desc"
-            ((verified_count++))
-        else
-            echo "  ❌ $desc (缺失)"
-        fi
-    done
-    
-    if [ $verified_count -eq ${#verification_items[@]} ]; then
-        log_success "配置验证通过"
-        ((SUCCESS_COUNT++))
-    else
-        log_warning "配置验证部分通过 ($verified_count/${#verification_items[@]})"
-        ((SKIP_COUNT++))
-    fi
-}
-
-# 生成执行摘要
-generate_summary() {
-    echo ""
-    echo "=================================================================="
-    log_info "📊 执行摘要"
-    echo "=================================================================="
-    echo "✅ 成功操作: $SUCCESS_COUNT"
-    echo "❌ 失败操作: $FAIL_COUNT"
-    echo "⚠️  跳过操作: $SKIP_COUNT"
-    echo ""
-    
-    if [ $FAIL_COUNT -gt 0 ]; then
-        echo "失败的操作列表:"
-        for operation in "${FAILED_OPERATIONS[@]}"; do
-            echo "  - $operation"
-        done
-        echo ""
-    fi
-    
-    echo "配置摘要:"
-    echo "  🌐 管理地址: http://$INIT_IP"
-    echo "  🔑 登录账号: root"
-    echo "  🔑 登录密码: [空密码]"
-    echo "  🖥️  主机名: $HOSTNAME"
-    echo "  🎨 Argon主题样式: 已优化"
-    echo ""
-    
-    if [ $FAIL_COUNT -eq 0 ]; then
-        log_success "🎉 所有配置任务完成！"
-    else
-        log_warning "⚠️  部分配置任务失败，请检查上述错误信息"
-    fi
-    echo "=================================================================="
+    show_execution_summary
 }
 
 # =============================================================================
@@ -434,44 +173,38 @@ main() {
     # 记录开始时间
     local start_time=$(date +%s)
     
-    echo ""
-    echo "=================================================================="
-    log_info "🚀 ImmortalWrt DIY配置脚本 v$SCRIPT_VERSION"
-    echo "=================================================================="
-    log_info "作者: $SCRIPT_AUTHOR"
-    log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    echo ""
+    # 显示脚本信息
+    show_script_info
     
-    # 显示磁盘使用情况
-    log_info "💾 当前磁盘使用情况:"
-    show_system_resources
-    
-    # 执行配置流程
+    # 检查环境
     if check_environment; then
-        show_configuration
-        create_directories
-        configure_initial_settings
-        optimize_build_config
-        configure_system_optimization
-        configure_argon_theme
-        generate_documentation
-        verify_configuration
+        # 配置初始IP和密码
+        configure_initial_settings "$@"
+        
+        # 优化UI样式
+        optimize_ui_styles
+        
+        # 应用自定义配置
+        apply_custom_configurations
+        
+        # 生成摘要报告
+        generate_final_summary
     else
         log_error "环境检查失败，终止执行"
         exit 1
     fi
     
-    # 生成摘要
-    generate_summary
-    
-    # 显示磁盘使用情况
-    log_info "💾 配置后磁盘使用情况:"
-    show_system_resources
-    
     # 计算执行时间
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
     log_time "总执行时间: ${duration}秒"
+    
+    # 返回执行结果
+    if [ $ERROR_COUNT -eq 0 ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # 执行主函数
