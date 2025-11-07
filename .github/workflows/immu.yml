@@ -14,7 +14,7 @@ env:
   REPO_PATH: ${{ github.workspace }}/immortalwrt
   CONFIG_FILE: configs/immu.config
   TZ: Asia/Shanghai
-  CACHE_VERSION: v1
+  CACHE_VERSION: v2
   SCRIPTS_DIR: ${{ github.workspace }}/scripts
 
 jobs:
@@ -315,6 +315,17 @@ jobs:
           cp "$CONFIG_FILE" "${{ env.REPO_PATH }}/.config"
           echo "✅ 配置文件复制完成"
           
+      - name: 生成 LUCI 基准报告
+        run: |
+          echo "📄 生成 LUCI 基准报告..."
+          cd "${{ env.REPO_PATH }}"
+          if [ -f "${{ env.SCRIPTS_DIR }}/luci_report.sh" ]; then
+            bash "${{ env.SCRIPTS_DIR }}/luci_report.sh"
+          else
+            echo "⚠️ luci_report.sh 不存在，跳过报告生成"
+          fi
+          echo "✅ 基准报告生成完成"
+          
       - name: 更新第三方源
         timeout-minutes: 15
         continue-on-error: true  # 允许失败，继续执行
@@ -391,16 +402,16 @@ jobs:
           make defconfig
           echo "✅ defconfig 完成"
           
-      - name: 生成 LUCI 报告
+      - name: 生成 LUCI 变更报告
         run: |
-          echo "📄 生成 LUCI 报告..."
+          echo "📄 生成 LUCI 变更报告..."
           cd "${{ env.REPO_PATH }}"
           if [ -f "${{ env.SCRIPTS_DIR }}/luci_report.sh" ]; then
             bash "${{ env.SCRIPTS_DIR }}/luci_report.sh"
           else
             echo "⚠️ luci_report.sh 不存在，跳过报告生成"
           fi
-          echo "✅ 报告生成完成"
+          echo "✅ 变更报告生成完成"
           
       - name: 上传 LUCI 报告
         if: hashFiles('${{ env.REPO_PATH }}/.luci_report.txt') != ''
@@ -454,6 +465,11 @@ jobs:
           
           echo "✅ 编译环境配置完成"
           
+      - name: 编译前磁盘空间检查
+        run: |
+          echo "💾 编译前磁盘空间检查:"
+          df -h
+          
       - name: 编译固件
         id: compile
         run: |
@@ -467,6 +483,11 @@ jobs:
             echo "❌ 固件编译失败"
             exit 1
           fi
+          
+      - name: 编译后磁盘空间检查
+        run: |
+          echo "💾 编译后磁盘空间检查:"
+          df -h
           
       - name: 整理固件文件
         if: steps.compile.outputs.compile_completed == 'true'
