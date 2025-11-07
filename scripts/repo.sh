@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：20251107
-# 版本: 2.8 - 优先级调整版
+# 版本: 2.9 - 特殊处理优化版
 # ==============================================================================
 
 # 导入通用函数
@@ -42,6 +42,7 @@ declare -A REPOS=(
 declare -A SPECIAL_HANDLING=(
     ["packages_lang_golang"]="feeds/packages/lang/golang"
     ["luci-app-tailscale"]="pre_remove_feeds"
+    ["luci-app-mosdns"]="mosdns_special"
     ["small-package"]="small"
 )
 
@@ -63,7 +64,7 @@ declare -A CONFLICTING_PACKAGES=(
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 2.8 - 优先级调整版"
+    log_info "版本: 2.9 - 特殊处理优化版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
@@ -133,10 +134,11 @@ check_network() {
     fi
 }
 
-# 获取仓库的默认分支
+# 获取仓库的默认分支（增强版，带重试）
 get_default_branch() {
     local repo_url="$1"
-    local default_branch=""
+    local max_retries="${2:-3}"
+    local retry_delay="${3:-2}"
     
     log_debug "检测仓库默认分支: $repo_url"
     
@@ -148,25 +150,39 @@ get_default_branch() {
         
         log_debug "API URL: $api_url"
         
-        # 获取仓库信息
-        local repo_info
-        repo_info=$(curl -s --connect-timeout 10 --max-time 30 "$api_url" 2>/dev/null)
-        
-        if [ $? -eq 0 ] && [ -n "$repo_info" ]; then
-            # 尝试使用 jq 解析
-            if command -v jq > /dev/null 2>&1; then
-                default_branch=$(echo "$repo_info" | jq -r '.default_branch // empty' 2>/dev/null)
+        local attempt=1
+        while [ $attempt -le $max_retries ]; do
+            log_debug "尝试获取默认分支 (第 $attempt 次)"
+            
+            # 获取仓库信息
+            local repo_info
+            repo_info=$(curl -s --connect-timeout 10 --max-time 30 --retry 2 --retry-delay 1 "$api_url" 2>/dev/null)
+            
+            if [ $? -eq 0 ] && [ -n "$repo_info" ]; then
+                # 尝试使用 jq 解析
+                if command -v jq > /dev/null 2>&1; then
+                    default_branch=$(echo "$repo_info" | jq -r '.default_branch // empty' 2>/dev/null)
+                else
+                    # 如果没有 jq，使用 grep 和 sed
+                    default_branch=$(echo "$repo_info" | grep -o '"default_branch": *"[^"]*"' | sed 's/"default_branch": *"\([^"]*\)"/\1/' 2>/dev/null)
+                fi
+                
+                if [ -n "$default_branch" ] && [ "$default_branch" != "null" ] && [ "$default_branch" != "empty" ]; then
+                    log_debug "检测到默认分支: $default_branch"
+                    echo "$default_branch"
+                    return 0
+                fi
             else
-                # 如果没有 jq，使用 grep 和 sed
-                default_branch=$(echo "$repo_info" | grep -o '"default_branch": *"[^"]*"' | sed 's/"default_branch": *"\([^"]*\)"/\1/' 2>/dev/null)
+                log_debug "API 调用失败 (第 $attempt 次)"
             fi
             
-            if [ -n "$default_branch" ] && [ "$default_branch" != "null" ] && [ "$default_branch" != "empty" ]; then
-                log_debug "检测到默认分支: $default_branch"
-                echo "$default_branch"
-                return 0
+            if [ $attempt -lt $max_retries ]; then
+                log_debug "等待 $retry_delay 秒后重试..."
+                sleep $retry_delay
             fi
-        fi
+            
+            ((attempt++))
+        done
     fi
     
     log_debug "无法检测默认分支"
@@ -181,7 +197,7 @@ smart_branch_selector() {
     
     # 1. API检测默认分支（最高优先级）
     local default_branch
-    default_branch=$(get_default_branch "$repo_url")
+    default_branch=$(get_default_branch "$repo_url" 3 2)
     if [ $? -eq 0 ] && [ -n "$default_branch" ]; then
         branches_to_try+=("$default_branch")
         log_debug "添加API检测的默认分支: $default_branch"
@@ -280,12 +296,12 @@ git_clone_enhanced() {
     
     # 获取默认分支信息用于提示
     local default_branch
-    default_branch=$(get_default_branch "$repo_url")
+    default_branch=$(get_default_branch "$repo_url" 1 1)
     
     if [ $? -eq 0 ] && [ -n "$default_branch" ]; then
         log_error "仓库默认分支: $default_branch"
     else
-        log_error "无法获取仓库默认分支信息"
+        log_error "无法获取仓库默认分支信息（可能是API限制）"
     fi
     
     log_error "请检查:"
@@ -341,6 +357,39 @@ check_and_remove_conflicting_packages() {
         fi
     done
     
+    return 0
+}
+
+# 特殊处理：mosdns
+handle_mosdns_special() {
+    local repo_name="$1"
+    local target_dir="$2"
+    
+    log_info "执行 mosdns 特殊处理..."
+    
+    # 1. 删除冲突的包
+    log_info "删除冲突的 mosdns 和 v2ray-geodata 包..."
+    find ./ -name "Makefile" -path "*/v2ray-geodata/*" -exec rm -f {} \; 2>/dev/null || true
+    find ./ -name "Makefile" -path "*/mosdns/*" -exec rm -f {} \; 2>/dev/null || true
+    
+    # 2. 克隆 luci-app-mosdns
+    log_info "克隆 luci-app-mosdns..."
+    if git clone -b v5 --depth 1 https://github.com/sbwml/luci-app-mosdns package/luci-app-mosdns; then
+        log_success "luci-app-mosdns 克隆成功"
+    else
+        log_error "luci-app-mosdns 克隆失败"
+        return 1
+    fi
+    
+    # 3. 克隆 v2ray-geodata
+    log_info "克隆 v2ray-geodata..."
+    if git clone --depth 1 https://github.com/sbwml/v2ray-geodata package/v2ray-geodata; then
+        log_success "v2ray-geodata 克隆成功"
+    else
+        log_warning "v2ray-geodata 克隆失败，但不影响主要功能"
+    fi
+    
+    log_success "mosdns 特殊处理完成"
     return 0
 }
 
@@ -402,6 +451,11 @@ handle_special_repo() {
                 preprocess_tailscale
             fi
             ;;
+        "mosdns_special")
+            # mosdns 特殊处理
+            handle_mosdns_special "$repo_name" "package/luci-app-mosdns"
+            return $?
+            ;;
         "small")
             # small-package 特殊处理，直接克隆到 small 目录
             return 0
@@ -411,6 +465,8 @@ handle_special_repo() {
             return 0
             ;;
     esac
+    
+    return 0
 }
 
 # 处理所有仓库
@@ -441,7 +497,17 @@ process_repos() {
         # 检查是否需要特殊处理
         local special_handling="${SPECIAL_HANDLING[$repo_name]}"
         if [ -n "$special_handling" ]; then
-            handle_special_repo "$repo_name"
+            # 执行特殊处理
+            if handle_special_repo "$repo_name"; then
+                ((success_count++))
+            else
+                ((failed_count++))
+            fi
+            
+            # 如果是特殊处理且成功，跳过常规克隆
+            if [ "$special_handling" = "mosdns_special" ] && [ $? -eq 0 ]; then
+                continue
+            fi
             
             # 如果 special_handling 是目录路径，则使用它作为目标目录
             if [[ "$special_handling" == */* ]]; then
@@ -568,6 +634,9 @@ main "$@"
 
 # # luci-app-mosdns  by sbwml
 # git clone -b v5 https://github.com/sbwml/luci-app-mosdns package/luci-app-mosdns
+# git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
+# make menuconfig # choose LUCI -> Applications -> luci-app-mosdns
+# make package/mosdns/luci-app-mosdns/compile V=s
 
 # # luci-app-quickfile by sbwml
 # git clone https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile
