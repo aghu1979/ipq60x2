@@ -1,53 +1,86 @@
-# 京东云雅典娜led控制
+# ==============================================================================
+# 原始代码备份（供参考）
+# ==============================================================================
 
-# lucky by gdy666，自带luci-app，sirpdboy也有luci-app但是可能与原作者有冲突
-git clone  https://github.com/gdy666/luci-app-lucky.git package/luci-app-lucky
-#git clone https://github.com/sirpdboy/luci-app-lucky.git package/luci-app-lucky
+# # 京东云雅典娜led控制
+# git clone https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
+# chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
 
-# luci-app-easytier
-git clone https://github.com/EasyTier/luci-app-easytier.git package/luci-app-easytier
+# # passwall by xiaorouji，
+# # 移除 openwrt feeds 自带的核心库
+# rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+# git clone https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages
+# # 移除 openwrt feeds 过时的luci版本
+# rm -rf feeds/luci/applications/luci-app-passwall
+# git clone https://github.com/xiaorouji/openwrt-passwall package/luci-app-passwall
+# # passwall2 by xiaorouji，
+# git clone https://github.com/xiaorouji/openwrt-passwall2 package/luci-app-passwall2
 
-# frp https://github.com/fatedier/frp，无luci-app，建议使用small-package更新
+# # AdGuardHome，官方推荐OpenWrt LUCI app by @kongfl888 (originally by @rufengsuixing).
+# # git clone https://github.com/kongfl888/luci-app-adguardhome package/luci-app-adguardhome
+# # luci-app-adguardhome by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-adguardhome package/luci-app-adguardhome
 
-# homeproxy immortalwrt官方出品，无luci-app，建议使用https://github.com/VIKINGYFY/homeproxy更新
-git clone https://github.com/VIKINGYFY/homeproxy package/luci-app-homeproxy
-#  一个更方便地生成 ImmortalWrt/OpenWrt(23.05.x+) HomeProxy 插件大多数常用配置的脚本。
-# (必备) 通过私密 Gist 或其它可被正常访问的私有链接定制你的专属 rules.sh 配置内容；
-# 执行以下命令（脚本执行期间会向你索要你的定制配置URL）：bash -c "$(curl -fsSl https://raw.githubusercontent.com/thisIsIan-W/homeproxy-autogen-configuration/refs/heads/main/generate_homeproxy_rules.sh)"
+# # ddns-go by sirpdboy，自带luci-app
+# git clone https://github.com/sirpdboy/luci-app-ddns-go package/luci-app-ddns-go
 
-# golang & luci-app-openlist2 by sbwml
-git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
-git clone https://github.com/sbwml/luci-app-openlist2 package/luci-app-openlist2
+# # luci-app-netdata by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata
 
-# luci-app-mosdns  by sbwml
-git clone -b v5 https://github.com/sbwml/luci-app-mosdns package/luci-app-mosdns
+# # luci-app-netspeedtest by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-netspeedtest package/luci-app-netspeedtest
 
-# luci-app-quickfile by sbwml
-git clone https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile
+# # luci-app-partexp by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-partexp package/luci-app-partexp
 
-# luci-app-istorex（向导模式及主体）/luci-app-quickstart（网络向导和首页界面）/luci-app-diskman （磁盘管理），建议使用small-package更新
+# # luci-app-taskplan by sirpdboy
+# git clone https://github.com/sirpdboy/luci-app-taskplan package/luci-app-taskplan
 
-# momo在 OpenWrt 上使用 sing-box 进行透明代理/nikki在 OpenWrt 上使用 Mihomo 进行透明代理。
-# echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main" >> "feeds.conf.default"
-# echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main" >> "feeds.conf.default"
-git clone https://github.com/nikkinikki-org/OpenWrt-momo package/luci-app-momo
-git clone https://github.com/nikkinikki-org/OpenWrt-nikki package/luci-app-nikki
+# # lucky by gdy666，自带luci-app，sirpdboy也有luci-app但是可能与原作者有冲突
+# git clone https://github.com/gdy666/luci-app-lucky package/lucky
+# #git clone https://github.com/sirpdboy/luci-app-lucky package/lucky
 
-# OpenAppFilter（OAF），自带luci-app
-git clone https://github.com/destan19/OpenAppFilter.git package/luci-app-oaf
+# # luci-app-easytier
+# git clone https://github.com/EasyTier/luci-app-easytier package/luci-app-easytier
 
-# luci-app-openclash by vernesong
-git clone -b dev https://github.com/vernesong/OpenClash.git package/luci-app-openclash
+# # frp https://github.com/fatedier/frp，无luci-app，建议使用small-package更新
 
-# tailscale，官方推荐luci-app-tailscale by asvow
-sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
-git clone https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
+# # homeproxy immortalwrt官方出品，无luci-app，建议使用https://github.com/VIKINGYFY/homeproxy更新
+# git clone https://github.com/VIKINGYFY/homeproxy package/homeproxy
+# # 一个更方便地生成 ImmortalWrt/OpenWrt(23.05.x+) HomeProxy 插件大多数常用配置的脚本。
+# # (必备) 通过私密 Gist 或其它可被正常访问的私有链接定制你的专属 rules.sh 配置内容；
+# # 执行以下命令（脚本执行期间会向你索要你的定制配置URL）：bash -c "$(curl -fsSl https://raw.githubusercontent.com/thisIsIan-W/homeproxy-autogen-configuration/refs/heads/main/generate_homeproxy_rules.sh)"
 
-# vnt，官方https://github.com/vnt-dev/vnt，无luci-app，使用lmq8267
-git clone https://github.com/lmq8267/luci-app-vnt.git package/luci-app-vnt
+# # golang & luci-app-openlist2 by sbwml
+# git clone https://github.com/sbwml/packages_lang_golang -b 25.x feeds/packages/lang/golang
+# git clone https://github.com/sbwml/luci-app-openlist2 package/luci-app-openlist
 
-# kenzok8/small-package，后备之选，只有上述的ipk地址缺失才会用到。
-git clone https://github.com/kenzok8/small-package small
+# # luci-app-mosdns by sbwml
+# git clone -b v5 https://github.com/sbwml/luci-app-mosdns package/luci-app-mosdns
 
-./scripts/feeds update -a
-./scripts/feeds install -a
+# # luci-app-quickfile by sbwml
+# git clone https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile
+
+# # luci-app-istorex（向导模式及主体）/luci-app-quickstart（网络向导和首页界面）/luci-app-diskman （磁盘管理），建议使用small-package更新
+
+# # momo在 OpenWrt 上使用 sing-box 进行透明代理/nikki在 OpenWrt 上使用 Mihomo 进行透明代理。
+# # echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo;main" >> "feeds.conf.default"
+# # echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki;main" >> "feeds.conf.default"
+# git clone https://github.com/nikkinikki-org/OpenWrt-momo package/luci-app-momo
+# git clone https://github.com/nikkinikki-org/OpenWrt-nikki package/luci-app-nikki
+
+# # OpenAppFilter（OAF），自带luci-app
+# git clone https://github.com/destan19/OpenAppFilter package/luci-app-oaf
+
+# # luci-app-openclash by vernesong
+# git clone -b dev https://github.com/vernesong/OpenClash package/luci-app-openclash
+
+# # tailscale，官方推荐luci-app-tailscale by asvow
+# sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
+# git clone https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
+
+# # vnt，官方https://github.com/vnt-dev/vnt，无luci-app，使用lmq8267
+# git clone https://github.com/lmq8267/luci-app-vnt package/luci-app-vnt
+
+# # kenzok8/small-package，后备之选，只有上述的ipk地址缺失才会用到。
+# git clone https://github.com/kenzok8/small-package small
