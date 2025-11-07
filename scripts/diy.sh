@@ -1,16 +1,26 @@
 #!/bin/bash
 # =============================================================================
 # ImmortalWrt DIY配置脚本
-# 版本: 2.1 (企业级优化版)
+# 版本: 2.2 (企业级优化版)
 # 作者: Mary
+# 日期：20251107
 # 描述: 配置设备初始管理IP/密码及系统优化
 # =============================================================================
 
-# 加载通用函数库
-source "$(dirname "$0")/common.sh"
+# 获取脚本目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 检查并导入通用函数库
+if [ -f "$SCRIPT_DIR/common.sh" ]; then
+    source "$SCRIPT_DIR/common.sh"
+else
+    echo "错误: 找不到 common.sh 文件"
+    echo "请确保 common.sh 与 diy.sh 在同一目录下"
+    exit 1
+fi
 
 # 全局配置
-readonly SCRIPT_VERSION="2.1"
+readonly SCRIPT_VERSION="2.2"
 readonly SCRIPT_AUTHOR="Mary"
 readonly REPO_PATH="${REPO_PATH:-$(pwd)}"
 readonly LOG_FILE="$REPO_PATH/diy_script.log"
@@ -45,7 +55,7 @@ check_environment() {
     # 检查必要命令
     local required_commands=("git" "chmod" "mkdir" "cat" "sed")
     for cmd in "${required_commands[@]}"; do
-        if ! command_exists "$cmd"; then
+        if ! command -v "$cmd" &> /dev/null; then
             log_error "缺少必要命令: $cmd"
             ((errors++))
         fi
@@ -90,6 +100,7 @@ create_directories() {
     for dir in "${dirs[@]}"; do
         if safe_mkdir "$dir"; then
             log_success "创建目录: $dir"
+            ((SUCCESS_COUNT++))
         else
             log_error "创建目录失败: $dir"
             ((FAIL_COUNT++))
