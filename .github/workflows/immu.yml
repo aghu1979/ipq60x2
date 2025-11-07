@@ -9,7 +9,7 @@
 #
 # 作者: Mary
 # 日期: 20251107
-# 版本: 3.1 - 语法修复版
+# 版本: 3.2 - 路径修复版
 # ==============================================================================
 
 name: ImmortalWrt Auto Build
@@ -44,7 +44,7 @@ on:
 # 全局环境变量
 env:
   # === 版本控制 ===
-  WORKFLOW_VERSION: "3.1"
+  WORKFLOW_VERSION: "3.2"
   BUILD_DATE: "${{ github.run_number }}-${{ github.sha }}"
   
   # === 仓库配置 ===
@@ -90,6 +90,10 @@ jobs:
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
     
+    # 设置 GitHub Token 环境变量
+    env:
+      GH_TOKEN: ${{ github.token }}
+    
     # 输出变量
     outputs:
       status: ${{ steps.build_status.outputs.status }}
@@ -114,6 +118,8 @@ jobs:
         echo "💻 运行环境: ${{ runner.os }}"
         echo "🏗️  编译ID: ${{ github.run_number }}"
         echo "📝 提交哈希: ${{ github.sha }}"
+        echo "📍 当前工作目录: $(pwd)"
+        echo "📍 GitHub 工作空间: ${{ github.workspace }}"
         echo "=================================================================="
         
         # 创建工作目录
@@ -126,6 +132,13 @@ jobs:
         echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
         echo "BUILD_ID=${{ github.run_number }}-${{ github.sha }}" >> $GITHUB_ENV
         echo "CACHE_KEY_PREFIX=immortalwrt-${{ env.CACHE_VERSION }}" >> $GITHUB_ENV
+        
+        # 检查脚本文件是否存在
+        echo "🔍 检查脚本文件..."
+        echo "📁 仓库根目录: ${{ github.workspace }}"
+        ls -la ${{ github.workspace }}/
+        echo "📁 脚本目录: ${{ github.workspace }}/scripts"
+        ls -la ${{ github.workspace }}/scripts/ || echo "⚠️ 脚本目录不存在"
         
         # 检查磁盘空间
         echo "📊 初始磁盘空间:"
@@ -192,7 +205,8 @@ jobs:
           python3-pyelftools \
           python3-setuptools \
           python3-distutils \
-          python3-lib2to3
+          python3-lib2to3 \
+          gh
         
         # 清理
         sudo -E apt-get -qq autoremove --purge
@@ -297,7 +311,7 @@ jobs:
         fi
         
         # 进入源码目录
-        cd "${{ env.REPO_NAME }}"
+        cd "${{ env.SOURCE_PATH }}"
         
         # 获取版本信息
         REPO_COMMIT=$(git rev-parse HEAD)
@@ -332,16 +346,24 @@ jobs:
         echo "🔧 加载自定义软件源"
         echo "=================================================================="
         
+        # 确保在正确的目录
+        cd "${{ env.SOURCE_PATH }}"
+        
         # 复制 feeds 配置
-        if [ -f "${{ env.FEEDS_CONF }}" ]; then
+        if [ -f "${{ github.workspace }}/${{ env.FEEDS_CONF }}" ]; then
           echo "📋 复制 feeds 配置文件"
-          cp "${{ env.FEEDS_CONF }}" "${{ env.SOURCE_PATH }}/feeds.conf.default"
+          cp "${{ github.workspace }}/${{ env.FEEDS_CONF }}" "./feeds.conf.default"
         fi
+        
+        # 检查脚本文件
+        echo "🔍 检查脚本文件..."
+        echo "📁 当前目录: $(pwd)"
+        echo "📁 脚本路径: ${{ github.workspace }}/${{ env.REPO_SCRIPT }}"
+        ls -la "${{ github.workspace }}/${{ env.REPO_SCRIPT }}"
         
         # 执行软件源脚本
         echo "🔧 执行软件源集成脚本..."
-        chmod +x "${{ env.REPO_SCRIPT }}"
-        cd "${{ env.SOURCE_PATH }}"
+        chmod +x "${{ github.workspace }}/${{ env.REPO_SCRIPT }}"
         "${{ github.workspace }}/${{ env.REPO_SCRIPT }}"
         
         echo "✅ 自定义软件源加载完成"
@@ -363,10 +385,10 @@ jobs:
         
         # 生成 defconfig 前的软件包列表
         echo "📋 生成 defconfig 前的软件包列表..."
-        find package feeds -name "luci-app-*" -type d | sed 's/.*\///' | sort -u > reports/luci_packages_before.txt
+        find package feeds -name "luci-app-*" -type d 2>/dev/null | sed 's/.*\///' | sort -u > reports/luci_packages_before.txt
         
         # 统计数量
-        BEFORE_COUNT=$(wc -l < reports/luci_packages_before.txt)
+        BEFORE_COUNT=$(wc -l < reports/luci_packages_before.txt 2>/dev/null || echo "0")
         echo "📊 defconfig 前 LUCI 软件包数量: $BEFORE_COUNT"
         
         # 设置输出变量
@@ -416,22 +438,28 @@ jobs:
         echo "⚙️ 加载自定义配置"
         echo "=================================================================="
         
+        cd "${{ env.SOURCE_PATH }}"
+        
         # 复制文件
-        if [ -d "files" ]; then
+        if [ -d "${{ github.workspace }}/files" ]; then
           echo "📁 复制自定义文件"
-          cp -r files "${{ env.SOURCE_PATH }}/"
+          cp -r "${{ github.workspace }}/files" ./
         fi
         
         # 复制配置文件
-        if [ -f "${{ env.CONFIG_FILE }}" ]; then
+        if [ -f "${{ github.workspace }}/${{ env.CONFIG_FILE }}" ]; then
           echo "📋 复制配置文件"
-          cp "${{ env.CONFIG_FILE }}" "${{ env.SOURCE_PATH }}/.config"
+          cp "${{ github.workspace }}/${{ env.CONFIG_FILE }}" ./.config
         fi
+        
+        # 检查自定义脚本
+        echo "🔍 检查自定义脚本..."
+        echo "📁 脚本路径: ${{ github.workspace }}/${{ env.DIY_SCRIPT }}"
+        ls -la "${{ github.workspace }}/${{ env.DIY_SCRIPT }}"
         
         # 执行自定义脚本
         echo "🔧 执行自定义配置脚本..."
-        chmod +x "${{ env.DIY_SCRIPT }}"
-        cd "${{ env.SOURCE_PATH }}"
+        chmod +x "${{ github.workspace }}/${{ env.DIY_SCRIPT }}"
         "${{ github.workspace }}/${{ env.DIY_SCRIPT }}"
         
         echo "✅ 自定义配置加载完成"
@@ -454,10 +482,10 @@ jobs:
         
         # 生成 defconfig 后的软件包列表
         echo "📋 生成 defconfig 后的软件包列表..."
-        find package feeds -name "luci-app-*" -type d | sed 's/.*\///' | sort -u > reports/luci_packages_after.txt
+        find package feeds -name "luci-app-*" -type d 2>/dev/null | sed 's/.*\///' | sort -u > reports/luci_packages_after.txt
         
         # 统计数量
-        AFTER_COUNT=$(wc -l < reports/luci_packages_after.txt)
+        AFTER_COUNT=$(wc -l < reports/luci_packages_after.txt 2>/dev/null || echo "0")
         echo "📊 defconfig 后 LUCI 软件包数量: $AFTER_COUNT"
         
         # 生成对比报告
@@ -481,17 +509,29 @@ jobs:
           
           echo "🆕 新增的软件包 (defconfig 后新增):"
           echo "----------------------------------------"
-          comm -13 reports/luci_packages_before.txt reports/luci_packages_after.txt || echo "无新增软件包"
+          if [ -f reports/luci_packages_before.txt ] && [ -f reports/luci_packages_after.txt ]; then
+            comm -13 reports/luci_packages_before.txt reports/luci_packages_after.txt || echo "无新增软件包"
+          else
+            echo "无法生成对比（文件不存在）"
+          fi
           echo ""
           
           echo "🗑️  移除的软件包 (defconfig 后移除):"
           echo "----------------------------------------"
-          comm -23 reports/luci_packages_before.txt reports/luci_packages_after.txt || echo "无移除软件包"
+          if [ -f reports/luci_packages_before.txt ] && [ -f reports/luci_packages_after.txt ]; then
+            comm -23 reports/luci_packages_before.txt reports/luci_packages_after.txt || echo "无移除软件包"
+          else
+            echo "无法生成对比（文件不存在）"
+          fi
           echo ""
           
           echo "✅ 保持不变的软件包:"
           echo "----------------------------------------"
-          comm -12 reports/luci_packages_before.txt reports/luci_packages_after.txt || echo "无保持不变的软件包"
+          if [ -f reports/luci_packages_before.txt ] && [ -f reports/luci_packages_after.txt ]; then
+            comm -12 reports/luci_packages_before.txt reports/luci_packages_after.txt || echo "无保持不变的软件包"
+          else
+            echo "无法生成对比（文件不存在）"
+          fi
           echo ""
           
           echo "=================================================================="
@@ -520,7 +560,7 @@ jobs:
         cd "${{ env.SOURCE_PATH }}"
         
         # 提取设备列表
-        DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y$" .config | \
+        DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y$" .config 2>/dev/null | \
                   sed 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_\(.*\)=y$/\1/' | \
                   sort -u | tr '\n' ' ')
         
@@ -558,8 +598,8 @@ jobs:
         
         # 清理小文件
         echo "🧹 清理小文件..."
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+        find dl -size -1024c -exec ls -l {} \; 2>/dev/null || true
+        find dl -size -1024c -exec rm -f {} \; 2>/dev/null || true
         
         echo "✅ 软件包下载完成"
 
@@ -653,7 +693,16 @@ jobs:
         echo "📦 整理固件文件"
         echo "=================================================================="
         
-        cd "${{ env.SOURCE_PATH }}/bin/targets/*/*"
+        cd "${{ env.SOURCE_PATH }}"
+        
+        # 查找固件目录
+        FIRMWARE_DIR=$(find bin/targets -type d -name "*" | head -1)
+        if [ -z "$FIRMWARE_DIR" ]; then
+          echo "❌ 未找到固件目录"
+          exit 1
+        fi
+        
+        cd "$FIRMWARE_DIR"
         
         # 移除不需要的文件
         echo "🧹 清理不需要的文件..."
@@ -714,7 +763,6 @@ jobs:
         ## 📊 编译信息
         - **defconfig 前软件包**: ${{ steps.luci_report_before.outputs.before_count }}
         - **defconfig 后软件包**: ${{ steps.defconfig_report.outputs.after_count }}
-        - **编译耗时**: ${{ steps.post_build_check.outputs.duration }}
         
         ## 📦 包含文件
         $(cd ${{ env.FIRMWARE_PATH }} && ls -la | grep -E '\.(bin|img|tar)$' | awk '{print "- " $9}')
@@ -738,7 +786,7 @@ jobs:
       if: steps.release.outputs.tag != ''
       uses: softprops/action-gh-release@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ github.token }}
       with:
         tag_name: ${{ steps.release.outputs.tag }}
         body_path: ${{ steps.release.outputs.release_body }}
@@ -798,31 +846,39 @@ jobs:
     # -------------------------------------------------------------------------
     - name: 🗑️ 清理旧资源
       if: always()
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         echo "=================================================================="
         echo "🗑️ 清理旧资源"
         echo "=================================================================="
         
+        # 检查 GitHub CLI 是否可用
+        if ! command -v gh &> /dev/null; then
+          echo "⚠️ GitHub CLI 未安装，跳过清理"
+          exit 0
+        fi
+        
         # 清理旧的 workflow runs
         echo "🧹 清理旧的 workflow runs..."
         gh run list --repo ${{ github.repository }} --limit 50 \
           --json databaseId \
-          --jq '.[10:] | .[].databaseId' | \
-          xargs -I {} gh run delete --repo ${{ github.repository }} {} || true
+          --jq '.[10:] | .[].databaseId' 2>/dev/null | \
+          xargs -I {} gh run delete --repo ${{ github.repository }} {} 2>/dev/null || true
         
         # 清理旧的 releases
         echo "🧹 清理旧的 releases..."
         gh release list --repo ${{ github.repository }} --limit ${{ env.KEEP_RELEASES }} \
           --json tagName \
-          --jq '.[0].tagName' > latest_release.txt
+          --jq '.[0].tagName' 2>/dev/null > latest_release.txt
         
         if [ -s latest_release.txt ]; then
           LATEST_RELEASE=$(cat latest_release.txt)
           gh release list --repo ${{ github.repository }} \
             --exclude latest \
             --json tagName \
-            --jq ".[] | select(.tagName != \"$LATEST_RELEASE\") | .tagName" | \
-            xargs -I {} gh release delete --repo ${{ github.repository }} {} --yes || true
+            --jq ".[] | select(.tagName != \"$LATEST_RELEASE\") | .tagName" 2>/dev/null | \
+            xargs -I {} gh release delete --repo ${{ github.repository }} {} --yes 2>/dev/null || true
         fi
         
         echo "✅ 旧资源清理完成"
