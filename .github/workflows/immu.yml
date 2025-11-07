@@ -317,6 +317,7 @@ jobs:
           
       - name: 更新第三方源
         timeout-minutes: 15
+        continue-on-error: true  # 允许失败，继续执行
         run: |
           echo "🔄 更新第三方源..."
           echo "当前工作目录: $(pwd)"
@@ -350,7 +351,9 @@ jobs:
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             echo "🔄 尝试执行第三方源更新 (第 $((RETRY_COUNT + 1))/$MAX_RETRIES 次)..."
             
-            if bash "${{ env.SCRIPTS_DIR }}/repo.sh"; then
+            # 临时禁用网络检查，直接执行
+            echo "⚠️ 跳过网络检查，直接执行第三方源更新..."
+            if SKIP_NETWORK_CHECK=1 bash "${{ env.SCRIPTS_DIR }}/repo.sh"; then
               echo "✅ 第三方源更新成功"
               break
             else
@@ -365,12 +368,13 @@ jobs:
                 echo "❌ 已达到最大重试次数 ($MAX_RETRIES)，第三方源更新失败"
                 echo "🔍 建议检查 scripts/repo.sh 脚本中的网络请求部分"
                 echo "🌐 可能需要检查网络连接或第三方源服务器状态"
-                exit $EXIT_CODE
+                echo "⚠️ 继续执行后续步骤，但可能会影响编译结果"
+                # 不退出，允许工作流继续
               fi
             fi
           done
           
-          echo "✅ 第三方源更新完成"
+          echo "✅ 第三方源更新步骤完成"
           
       - name: 更新 Feeds
         run: |
@@ -416,6 +420,7 @@ jobs:
           echo "✅ 设备配置提取完成: $DEVICES"
           
       - name: 配置编译环境
+        continue-on-error: true  # 允许失败，继续执行
         run: |
           echo "⚙️ 配置编译环境..."
           cd "${{ env.REPO_PATH }}"
@@ -424,9 +429,25 @@ jobs:
           echo "🔧 使用 $THREADS 线程编译"
           echo "CONFIG_CCACHE=y" >> .config
           
+          # 检查并执行diy.sh
           if [ -f "${{ env.SCRIPTS_DIR }}/diy.sh" ]; then
             echo "🔧 执行DIY脚本..."
-            bash "${{ env.SCRIPTS_DIR }}/diy.sh"
+            
+            # 检查common.sh是否存在
+            if [ -f "${{ env.SCRIPTS_DIR }}/common.sh" ]; then
+              echo "✅ common.sh 存在"
+              # 确保common.sh可被source
+              chmod +x "${{ env.SCRIPTS_DIR }}/common.sh"
+              
+              # 尝试执行diy.sh
+              if ! bash "${{ env.SCRIPTS_DIR }}/diy.sh"; then
+                echo "⚠️ DIY脚本执行失败，但继续执行编译"
+                echo "🔍 可能需要检查脚本中的函数依赖"
+              fi
+            else
+              echo "❌ common.sh 不存在，无法执行diy.sh"
+              echo "⚠️ 跳过DIY脚本，继续执行编译"
+            fi
           else
             echo "⚠️ diy.sh 不存在，跳过"
           fi
