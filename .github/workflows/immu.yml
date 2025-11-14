@@ -11,7 +11,7 @@
 #
 # 作者: Mary
 # 日期：20251114
-# 版本: 3.3 - 修复语法错误版
+# 版本: 3.4 - 彻底修复语法错误版
 # ==============================================================================
 
 name: ImmortalWrt 固件编译工作流
@@ -43,12 +43,10 @@ on:
         - '1'
         - '2'
   workflow_call:
-  # schedule:
-  #   - cron: 0 20 * * *
 
 env:
   # 工作流版本
-  WORKFLOW_VERSION: "v3.3"
+  WORKFLOW_VERSION: "v3.4"
   # 源码仓库配置
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
