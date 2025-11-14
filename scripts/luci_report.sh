@@ -14,7 +14,7 @@
 #
 # 作者: Mary
 # 日期：20251107
-# 版本: 2.2 - 企业级优化版
+# 版本: 3.0 - 企业级优化版
 # ==============================================================================
 
 # 导入通用函数
@@ -38,9 +38,9 @@ DETAIL_REPORT="$REPORT_DIR/luci_packages_detail.txt"
 
 # 显示脚本信息
 show_script_info() {
-    log_step "LUCI 软件包变更报告生成脚本 v2.2"
+    log_step "LUCI 软件包变更报告生成脚本"
     log_info "作者: Mary"
-    log_info "版本: 2.2 - 企业级优化版"
+    log_info "版本: 3.0 - 企业级优化版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     log_info "配置文件: $CONFIG_FILE"
 }
