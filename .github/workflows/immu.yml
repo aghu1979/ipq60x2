@@ -1,3 +1,19 @@
+# ==============================================================================
+# ImmortalWrt 固件编译工作流
+#
+# 功能:
+#   自动化编译 ImmortalWrt 固件
+#   支持多种配置选项和Passwall更新方式
+#   集成磁盘空间扩展和缓存管理
+#
+# 使用方法:
+#   通过 GitHub Actions 手动触发或自动触发
+#
+# 作者: Mary
+# 日期：20251114
+# 版本: 3.3 - 修复语法错误版
+# ==============================================================================
+
 name: ImmortalWrt 固件编译工作流
 
 on:
@@ -32,7 +48,7 @@ on:
 
 env:
   # 工作流版本
-  WORKFLOW_VERSION: "v3.1"
+  WORKFLOW_VERSION: "v3.3"
   # 源码仓库配置
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
@@ -46,10 +62,6 @@ env:
   
   # 编译配置
   CLASH_KERNEL: amd64
-  UPLOAD_BIN_DIR: ${{ github.event.inputs.upload_bin_dir || 'false' }}
-  FIRMWARE_RELEASE: ${{ github.event.inputs.firmware_release || 'true' }}
-  FIRMWARE_TAG: ${{ github.event.inputs.firmware_tag || 'ImmortalWrt' }}
-  USE_PASSWALL_METHOD: ${{ github.event.inputs.use_passwall_method || '1' }}
   TZ: Asia/Shanghai
 
 jobs:
@@ -191,6 +203,7 @@ jobs:
         # 获取源码哈希
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
         
         echo "源码克隆完成"
         echo "========================"
@@ -199,7 +212,7 @@ jobs:
       run: |
         echo "========生成变量========"
         # 复制配置文件
-        cp $CONFIG_FILE $OPENWRT_PATH/.config
+        cp $GITHUB_WORKSPACE/$CONFIG_FILE $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
         
         # 执行defconfig
@@ -246,7 +259,7 @@ jobs:
         echo "========================"
 
     - name: 更新Passwall源 (方法1: feeds.conf)
-      if: env.USE_PASSWALL_METHOD == '1'
+      if: github.event.inputs.use_passwall_method == '1' || github.event.inputs.use_passwall_method == ''
       run: |
         echo "========更新Passwall源 (方法1: feeds.conf)========"
         cd $OPENWRT_PATH
@@ -273,7 +286,7 @@ jobs:
         echo "========================"
 
     - name: 更新Passwall源 (方法2: 手动克隆)
-      if: env.USE_PASSWALL_METHOD == '2'
+      if: github.event.inputs.use_passwall_method == '2'
       run: |
         echo "========更新Passwall源 (方法2: 手动克隆)========"
         cd $OPENWRT_PATH
@@ -347,7 +360,7 @@ jobs:
     - name: 加载自定义配置
       run: |
         echo "========加载自定义配置========"
-        chmod +x $DIY_SCRIPT
+        chmod +x $GITHUB_WORKSPACE/$DIY_SCRIPT
         cd $OPENWRT_PATH
         $GITHUB_WORKSPACE/$DIY_SCRIPT
         echo "自定义配置加载完成"
@@ -381,7 +394,6 @@ jobs:
         
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
         echo "固件编译完成"
         echo "========================"
 
@@ -393,7 +405,7 @@ jobs:
         echo "========================"
 
     - name: 上传Bin目录
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      if: steps.compile.outputs.status == 'success' && (github.event.inputs.upload_bin_dir == 'true' || github.event.inputs.upload_bin_dir == '')
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.REPO_NAME }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
@@ -430,26 +442,26 @@ jobs:
         echo "========================"
 
     - name: 上传固件到Artifact
-      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      if: steps.compile.outputs.status == 'success' && (github.event.inputs.firmware_release != 'true' && github.event.inputs.firmware_release != '')
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.REPO_NAME }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE_PATH }}
 
     - name: 发布固件到Release
-      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+      if: steps.compile.outputs.status == 'success' && (github.event.inputs.firmware_release == 'true' || github.event.inputs.firmware_release == '')
       uses: ncipollo/release-action@v1
       with:
-        name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+        name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }}
         allowUpdates: true
-        tag: ${{ env.FIRMWARE_TAG }}
+        tag: ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }}
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
-          **这是 ${{ env.FIRMWARE_TAG }} 平台使用的 ImmortalWrt 固件**
+          **这是 ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }} 平台使用的 ImmortalWrt 固件**
           ### 📒 固件信息
           - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了若干工具，具体详见对应机型的config。
-          - 💻 这是 ${{ env.FIRMWARE_TAG }} 平台使用的 ImmortalWrt 固件
+          - 💻 这是 ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }} 平台使用的 ImmortalWrt 固件
           - ⚽ 固件源码: ${{ env.REPO_URL }}
           - 💝 源码分支: ${{ env.REPO_BRANCH }}
           - 🌐 默认地址: **192.168.111.1**
@@ -459,7 +471,7 @@ jobs:
           - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
           - ${{ env.VERSION_INFO }}
           - 工作流版本: ${{ env.WORKFLOW_VERSION }}
-          - Passwall更新方法: 方法${{ env.USE_PASSWALL_METHOD }}
+          - Passwall更新方法: 方法${{ github.event.inputs.use_passwall_method || '1' }}
 
     - name: 删除旧缓存
       run: |
