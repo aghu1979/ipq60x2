@@ -11,7 +11,7 @@
 #
 # 作者: Mary
 # 日期：20251114
-# 版本: 3.5 - 最终修复语法错误版
+# 版本: 4.0 - 脚本整合优化版
 # ==============================================================================
 
 name: ImmortalWrt 固件编译工作流
@@ -46,7 +46,7 @@ on:
 
 env:
   # 工作流版本
-  WORKFLOW_VERSION: "v3.5"
+  WORKFLOW_VERSION: "4.0"
   # 源码仓库配置
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
@@ -54,12 +54,9 @@ env:
   
   # 配置文件路径
   CONFIG_FILE: configs/immu.config
-  DIY_SCRIPT: scripts/diy.sh
-  REPO_SCRIPT: scripts/repo.sh
-  LUCI_REPORT_SCRIPT: scripts/luci_report.sh
+  BUILD_SCRIPT: scripts/build.sh
   
   # 编译配置
-  CLASH_KERNEL: amd64
   TZ: Asia/Shanghai
 
 jobs:
@@ -201,37 +198,8 @@ jobs:
         # 获取源码哈希
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
         
         echo "源码克隆完成"
-        echo "========================"
-
-    - name: 生成变量
-      run: |
-        echo "========生成变量========"
-        # 复制配置文件
-        cp $GITHUB_WORKSPACE/$CONFIG_FILE $OPENWRT_PATH/.config
-        cd $OPENWRT_PATH
-        
-        # 执行defconfig
-        make defconfig > /dev/null 2>&1
-        
-        # 设置环境变量
-        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
-        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
-        
-        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        
-        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
-        
-        # 从配置文件中提取设备列表
-        DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y$" .config | sed 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_\(.*\)=y$/\1/' | sort -u | tr '\n' ' ')
-        echo "DEVICES=$DEVICES" >> $GITHUB_ENV
-        
-        echo "设备列表: $DEVICES"
-        echo "变量生成完成"
         echo "========================"
 
     - name: 缓存工具链
@@ -243,110 +211,26 @@ jobs:
           ${{ env.OPENWRT_PATH }}/.ccache
           ${{ env.OPENWRT_PATH }}/staging_dir
 
-    - name: 刷新缓存
+    - name: 执行编译流程
+      id: compile
+      env:
+        PASSWALL_METHOD: ${{ github.event.inputs.use_passwall_method || '1' }}
+        REPO_NAME: ${{ env.REPO_NAME }}
+        REPO_BRANCH: ${{ env.REPO_BRANCH }}
       run: |
-        echo "========刷新缓存========"
-        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
-          find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
-              find "$dir" -type f -exec touch {} +
-          done
-          echo "缓存刷新完成"
-        else
-          echo "缓存目录不存在，跳过刷新"
-        fi
-        echo "========================"
-
-    - name: 更新Passwall源 (方法1: feeds.conf)
-      if: github.event.inputs.use_passwall_method == '1' || github.event.inputs.use_passwall_method == ''
-      run: |
-        echo "========更新Passwall源 (方法1: feeds.conf)========"
-        cd $OPENWRT_PATH
-        
-        # 备份原始feeds.conf.default
-        cp feeds.conf.default feeds.conf.default.bak
-        
-        # 在feeds.conf.default顶部插入Passwall源
-        sed -i '1i\src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main' feeds.conf.default
-        sed -i '2i\src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main' feeds.conf.default
-        
-        echo "Passwall源已添加到feeds.conf.default"
-        echo "========================"
-
-    - name: 安装Feeds
-      run: |
-        echo "========安装Feeds========"
-        cd $OPENWRT_PATH
-        echo "更新Feeds..."
-        ./scripts/feeds update -a
-        echo "安装Feeds..."
-        ./scripts/feeds install -a
-        echo "Feeds安装完成"
-        echo "========================"
-
-    - name: 更新Passwall源 (方法2: 手动克隆)
-      if: github.event.inputs.use_passwall_method == '2'
-      run: |
-        echo "========更新Passwall源 (方法2: 手动克隆)========"
-        cd $OPENWRT_PATH
-        
-        # 移除 openwrt feeds 自带的核心库
-        echo "移除 openwrt feeds 自带的核心库..."
-        rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
-        
-        # 克隆passwall-packages
-        echo "克隆passwall-packages..."
-        git clone https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages
-        
-        # 移除 openwrt feeds 过时的luci版本
-        echo "移除 openwrt feeds 过时的luci版本..."
-        rm -rf feeds/luci/applications/luci-app-passwall
-        
-        # 克隆passwall-luci
-        echo "克隆passwall-luci..."
-        git clone https://github.com/xiaorouji/openwrt-passwall package/passwall-luci
-        
-        echo "Passwall源更新完成"
-        echo "========================"
-
-    - name: 显示编译前磁盘空间
-      run: |
-        echo "========编译前磁盘空间========"
-        df -hT
-        echo "========================"
-
-    - name: 更新第三方源并生成LUCI报告
-      run: |
-        echo "========更新第三方源并生成LUCI报告========"
-        cd $OPENWRT_PATH
+        echo "========执行编译流程========"
         
         # 设置脚本权限
-        chmod +x $GITHUB_WORKSPACE/$REPO_SCRIPT
-        chmod +x $GITHUB_WORKSPACE/$LUCI_REPORT_SCRIPT
+        chmod +x $GITHUB_WORKSPACE/$BUILD_SCRIPT
         
-        # 复制配置文件
-        cp $GITHUB_WORKSPACE/$CONFIG_FILE $OPENWRT_PATH/.config
+        # 执行编译脚本
+        $GITHUB_WORKSPACE/$BUILD_SCRIPT
         
-        # 运行repo.sh更新第三方源
-        echo "运行repo.sh更新第三方源..."
-        $GITHUB_WORKSPACE/$REPO_SCRIPT
+        # 设置编译状态
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         
-        # 运行luci_report.sh生成defconfig前的报告
-        echo "生成defconfig前的LUCI报告..."
-        $GITHUB_WORKSPACE/$LUCI_REPORT_SCRIPT $OPENWRT_PATH/.config
-        
-        # 执行defconfig
-        echo "执行make defconfig..."
-        make defconfig
-        
-        # 运行luci_report.sh生成defconfig后的报告
-        echo "生成defconfig后的LUCI报告..."
-        $GITHUB_WORKSPACE/$LUCI_REPORT_SCRIPT $OPENWRT_PATH/.config
-        
-        # 上传报告文件
-        mkdir -p $GITHUB_WORKSPACE/reports
-        cp -r $OPENWRT_PATH/reports/* $GITHUB_WORKSPACE/reports/ 2>/dev/null || true
-        
-        echo "第三方源更新和LUCI报告生成完成"
+        echo "编译流程执行完成"
         echo "========================"
 
     - name: 上传LUCI报告
@@ -355,99 +239,22 @@ jobs:
         name: ${{ env.REPO_NAME }}-luci-report-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
         path: reports/
 
-    - name: 加载自定义配置
-      run: |
-        echo "========加载自定义配置========"
-        chmod +x $GITHUB_WORKSPACE/$DIY_SCRIPT
-        cd $OPENWRT_PATH
-        $GITHUB_WORKSPACE/$DIY_SCRIPT
-        echo "自定义配置加载完成"
-        echo "========================"
-
-    - name: 下载DL软件包
-      run: |
-        echo "========下载DL软件包========"
-        cd $OPENWRT_PATH
-        cat $GITHUB_WORKSPACE/$CONFIG_FILE > .config
-        make defconfig
-        make download -j$(nproc)
-        echo "DL软件包下载完成"
-        echo "========================"
-
-    - name: 编译固件
-      id: compile
-      run: |
-        echo "========编译固件========"
-        cd $OPENWRT_PATH
-        echo -e "$(nproc) 线程编译"
-        
-        # 尝试多线程编译，失败则尝试单线程
-        if ! make -j$(nproc); then
-          echo "多线程编译失败，尝试单线程编译..."
-          if ! make -j1; then
-            echo "单线程编译失败，尝试详细模式编译..."
-            make -j1 V=s
-          fi
-        fi
-        
-        echo "status=success" >> $GITHUB_OUTPUT
-        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "固件编译完成"
-        echo "========================"
-
-    - name: 显示编译后磁盘空间
-      if: (!cancelled())
-      run: |
-        echo "========编译后磁盘空间========"
-        df -hT
-        echo "========================"
-
     - name: 上传Bin目录
-      if: steps.compile.outputs.status == 'success' && (github.event.inputs.upload_bin_dir == 'true' || github.event.inputs.upload_bin_dir == '')
+      if: steps.compile.outputs.status == 'success' && github.event.inputs.upload_bin_dir == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.REPO_NAME }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
         path: ${{ env.OPENWRT_PATH }}/bin
 
-    - name: 整理文件
-      if: steps.compile.outputs.status == 'success'
-      run: |
-        echo "========整理文件========"
-        cd $OPENWRT_PATH/bin/targets/*/*
-        
-        # 复制配置文件
-        cp $OPENWRT_PATH/.config ImmortalWrt.config
-        
-        # 重命名文件
-        mv config.buildinfo ImmortalWrt.config.buildinfo
-        mv immortalwrt-qualcommax-ipq60xx.manifest immortalwrt-qualcommax-ipq60xx-ImmortalWrt.manifest
-        
-        # 处理包文件
-        if [ -d "$OPENWRT_PATH/bin/packages" ]; then
-          mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages 2>/dev/null || true
-          if [ -d "packages" ]; then
-            tar -zcf ImmortalWrt.Packages.tar.gz packages
-          fi
-        fi
-        
-        # 删除不需要的文件
-        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
-        
-        # 设置环境变量
-        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
-        
-        echo "文件整理完成"
-        echo "========================"
-
     - name: 上传固件到Artifact
-      if: steps.compile.outputs.status == 'success' && (github.event.inputs.firmware_release != 'true' && github.event.inputs.firmware_release != '')
+      if: steps.compile.outputs.status == 'success' && github.event.inputs.firmware_release == 'false'
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.REPO_NAME }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE_PATH }}
 
     - name: 发布固件到Release
-      if: steps.compile.outputs.status == 'success' && (github.event.inputs.firmware_release == 'true' || github.event.inputs.firmware_release == '')
+      if: steps.compile.outputs.status == 'success' && github.event.inputs.firmware_release == 'true'
       uses: ncipollo/release-action@v1
       with:
         name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }}
@@ -455,32 +262,4 @@ jobs:
         tag: ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }}
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
-        body: >-
-          **这是 ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }} 平台使用的 ImmortalWrt 固件**
-          ### 📒 固件信息
-          - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了若干工具，具体详见对应机型的config。
-          - 💻 这是 ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }} 平台使用的 ImmortalWrt 固件
-          - ⚽ 固件源码: ${{ env.REPO_URL }}
-          - 💝 源码分支: ${{ env.REPO_BRANCH }}
-          - 🌐 默认地址: **192.168.111.1**
-          - 🔑 默认密码: none
-          ### 🧊 固件版本
-          - 固件内核版本：**${{ env.VERSION_KERNEL }}**
-          - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
-          - ${{ env.VERSION_INFO }}
-          - 工作流版本: ${{ env.WORKFLOW_VERSION }}
-          - Passwall更新方法: 方法${{ github.event.inputs.use_passwall_method || '1' }}
-
-    - name: 删除旧缓存
-      run: |
-        echo "========删除旧缓存========"
-        # 获取缓存列表并删除
-        gh cache list --key ${{ env.REPO_NAME }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
-          gh cache delete "$key"
-        done
-        # 输出缓存状态
-        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache 2>/dev/null | cut -f 1 || echo "0")"
-        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir 2>/dev/null | cut -f 1 || echo "0")"
-        echo "========================"
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        body: "**这是 ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }} 平台使用的 ImmortalWrt 固件**\n\n### 📒 固件信息\n- 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了若干工具，具体详见对应机型的config。\n- 💻 这是 ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }} 平台使用的 ImmortalWrt 固件\n- ⚽ 固件源码: ${{ env.REPO_URL }}\n- 💝 源码分支: ${{ env.REPO_BRANCH }}\n- 🌐 默认地址: **192.168.111.1**\n- 🔑 默认密码: none\n\n### 🧊 固件版本\n- 固件内核版本：**${{ env.VERSION_KERNEL }}**\n- 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录\n- ${{ env.VERSION_INFO }}\n- 工作流版本: ${{ env.WORKFLOW_VERSION }}\n- Passwall更新方法: 方法${{ github.event.inputs.use_passwall_method || '1' }}"
