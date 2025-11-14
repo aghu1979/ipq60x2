@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：20251114
-# 版本: 3.1 - 优化软件包检测版
+# 版本: 3.2 - 修复语法错误版
 # ==============================================================================
 
 # 导入通用函数
@@ -63,7 +63,7 @@ declare -A SPECIAL_HANDLING=(
 declare -A CONFLICTING_PACKAGES=(
     ["luci-app-lucky"]="luci-app-lucky-sirpdboy"
     ["luci-app-homeproxy"]="homeproxy"
-    ["luci-app-openclash"]="luci-app-passwall luci-app-mosdns"
+    ["luci-app-openclash"]="luci-app-passwall2 luci-app-mosdns"
     ["luci-app-tailscale"]="tailscale"
     ["luci-app-vnt"]="vnt"
     ["luci-app-momo"]="sing-box"
@@ -111,7 +111,7 @@ declare -A FEEDS_PACKAGES=(
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 3.1 - 优化软件包检测版"
+    log_info "版本: 3.2 - 修复语法错误版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
