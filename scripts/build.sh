@@ -1,0 +1,358 @@
+#!/bin/bash
+
+# ==============================================================================
+# OpenWrt/ImmortalWrt 编译整合脚本
+#
+# 功能:
+#   整合编译过程中的多个步骤
+#   包括变量生成、缓存刷新、源更新、编译等
+#
+# 使用方法:
+#   在 OpenWrt/ImmortalWrt 源码根目录下运行此脚本
+#
+# 作者: Mary
+# 日期：20251114
+# 版本: 1.0 - 初始版本
+# ==============================================================================
+
+# 导入通用函数
+source "$(dirname "$0")/common.sh"
+
+# --- 配置变量 ---
+# OpenWRT路径从环境变量获取
+OPENWRT_PATH="${OPENWRT_PATH:-/mnt/openwrt}"
+# 工作空间路径
+GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$(pwd)}"
+# Passwall方法
+PASSWALL_METHOD="${PASSWALL_METHOD:-1}"
+
+# --- 主函数 ---
+
+# 显示脚本信息
+show_script_info() {
+    log_step "OpenWrt/ImmortalWrt 编译整合脚本"
+    log_info "作者: Mary"
+    log_info "版本: 1.0 - 初始版本"
+    log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    log_info "OpenWRT路径: $OPENWRT_PATH"
+    log_info "Passwall方法: $PASSWALL_METHOD"
+}
+
+# 检查环境
+check_environment() {
+    log_info "检查执行环境..."
+    
+    # 检查OpenWRT路径
+    if [ ! -d "$OPENWRT_PATH" ]; then
+        log_error "OpenWRT路径不存在: $OPENWRT_PATH"
+        return 1
+    fi
+    
+    # 检查配置文件
+    if [ ! -f "$GITHUB_WORKSPACE/configs/immu.config" ]; then
+        log_error "配置文件不存在: $GITHUB_WORKSPACE/configs/immu.config"
+        return 1
+    fi
+    
+    log_success "环境检查通过"
+    return 0
+}
+
+# 生成变量
+generate_variables() {
+    log_info "生成变量..."
+    
+    cd $OPENWRT_PATH
+    
+    # 复制配置文件
+    cp $GITHUB_WORKSPACE/configs/immu.config .config
+    
+    # 执行defconfig
+    make defconfig > /dev/null 2>&1
+    
+    # 设置环境变量
+    SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
+    echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+    
+    DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+    echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+    
+    DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+    echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+    
+    # 从配置文件中提取设备列表
+    DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y$" .config | sed 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_\(.*\)=y$/\1/' | sort -u | tr '\n' ' ')
+    echo "DEVICES=$DEVICES" >> $GITHUB_ENV
+    
+    # 获取文件日期
+    echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+    
+    log_success "变量生成完成"
+    log_info "设备列表: $DEVICES"
+}
+
+# 刷新缓存
+refresh_cache() {
+    log_info "刷新缓存..."
+    
+    if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+        find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+            find "$dir" -type f -exec touch {} +
+        done
+        log_success "缓存刷新完成"
+    else
+        log_warning "缓存目录不存在，跳过刷新"
+    fi
+}
+
+# 更新Passwall源
+update_passwall_source() {
+    log_info "更新Passwall源 (方法$PASSWALL_METHOD)..."
+    
+    cd $OPENWRT_PATH
+    
+    case "$PASSWALL_METHOD" in
+        "1")
+            # 方法1: feeds.conf
+            log_info "使用方法1: feeds.conf"
+            # 备份原始feeds.conf.default
+            cp feeds.conf.default feeds.conf.default.bak
+            # 在feeds.conf.default顶部插入Passwall源
+            sed -i '1i\src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main' feeds.conf.default
+            sed -i '2i\src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main' feeds.conf.default
+            ;;
+        "2")
+            # 方法2: 手动克隆
+            log_info "使用方法2: 手动克隆"
+            # 移除 openwrt feeds 自带的核心库
+            rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+            # 克隆passwall-packages
+            git clone https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages
+            # 移除 openwrt feeds 过时的luci版本
+            rm -rf feeds/luci/applications/luci-app-passwall
+            # 克隆passwall-luci
+            git clone https://github.com/xiaorouji/openwrt-passwall package/passwall-luci
+            ;;
+        *)
+            log_error "未知的Passwall方法: $PASSWALL_METHOD"
+            return 1
+            ;;
+    esac
+    
+    log_success "Passwall源更新完成"
+}
+
+# 安装Feeds
+install_feeds() {
+    log_info "安装Feeds..."
+    
+    cd $OPENWRT_PATH
+    
+    log_info "更新Feeds..."
+    ./scripts/feeds update -a
+    
+    log_info "安装Feeds..."
+    ./scripts/feeds install -a
+    
+    log_success "Feeds安装完成"
+}
+
+# 显示磁盘空间
+show_disk_space() {
+    local description="$1"
+    log_disk "磁盘空间 ($description):"
+    df -hT
+}
+
+# 更新第三方源并生成LUCI报告
+update_sources_and_generate_report() {
+    log_info "更新第三方源并生成LUCI报告..."
+    
+    cd $OPENWRT_PATH
+    
+    # 设置脚本权限
+    chmod +x $GITHUB_WORKSPACE/scripts/repo.sh
+    chmod +x $GITHUB_WORKSPACE/scripts/luci_report.sh
+    
+    # 复制配置文件
+    cp $GITHUB_WORKSPACE/configs/immu.config .config
+    
+    # 运行repo.sh更新第三方源
+    log_info "运行repo.sh更新第三方源..."
+    $GITHUB_WORKSPACE/scripts/repo.sh
+    
+    # 运行luci_report.sh生成defconfig前的报告
+    log_info "生成defconfig前的LUCI报告..."
+    $GITHUB_WORKSPACE/scripts/luci_report.sh .config
+    
+    # 执行defconfig
+    log_info "执行make defconfig..."
+    make defconfig
+    
+    # 运行luci_report.sh生成defconfig后的报告
+    log_info "生成defconfig后的LUCI报告..."
+    $GITHUB_WORKSPACE/scripts/luci_report.sh .config
+    
+    # 上传报告文件
+    mkdir -p $GITHUB_WORKSPACE/reports
+    cp -r reports/* $GITHUB_WORKSPACE/reports/ 2>/dev/null || true
+    
+    log_success "第三方源更新和LUCI报告生成完成"
+}
+
+# 加载自定义配置
+load_custom_config() {
+    log_info "加载自定义配置..."
+    
+    cd $OPENWRT_PATH
+    chmod +x $GITHUB_WORKSPACE/scripts/diy.sh
+    $GITHUB_WORKSPACE/scripts/diy.sh
+    
+    log_success "自定义配置加载完成"
+}
+
+# 下载DL软件包
+download_packages() {
+    log_info "下载DL软件包..."
+    
+    cd $OPENWRT_PATH
+    cat $GITHUB_WORKSPACE/configs/immu.config > .config
+    make defconfig
+    make download -j$(nproc)
+    
+    log_success "DL软件包下载完成"
+}
+
+# 编译固件
+compile_firmware() {
+    log_info "编译固件..."
+    
+    cd $OPENWRT_PATH
+    echo -e "$(nproc) 线程编译"
+    
+    # 尝试多线程编译，失败则尝试单线程
+    if ! make -j$(nproc); then
+        log_warning "多线程编译失败，尝试单线程编译..."
+        if ! make -j1; then
+            log_warning "单线程编译失败，尝试详细模式编译..."
+            make -j1 V=s
+        fi
+    fi
+    
+    log_success "固件编译完成"
+}
+
+# 整理文件
+organize_files() {
+    log_info "整理文件..."
+    
+    cd $OPENWRT_PATH/bin/targets/*/*
+    
+    # 复制配置文件
+    cp $OPENWRT_PATH/.config ImmortalWrt.config
+    
+    # 重命名文件
+    mv config.buildinfo ImmortalWrt.config.buildinfo
+    mv immortalwrt-qualcommax-ipq60xx.manifest immortalwrt-qualcommax-ipq60xx-ImmortalWrt.manifest
+    
+    # 处理包文件
+    if [ -d "$OPENWRT_PATH/bin/packages" ]; then
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages 2>/dev/null || true
+        if [ -d "packages" ]; then
+            tar -zcf ImmortalWrt.Packages.tar.gz packages
+        fi
+    fi
+    
+    # 删除不需要的文件
+    rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
+    
+    # 设置环境变量
+    echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+    
+    log_success "文件整理完成"
+}
+
+# 删除旧缓存
+delete_old_cache() {
+    log_info "删除旧缓存..."
+    
+    # 获取缓存列表并删除
+    gh cache list --key $REPO_NAME-$REPO_BRANCH-$DEVICE_TARGET-$DEVICE_SUBTARGET- --json key --jq '.[] | .key' | while read -r key; do
+        gh cache delete "$key"
+    done
+    
+    # 输出缓存状态
+    echo "ccache: $(du -sh $OPENWRT_PATH/.ccache 2>/dev/null | cut -f 1 || echo "0")"
+    echo "staging: $(du -sh $OPENWRT_PATH/staging_dir 2>/dev/null | cut -f 1 || echo "0")"
+    
+    log_success "旧缓存删除完成"
+}
+
+# =============================================================================
+# 主执行流程
+# =============================================================================
+
+main() {
+    # 记录开始时间
+    local start_time=$(date +%s)
+    
+    # 显示脚本信息
+    show_script_info
+    
+    # 检查环境
+    if check_environment; then
+        # 生成变量
+        generate_variables
+        
+        # 刷新缓存
+        refresh_cache
+        
+        # 更新Passwall源
+        update_passwall_source
+        
+        # 安装Feeds
+        install_feeds
+        
+        # 显示编译前磁盘空间
+        show_disk_space "编译前"
+        
+        # 更新第三方源并生成LUCI报告
+        update_sources_and_generate_report
+        
+        # 加载自定义配置
+        load_custom_config
+        
+        # 下载DL软件包
+        download_packages
+        
+        # 编译固件
+        compile_firmware
+        
+        # 显示编译后磁盘空间
+        show_disk_space "编译后"
+        
+        # 整理文件
+        organize_files
+        
+        # 删除旧缓存
+        delete_old_cache
+    else
+        log_error "环境检查失败，终止执行"
+        exit 1
+    fi
+    
+    # 计算执行时间
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    log_time "总执行时间: ${duration}秒"
+    
+    # 返回执行结果
+    if [ $ERROR_COUNT -eq 0 ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 执行主函数
+main "$@"
