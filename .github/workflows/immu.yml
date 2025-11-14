@@ -18,11 +18,21 @@ on:
         required: false
         default: true
         type: boolean
+      use_passwall_method:
+        description: 'Passwall更新方法 (1=feeds.conf, 2=手动克隆)'
+        required: false
+        default: '1'
+        type: choice
+        options:
+        - '1'
+        - '2'
   workflow_call:
   # schedule:
   #   - cron: 0 20 * * *
 
 env:
+  # 工作流版本
+  WORKFLOW_VERSION: "v3.1"
   # 源码仓库配置
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
@@ -39,6 +49,7 @@ env:
   UPLOAD_BIN_DIR: ${{ github.event.inputs.upload_bin_dir || 'false' }}
   FIRMWARE_RELEASE: ${{ github.event.inputs.firmware_release || 'true' }}
   FIRMWARE_TAG: ${{ github.event.inputs.firmware_tag || 'ImmortalWrt' }}
+  USE_PASSWALL_METHOD: ${{ github.event.inputs.use_passwall_method || '1' }}
   TZ: Asia/Shanghai
 
 jobs:
@@ -74,10 +85,14 @@ jobs:
       run: |
         echo "========扩展磁盘空间========"
         
-        # 检查可用磁盘
+        # 显示当前磁盘使用情况
+        echo "当前磁盘使用情况:"
         df -hT
         
         # 尝试扩展磁盘空间
+        EXTENDED=false
+        
+        # 检查可用磁盘设备
         if [ -b /dev/sda ]; then
           DEVICE="sda"
         elif [ -b /dev/sdb ]; then
@@ -93,20 +108,56 @@ jobs:
         sudo fdisk -l /dev/$DEVICE
         
         # 尝试扩展分区
-        if sudo growpart /dev/$DEVICE 1; then
+        if sudo growpart /dev/$DEVICE 1 2>/dev/null; then
           echo "分区扩展成功"
           # 扩展文件系统
-          if sudo resize2fs /dev/${DEVICE}1; then
-            echo "文件系统扩展成功"
+          if sudo resize2fs /dev/${DEVICE}1 2>/dev/null; then
+            echo "ext4文件系统扩展成功"
+            EXTENDED=true
+          elif sudo xfs_growfs / 2>/dev/null; then
+            echo "XFS文件系统扩展成功"
+            EXTENDED=true
           else
-            echo "文件系统扩展失败，尝试xfs文件系统"
-            sudo xfs_growfs /
+            echo "文件系统扩展失败"
           fi
         else
           echo "分区扩展失败，可能已经是最大分区"
         fi
         
-        # 再次检查磁盘空间
+        # 如果扩展失败，使用软链接方式扩展空间
+        if [ "$EXTENDED" = "false" ]; then
+          echo "使用软链接方式扩展空间..."
+          
+          # 创建临时目录在更大的分区上
+          if [ -d /mnt ] && df /mnt | awk 'NR==2 {print $4}' | grep -q 'G'; then
+            TEMP_DIR="/mnt/openwrt-temp"
+          elif [ -d /tmp ] && df /tmp | awk 'NR==2 {print $4}' | grep -q 'G'; then
+            TEMP_DIR="/tmp/openwrt-temp"
+          else
+            echo "未找到合适的分区用于创建软链接"
+            exit 1
+          fi
+          
+          echo "创建临时目录: $TEMP_DIR"
+          sudo mkdir -p "$TEMP_DIR"
+          sudo chown $(id -u):$(id -g) "$TEMP_DIR"
+          
+          # 移动现有内容到临时目录
+          if [ -d "$GITHUB_WORKSPACE" ]; then
+            echo "移动工作空间内容到临时目录..."
+            mv "$GITHUB_WORKSPACE"/* "$TEMP_DIR/" 2>/dev/null || true
+          fi
+          
+          # 创建软链接
+          echo "创建软链接: $TEMP_DIR -> $GITHUB_WORKSPACE"
+          sudo ln -sf "$TEMP_DIR" "$GITHUB_WORKSPACE"
+          
+          # 重新设置权限
+          sudo chown -R $(id -u):$(id -g) "$TEMP_DIR"
+        fi
+        
+        # 显示扩展后的磁盘空间
+        echo "扩展后的磁盘使用情况:"
         df -hT
         echo "========================"
 
@@ -194,6 +245,22 @@ jobs:
         fi
         echo "========================"
 
+    - name: 更新Passwall源 (方法1: feeds.conf)
+      if: env.USE_PASSWALL_METHOD == '1'
+      run: |
+        echo "========更新Passwall源 (方法1: feeds.conf)========"
+        cd $OPENWRT_PATH
+        
+        # 备份原始feeds.conf.default
+        cp feeds.conf.default feeds.conf.default.bak
+        
+        # 在feeds.conf.default顶部插入Passwall源
+        sed -i '1i\src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main' feeds.conf.default
+        sed -i '2i\src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main' feeds.conf.default
+        
+        echo "Passwall源已添加到feeds.conf.default"
+        echo "========================"
+
     - name: 安装Feeds
       run: |
         echo "========安装Feeds========"
@@ -203,6 +270,31 @@ jobs:
         echo "安装Feeds..."
         ./scripts/feeds install -a
         echo "Feeds安装完成"
+        echo "========================"
+
+    - name: 更新Passwall源 (方法2: 手动克隆)
+      if: env.USE_PASSWALL_METHOD == '2'
+      run: |
+        echo "========更新Passwall源 (方法2: 手动克隆)========"
+        cd $OPENWRT_PATH
+        
+        # 移除 openwrt feeds 自带的核心库
+        echo "移除 openwrt feeds 自带的核心库..."
+        rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
+        
+        # 克隆passwall-packages
+        echo "克隆passwall-packages..."
+        git clone https://github.com/xiaorouji/openwrt-passwall-packages package/passwall-packages
+        
+        # 移除 openwrt feeds 过时的luci版本
+        echo "移除 openwrt feeds 过时的luci版本..."
+        rm -rf feeds/luci/applications/luci-app-passwall
+        
+        # 克隆passwall-luci
+        echo "克隆passwall-luci..."
+        git clone https://github.com/xiaorouji/openwrt-passwall package/passwall-luci
+        
+        echo "Passwall源更新完成"
         echo "========================"
 
     - name: 显示编译前磁盘空间
@@ -366,6 +458,8 @@ jobs:
           - 固件内核版本：**${{ env.VERSION_KERNEL }}**
           - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
           - ${{ env.VERSION_INFO }}
+          - 工作流版本: ${{ env.WORKFLOW_VERSION }}
+          - Passwall更新方法: 方法${{ env.USE_PASSWALL_METHOD }}
 
     - name: 删除旧缓存
       run: |
