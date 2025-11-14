@@ -8,7 +8,7 @@
 #
 # 作者: Mary
 # 日期：20251107
-# 版本: 1.0 - 初始版本
+# 版本: 1.1 - 企业级优化版
 # ==============================================================================
 
 # --- 颜色定义 ---
@@ -201,18 +201,32 @@ check_network() {
     local test_urls=(
         "https://www.github.com"
         "https://api.github.com"
+        "https://raw.githubusercontent.com"
     )
+    
+    local success_count=0
+    local total_count=${#test_urls[@]}
     
     for url in "${test_urls[@]}"; do
         log_debug "测试连接: $url"
-        if curl -s --connect-timeout 5 --max-time 10 "$url" > /dev/null 2>&1; then
-            log_success "网络连接正常"
-            return 0
+        if curl -s --connect-timeout 10 --max-time 30 --retry 3 --retry-delay 5 "$url" > /dev/null 2>&1; then
+            ((success_count++))
+            log_debug "连接成功: $url"
+        else
+            log_debug "连接失败: $url"
         fi
     done
     
-    log_error "网络连接异常"
-    return 1
+    local success_rate=$((success_count * 100 / total_count))
+    log_info "网络连接成功率: ${success_rate}% ($success_count/$total_count)"
+    
+    if [ $success_rate -ge 66 ]; then
+        log_success "网络连接正常"
+        return 0
+    else
+        log_error "网络连接异常"
+        return 1
+    fi
 }
 
 # Git 克隆函数
