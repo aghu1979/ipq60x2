@@ -9,7 +9,7 @@
 #
 # 作者: Mary
 # 日期: 20251107
-# 版本: 3.4 - 路径权限修复版
+# 版本: 3.5 - 路径权限修复版
 # ==============================================================================
 
 name: ImmortalWrt Auto Build
@@ -44,13 +44,14 @@ on:
 # 全局环境变量
 env:
   # === 版本控制 ===
-  WORKFLOW_VERSION: "3.4"
+  WORKFLOW_VERSION: "3.5"
   BUILD_DATE: "${{ github.run_number }}-${{ github.sha }}"
   
   # === 仓库配置 ===
   REPO_URL: "https://github.com/laipeng668/immortalwrt.git"
   REPO_BRANCH: "master"
   REPO_NAME: "immortalwrt"
+  REPO_SHORT_NAME: "immwrt"
   
   # === 文件路径 ===
   CONFIG_FILE: "configs/immu.config"
@@ -86,8 +87,8 @@ jobs:
   # 主编译任务
   # ==============================================================================
   build:
-    # 运行环境：支持 Ubuntu 22.04 和 24.04
-    runs-on: ubuntu-22.04
+    # 运行环境：支持 Ubuntu 24.04
+    runs-on: ubuntu-24.04
     if: github.event.repository.owner.id == github.event.sender.id
     
     # 设置 GitHub Token 环境变量
@@ -147,7 +148,7 @@ jobs:
         echo "SOURCE_PATH=${{ env.WORKSPACE_DIR }}/${{ env.REPO_NAME }}" >> $GITHUB_ENV
         echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
         echo "BUILD_ID=${{ github.run_number }}-${{ github.sha }}" >> $GITHUB_ENV
-        echo "CACHE_KEY_PREFIX=immortalwrt-${{ env.CACHE_VERSION }}" >> $GITHUB_ENV
+        echo "CACHE_KEY_PREFIX=${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}" >> $GITHUB_ENV
         
         # 检查脚本文件是否存在
         echo "🔍 检查脚本文件..."
@@ -214,27 +215,37 @@ jobs:
         echo "📊 扩展前磁盘空间:"
         df -hT
         
-        # 检查设备是否存在
-        if [ ! -b "${{ env.DISK_DEVICE }}" ]; then
-          echo "⚠️ 设备 ${{ env.DISK_DEVICE }} 不存在，跳过磁盘扩展"
+        # 检查可用设备
+        AVAILABLE_DEVICES=""
+        for device in "${{ env.DISK_DEVICE }}" "/dev/sdb1"; do
+          if [ -b "$device" ]; then
+            AVAILABLE_DEVICES="$device"
+            break
+          fi
+        done
+        
+        if [ -z "$AVAILABLE_DEVICES" ]; then
+          echo "⚠️ 未找到可用设备，跳过磁盘扩展"
           echo "📊 可用设备:"
           lsblk | grep -E "disk|part"
           exit 0
         fi
         
+        echo "🔧 使用设备: $AVAILABLE_DEVICES"
+        
         # 检查是否已挂载
-        if ! mount | grep -q "${{ env.DISK_DEVICE }}"; then
-          echo "⚠️ 设备 ${{ env.DISK_DEVICE }} 未挂载，跳过磁盘扩展"
+        if ! mount | grep -q "$AVAILABLE_DEVICES"; then
+          echo "⚠️ 设备 $AVAILABLE_DEVICES 未挂载，跳过磁盘扩展"
           exit 0
         fi
         
         # 获取挂载点
-        MOUNT_POINT=$(mount | grep "${{ env.DISK_DEVICE }}" | awk '{print $3}')
+        MOUNT_POINT=$(mount | grep "$AVAILABLE_DEVICES" | awk '{print $3}')
         echo "📍 设备挂载点: $MOUNT_POINT"
         
         # 检查是否是根分区
         if [ "$MOUNT_POINT" = "/" ]; then
-          echo "⚠️ 设备 ${{ env.DISK_DEVICE }} 是根分区，使用软链接方式扩展"
+          echo "⚠️ 设备 $AVAILABLE_DEVICES 是根分区，使用软链接方式扩展"
         fi
         
         # 创建扩展工作目录
@@ -277,10 +288,10 @@ jobs:
           ${{ env.WORKSPACE_DIR }}/${{ env.REPO_NAME }}
           ${{ env.WORKSPACE_DIR }}/ccache
           ${{ env.WORKSPACE_DIR }}/dl
-        key: "immortalwrt-${{ env.CACHE_VERSION }}-${{ github.run_number }}-${{ github.sha }}"
+        key: "${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}-${{ github.run_number }}-${{ github.sha }}"
         restore-keys: |
-          immortalwrt-${{ env.CACHE_VERSION }}-
-          immortalwrt-${{ env.CACHE_VERSION }}-${{ env.REPO_BRANCH }}-
+          ${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}-
+          ${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}-${{ env.REPO_BRANCH }}-
 
     # -------------------------------------------------------------------------
     # 6. 源码获取
@@ -468,20 +479,15 @@ jobs:
         
         cd "${{ env.SOURCE_PATH }}"
         
-        # 创建报告目录
-        mkdir -p reports
-        
-        # 生成 defconfig 前的软件包列表
-        echo "📋 生成 defconfig 前的软件包列表..."
-        find package feeds -name "luci-app-*" -type d 2>/dev/null | sed 's/.*\///' | sort -u > reports/luci_packages_before.txt
-        
-        # 统计数量
-        BEFORE_COUNT=$(wc -l < reports/luci_packages_before.txt 2>/dev/null || echo "0")
-        echo "📊 defconfig 前 LUCI 软件包数量: $BEFORE_COUNT"
-        
-        # 设置输出变量
-        echo "before_count=$BEFORE_COUNT" >> $GITHUB_OUTPUT
-        echo "before_list=reports/luci_packages_before.txt" >> $GITHUB_OUTPUT
+        # 执行 luci_report.sh
+        if [ -f "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}" ]; then
+          echo "🔧 执行 LUCI 报告脚本..."
+          chmod +x "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}"
+          "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}" "${{ env.SOURCE_CODE_DIR }}/${{ env.CONFIG_FILE }}"
+        else
+          echo "❌ LUCI 报告脚本不存在: ${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}"
+          exit 1
+        fi
         
         echo "✅ defconfig 前 LUCI 报告生成完成"
 
@@ -611,70 +617,15 @@ jobs:
           exit 1
         fi
         
-        # 生成 defconfig 后的软件包列表
-        echo "📋 生成 defconfig 后的软件包列表..."
-        find package feeds -name "luci-app-*" -type d 2>/dev/null | sed 's/.*\///' | sort -u > reports/luci_packages_after.txt
-        
-        # 统计数量
-        AFTER_COUNT=$(wc -l < reports/luci_packages_after.txt 2>/dev/null || echo "0")
-        echo "📊 defconfig 后 LUCI 软件包数量: $AFTER_COUNT"
-        
-        # 生成对比报告
-        echo "📊 生成 LUCI 软件包对比报告..."
-        {
-          echo "=================================================================="
-          echo "LUCI 软件包变更报告"
-          echo "=================================================================="
-          echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
-          echo "配置文件: ${{ env.CONFIG_FILE }}"
-          echo "仓库版本: ${{ env.REPO_VERSION }}"
-          echo "提交哈希: ${{ env.REPO_COMMIT }}"
-          echo ""
-          
-          echo "📊 统计信息:"
-          echo "----------------------------------------"
-          echo "defconfig 前软件包数量: ${{ steps.luci_report_before.outputs.before_count }}"
-          echo "defconfig 后软件包数量: $AFTER_COUNT"
-          echo "变更数量: $(($AFTER_COUNT - ${{ steps.luci_report_before.outputs.before_count }}))"
-          echo ""
-          
-          echo "🆕 新增的软件包 (defconfig 后新增):"
-          echo "----------------------------------------"
-          if [ -f reports/luci_packages_before.txt ] && [ -f reports/luci_packages_after.txt ]; then
-            comm -13 reports/luci_packages_before.txt reports/luci_packages_after.txt || echo "无新增软件包"
-          else
-            echo "无法生成对比（文件不存在）"
-          fi
-          echo ""
-          
-          echo "🗑️  移除的软件包 (defconfig 后移除):"
-          echo "----------------------------------------"
-          if [ -f reports/luci_packages_before.txt ] && [ -f reports/luci_packages_after.txt ]; then
-            comm -23 reports/luci_packages_before.txt reports/luci_packages_after.txt || echo "无移除软件包"
-          else
-            echo "无法生成对比（文件不存在）"
-          fi
-          echo ""
-          
-          echo "✅ 保持不变的软件包:"
-          echo "----------------------------------------"
-          if [ -f reports/luci_packages_before.txt ] && [ -f reports/luci_packages_after.txt ]; then
-            comm -12 reports/luci_packages_before.txt reports/luci_packages_after.txt || echo "无保持不变的软件包"
-          else
-            echo "无法生成对比（文件不存在）"
-          fi
-          echo ""
-          
-          echo "=================================================================="
-        } > reports/luci_packages_diff.txt
-        
-        # 设置输出变量
-        echo "after_count=$AFTER_COUNT" >> $GITHUB_OUTPUT
-        echo "diff_report=reports/luci_packages_diff.txt" >> $GITHUB_OUTPUT
-        
-        # 显示报告
-        echo "📊 LUCI 软件包对比报告:"
-        cat reports/luci_packages_diff.txt
+        # 生成 defconfig 后的 LUCI 报告
+        if [ -f "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}" ]; then
+          echo "🔧 执行 LUCI 报告脚本..."
+          chmod +x "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}"
+          "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}" "${{ env.SOURCE_CODE_DIR }}/${{ env.CONFIG_FILE }}"
+        else
+          echo "❌ LUCI 报告脚本不存在: ${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}"
+          exit 1
+        fi
         
         echo "✅ defconfig 和对比报告生成完成"
 
@@ -823,7 +774,7 @@ jobs:
           ${{ env.WORKSPACE_DIR }}/${{ env.REPO_NAME }}
           ${{ env.WORKSPACE_DIR }}/ccache
           ${{ env.WORKSPACE_DIR }}/dl
-        key: "immortalwrt-${{ env.CACHE_VERSION }}-${{ github.run_number }}-${{ github.sha }}"
+        key: "${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}-${{ github.run_number }}-${{ github.sha }}"
 
     # -------------------------------------------------------------------------
     # 19. 整理固件文件
@@ -873,7 +824,7 @@ jobs:
       if: steps.organize.outputs.firmware_path != ''
       uses: actions/upload-artifact@v4
       with:
-        name: "immortalwrt-${{ env.FIRST_DEVICE }}-${{ env.BUILD_ID }}"
+        name: "${{ env.REPO_SHORT_NAME }}-${{ env.FIRST_DEVICE }}-${{ env.BUILD_ID }}"
         path: ${{ steps.organize.outputs.firmware_path }}
         retention-days: ${{ env.RETAIN_DAYS }}
 
