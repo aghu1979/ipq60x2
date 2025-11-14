@@ -12,8 +12,8 @@
 #   在 OpenWrt/ImmortalWrt 源码根目录下运行此脚本
 #
 # 作者: Mary
-# 日期：20251107
-# 版本: 3.0 - 企业级优化版
+# 日期：20251114
+# 版本: 3.1 - 优化软件包检测版
 # ==============================================================================
 
 # 导入通用函数
@@ -23,9 +23,7 @@ source "$(dirname "$0")/common.sh"
 # 软件源列表
 declare -A REPOS=(
     ["luci-app-athena-led"]="https://github.com/NONGFAH/luci-app-athena-led"
-    ["luci-app-passwall"]="https://github.com/xiaorouji/openwrt-passwall"
     ["luci-app-passwall2"]="https://github.com/xiaorouji/openwrt-passwall2"
-    ["passwall-packages"]="https://github.com/xiaorouji/openwrt-passwall-packages"
     ["luci-app-adguardhome"]="https://github.com/sirpdboy/luci-app-adguardhome"
     ["luci-app-ddns-go"]="https://github.com/sirpdboy/luci-app-ddns-go"
     ["luci-app-netdata"]="https://github.com/sirpdboy/luci-app-netdata"
@@ -46,6 +44,10 @@ declare -A REPOS=(
     ["luci-app-tailscale"]="https://github.com/asvow/luci-app-tailscale"
     ["luci-app-vnt"]="https://github.com/lmq8267/luci-app-vnt"
     ["small-package"]="https://github.com/kenzok8/small-package"
+    # 缺失的软件包
+    ["luci-app-istorex"]="https://github.com/istoreos/istore"
+    ["luci-app-quickstart"]="https://github.com/kenzok8/small-package"
+    ["luci-app-wolplus"]="https://github.com/kenzok8/small-package"
 )
 
 # 特殊处理列表
@@ -54,7 +56,6 @@ declare -A SPECIAL_HANDLING=(
     ["luci-app-tailscale"]="pre_remove_feeds"
     ["luci-app-mosdns"]="mosdns_special"
     ["luci-app-openclash"]="openclash_special"
-    ["passwall-packages"]="passwall_special"
     ["small-package"]="small"
 )
 
@@ -69,14 +70,12 @@ declare -A CONFLICTING_PACKAGES=(
     ["luci-app-nikki"]="mihomo"
     ["luci-app-oaf"]="openappfilter"
     ["luci-app-adguardhome"]="adguardhome"
-    ["luci-app-passwall"]="passwall"
     ["luci-app-passwall2"]="passwall2"
 )
 
 # 官方feeds中可能存在的软件包列表
 declare -A FEEDS_PACKAGES=(
     ["luci-app-adguardhome"]="luci-app-adguardhome"
-    ["luci-app-passwall"]="luci-app-passwall"
     ["luci-app-passwall2"]="luci-app-passwall2"
     ["luci-app-tailscale"]="tailscale luci-app-tailscale"
     ["luci-app-openclash"]="luci-app-openclash"
@@ -90,7 +89,6 @@ declare -A FEEDS_PACKAGES=(
     ["luci-app-quickfile"]="luci-app-quickfile"
     ["luci-app-quickstart"]="luci-app-quickstart"
     ["luci-app-istorex"]="luci-app-istorex"
-    ["luci-app-diskman"]="luci-app-diskman"
     ["luci-app-netdata"]="luci-app-netdata"
     ["luci-app-netspeedtest"]="luci-app-netspeedtest"
     ["luci-app-partexp"]="luci-app-partexp"
@@ -113,7 +111,7 @@ declare -A FEEDS_PACKAGES=(
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 3.0 - 企业级优化版"
+    log_info "版本: 3.1 - 优化软件包检测版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
@@ -456,55 +454,6 @@ handle_mosdns_special() {
     return 0
 }
 
-# 特殊处理：passwall-packages
-handle_passwall_special() {
-    log_info "执行 passwall-packages 特殊处理..."
-    
-    # 1. 移除 openwrt feeds 自带的核心库
-    log_info "移除 openwrt feeds 自带的核心库..."
-    local core_packages=(
-        "xray-core"
-        "v2ray-geodata"
-        "sing-box"
-        "chinadns-ng"
-        "dns2socks"
-        "hysteria"
-        "ipt2socks"
-        "microsocks"
-        "naiveproxy"
-        "shadowsocks-libev"
-        "shadowsocks-rust"
-        "shadowsocksr-libev"
-        "simple-obfs"
-        "tcping"
-        "trojan-plus"
-        "tuic-client"
-        "v2ray-plugin"
-        "xray-plugin"
-        "geoview"
-        "shadow-tls"
-    )
-    
-    for package in "${core_packages[@]}"; do
-        local package_path="feeds/packages/net/$package"
-        if [ -d "$package_path" ]; then
-            log_info "删除核心库: $package_path"
-            safe_remove "$package_path" true
-        fi
-    done
-    
-    # 2. 移除 openwrt feeds 过时的luci版本
-    log_info "移除 openwrt feeds 过时的luci版本..."
-    local luci_passwall_path="feeds/luci/applications/luci-app-passwall"
-    if [ -d "$luci_passwall_path" ]; then
-        log_info "删除过时的luci版本: $luci_passwall_path"
-        safe_remove "$luci_passwall_path" true
-    fi
-    
-    log_success "passwall-packages 特殊处理完成"
-    return 0
-}
-
 # 特殊处理：OpenClash
 handle_openclash_special() {
     log_info "执行 OpenClash 特殊处理..."
@@ -626,11 +575,6 @@ handle_special_repo() {
             handle_openclash_special
             return $?
             ;;
-        "passwall_special")
-            # passwall-packages 特殊处理
-            handle_passwall_special
-            return $?
-            ;;
         "small")
             # small-package 特殊处理，直接克隆到 small 目录
             return 0
@@ -683,7 +627,7 @@ process_repos() {
             fi
             
             # 如果是特殊处理且成功，跳过常规克隆
-            if [[ "$special_handling" =~ "mosdns_special|openclash_special|passwall_special" ]] && [ $? -eq 0 ]; then
+            if [[ "$special_handling" =~ "mosdns_special|openclash_special" ]] && [ $? -eq 0 ]; then
                 continue
             fi
             

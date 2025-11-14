@@ -12,8 +12,8 @@
 #   在 OpenWrt/ImmortalWrt 源码根目录下运行此脚本
 #
 # 作者: Mary
-# 日期：20251107
-# 版本: 2.0 - 企业级优化版
+# 日期：20251114
+# 版本: 2.1 - 优化配置版
 # ==============================================================================
 
 # 导入通用函数
@@ -35,7 +35,7 @@ DEFAULT_THEME="argon"
 show_script_info() {
     log_step "OpenWrt/ImmortalWrt 自定义配置脚本"
     log_info "作者: Mary"
-    log_info "版本: 2.0 - 企业级优化版"
+    log_info "版本: 2.1 - 优化配置版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 

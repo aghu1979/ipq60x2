@@ -13,8 +13,8 @@
 #   ./scripts/luci_report.sh [配置文件路径]
 #
 # 作者: Mary
-# 日期：20251107
-# 版本: 3.0 - 企业级优化版
+# 日期：20251114
+# 版本: 3.1 - 优化报告说明版
 # ==============================================================================
 
 # 导入通用函数
@@ -40,7 +40,7 @@ DETAIL_REPORT="$REPORT_DIR/luci_packages_detail.txt"
 show_script_info() {
     log_step "LUCI 软件包变更报告生成脚本"
     log_info "作者: Mary"
-    log_info "版本: 3.0 - 企业级优化版"
+    log_info "版本: 3.1 - 优化报告说明版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     log_info "配置文件: $CONFIG_FILE"
 }
@@ -325,7 +325,13 @@ generate_diff_report() {
                 echo "$missing_packages"
                 echo ""
                 echo "缺失数量: $(echo "$missing_packages" | wc -l)"
-                echo "⚠️  这些软件包在配置中启用但不可用，请检查软件源是否正确添加"
+                echo "⚠️  这些软件包在配置中启用但不可用，可能原因："
+                echo "   1. 第三方源没有正确添加"
+                echo "   2. 软件包名称不匹配"
+                echo "   3. 依赖关系问题导致软件包被移除"
+                echo "   4. 软件包在特定平台上不可用"
+                echo "   5. 软件包已被重命名或合并到其他包中"
+                echo "   解决方案：检查软件源是否正确添加，或使用small-package作为后备仓库"
             else
                 echo "无缺失软件包"
             fi

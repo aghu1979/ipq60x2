@@ -7,8 +7,8 @@
 #   提供通用的日志、错误处理、文件操作等功能
 #
 # 作者: Mary
-# 日期：20251107
-# 版本: 2.0 - 企业级优化版
+# 日期：20251114
+# 版本: 2.1 - 优化磁盘扩展版
 # ==============================================================================
 
 # --- 颜色定义 ---
@@ -264,7 +264,7 @@ git_clone_enhanced() {
     fi
     
     local attempt=1
-    while [ $attempt -le $max_retries ]; do
+    while [ $attempt -le $max_retries ]; then
         log_debug "尝试克隆 (第 $attempt 次): $repo_url"
         
         if git clone -b "$branch" --depth "$depth" "$repo_url" "$target_dir" 2>&1 | tee /tmp/git_clone_$$.log; then
