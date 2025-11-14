@@ -1,1006 +1,382 @@
-# ==============================================================================
-# ImmortalWrt 自动编译工作流
-# 
-# 功能:
-#   自动化编译 ImmortalWrt 固件
-#   支持多设备配置
-#   自动生成 LUCI 软件包报告
-#   企业级缓存管理和错误控制
-#
-# 作者: Mary
-# 日期: 20251107
-# 版本: 3.5 - 路径权限修复版
-# ==============================================================================
+name: ImmortalWrt 固件编译工作流
 
-name: ImmortalWrt Auto Build
-
-# 触发条件
 on:
-  push:
-    branches: [ master, main ]
-    paths:
-      - 'configs/**'
-      - 'scripts/**'
-      - '.github/workflows/immu.yml'
-  pull_request:
-    branches: [ master, main ]
-    paths:
-      - 'configs/**'
-      - 'scripts/**'
-      - '.github/workflows/immu.yml'
   workflow_dispatch:
     inputs:
-      force_rebuild:
-        description: '强制重新构建（忽略缓存）'
+      firmware_tag:
+        description: '固件标签'
         required: false
-        default: 'false'
-        type: boolean
-      upload_release:
-        description: '上传到 Release'
+        default: 'ImmortalWrt'
+        type: string
+      upload_bin_dir:
+        description: '上传完整bin目录'
         required: false
-        default: 'true'
+        default: false
         type: boolean
+      firmware_release:
+        description: '发布固件到Release'
+        required: false
+        default: true
+        type: boolean
+  workflow_call:
+  # schedule:
+  #   - cron: 0 20 * * *
 
-# 全局环境变量
 env:
-  # === 版本控制 ===
-  WORKFLOW_VERSION: "3.5"
-  BUILD_DATE: "${{ github.run_number }}-${{ github.sha }}"
+  # 源码仓库配置
+  REPO_URL: https://github.com/laipeng668/immortalwrt.git
+  REPO_BRANCH: master
+  REPO_NAME: immwrt
   
-  # === 仓库配置 ===
-  REPO_URL: "https://github.com/laipeng668/immortalwrt.git"
-  REPO_BRANCH: "master"
-  REPO_NAME: "immortalwrt"
-  REPO_SHORT_NAME: "immwrt"
+  # 配置文件路径
+  CONFIG_FILE: configs/immu.config
+  DIY_SCRIPT: scripts/diy.sh
+  REPO_SCRIPT: scripts/repo.sh
+  LUCI_REPORT_SCRIPT: scripts/luci_report.sh
   
-  # === 文件路径 ===
-  CONFIG_FILE: "configs/immu.config"
-  DIY_SCRIPT: "scripts/diy.sh"
-  REPO_SCRIPT: "scripts/repo.sh"
-  LUCI_REPORT_SCRIPT: "scripts/luci_report.sh"
-  
-  # === 编译配置 ===
-  FEEDS_CONF: "feeds.conf.default"
-  PARALLEL_JOBS: "8"
-  
-  # === 磁盘配置 ===
-  EXPAND_DISK: "true"
-  DISK_DEVICE: "/dev/sda1"
-  DISK_SIZE: "80G"
-  WORKSPACE_DIR: "/workspace"
-  
-  # === 上传配置 ===
-  UPLOAD_FIRMWARE: "true"
-  RETAIN_DAYS: "7"
-  KEEP_RELEASES: "5"
-  
-  # === 系统配置 ===
-  TZ: "Asia/Shanghai"
-  DEBIAN_FRONTEND: "noninteractive"
-  
-  # === 缓存配置 ===
-  CACHE_VERSION: "v3"
+  # 编译配置
+  CLASH_KERNEL: amd64
+  UPLOAD_BIN_DIR: ${{ github.event.inputs.upload_bin_dir || 'false' }}
+  FIRMWARE_RELEASE: ${{ github.event.inputs.firmware_release || 'true' }}
+  FIRMWARE_TAG: ${{ github.event.inputs.firmware_tag || 'ImmortalWrt' }}
+  TZ: Asia/Shanghai
 
-# 任务定义
 jobs:
-  # ==============================================================================
-  # 主编译任务
-  # ==============================================================================
-  build:
-    # 运行环境：支持 Ubuntu 24.04
+  Build:
     runs-on: ubuntu-24.04
-    if: github.event.repository.owner.id == github.event.sender.id
-    
-    # 设置 GitHub Token 环境变量
-    env:
-      GH_TOKEN: ${{ github.token }}
-    
-    # 输出变量
-    outputs:
-      status: ${{ steps.build_status.outputs.status }}
-      device_list: ${{ steps.device_info.outputs.devices }}
-      firmware_path: ${{ steps.organize.outputs.firmware_path }}
-      release_tag: ${{ steps.release.outputs.tag }}
-    
-    # 步骤定义
+
     steps:
-    # -------------------------------------------------------------------------
-    # 1. 检出代码
-    # -------------------------------------------------------------------------
-    - name: 📥 检出代码
-      uses: actions/checkout@v4
-      with:
-        path: source-code
-
-    # -------------------------------------------------------------------------
-    # 2. 初始化和环境准备
-    # -------------------------------------------------------------------------
-    - name: 🚀 初始化编译环境
-      id: init
+    - name: 检查服务器性能
       run: |
-        echo "=================================================================="
-        echo "🔧 ImmortalWrt 自动编译工作流 ${{ env.WORKFLOW_VERSION }}"
-        echo "=================================================================="
-        echo "📅 编译时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "🔗 仓库地址: ${{ env.REPO_URL }}"
-        echo "🌿 分支: ${{ env.REPO_BRANCH }}"
-        echo "💻 运行环境: ${{ runner.os }}"
-        echo "🏗️  编译ID: ${{ github.run_number }}"
-        echo "📝 提交哈希: ${{ github.sha }}"
-        echo "📍 当前工作目录: $(pwd)"
-        echo "📍 GitHub 工作空间: ${{ github.workspace }}"
-        echo "📁 源码检出目录: ${{ github.workspace }}/source-code"
-        echo "=================================================================="
-        
-        # 显示初始磁盘空间
-        echo "📊 初始磁盘空间:"
+        echo "========服务器性能信息========"
+        echo "CPU信息:"
+        lscpu | grep "Model name" | cut -d':' -f2- | xargs
+        echo "CPU核心数: $(nproc)"
+        echo "内存信息:"
+        free -h
+        echo "磁盘信息:"
         df -hT
-        
-        # 设置源码目录环境变量
-        echo "SOURCE_CODE_DIR=${{ github.workspace }}/source-code" >> $GITHUB_ENV
-        
-        # 创建工作目录
-        sudo mkdir -p ${{ env.WORKSPACE_DIR }}
-        sudo chown $USER:$GROUPS ${{ env.WORKSPACE_DIR }}
-        
-        # 设置环境变量
-        echo "WORKSPACE_PATH=${{ env.WORKSPACE_DIR }}" >> $GITHUB_ENV
-        echo "SOURCE_PATH=${{ env.WORKSPACE_DIR }}/${{ env.REPO_NAME }}" >> $GITHUB_ENV
-        echo "BUILD_START_TIME=$(date +%s)" >> $GITHUB_ENV
-        echo "BUILD_ID=${{ github.run_number }}-${{ github.sha }}" >> $GITHUB_ENV
-        echo "CACHE_KEY_PREFIX=${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}" >> $GITHUB_ENV
-        
-        # 检查脚本文件是否存在
-        echo "🔍 检查脚本文件..."
-        echo "📁 源码目录结构:"
-        ls -la "${{ env.SOURCE_CODE_DIR }}/"
-        echo "📁 脚本目录: ${{ env.SOURCE_CODE_DIR }}/scripts"
-        if [ -d "${{ env.SOURCE_CODE_DIR }}/scripts" ]; then
-          ls -la "${{ env.SOURCE_CODE_DIR }}/scripts/"
-        else
-          echo "⚠️ 脚本目录不存在"
-        fi
-        
-        echo "✅ 环境初始化完成"
+        echo "================================"
 
-    # -------------------------------------------------------------------------
-    # 3. 系统依赖安装
-    # -------------------------------------------------------------------------
-    - name: 📦 安装系统依赖
-      id: deps
+    - name: 初始化环境
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
-        echo "=================================================================="
-        echo "📦 安装系统依赖包"
-        echo "=================================================================="
-        
-        # 清理不必要的包
-        sudo rm -rf /etc/apt/sources.list.d/* \
-                      /usr/share/dotnet \
-                      /usr/local/lib/android \
-                      /opt/ghc \
-                      /usr/share/swift
-        
-        # 更新包列表
-        echo "🔄 更新包列表..."
-        sudo -E apt-get -qq update
-        
-        # 安装依赖
-        echo "📥 安装编译依赖..."
+        echo "========初始化环境========"
         sudo -E apt-get -y update
         sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
         sudo -E systemctl daemon-reload
         sudo timedatectl set-timezone "$TZ"
-        
-        # 清理
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        
-        # 设置时区
-        sudo timedatectl set-timezone "${{ env.TZ }}"
-        
-        echo "✅ 系统依赖安装完成"
+        echo "环境初始化完成"
+        echo "========================"
 
-    # -------------------------------------------------------------------------
-    # 4. 扩展磁盘空间（重要：在编译前扩展）
-    # -------------------------------------------------------------------------
-    - name: 💿 扩展磁盘空间
-      id: expand_disk
-      if: env.EXPAND_DISK == 'true'
+    - name: 扩展磁盘空间
       run: |
-        echo "=================================================================="
-        echo "💿 扩展磁盘空间（编译前扩展，确保有足够空间）"
-        echo "=================================================================="
+        echo "========扩展磁盘空间========"
         
-        # 显示当前磁盘使用情况
-        echo "📊 扩展前磁盘空间:"
+        # 检查可用磁盘
         df -hT
         
-        # 检查可用设备
-        AVAILABLE_DEVICES=""
-        for device in "${{ env.DISK_DEVICE }}" "/dev/sdb1"; do
-          if [ -b "$device" ]; then
-            AVAILABLE_DEVICES="$device"
-            break
-          fi
-        done
-        
-        if [ -z "$AVAILABLE_DEVICES" ]; then
-          echo "⚠️ 未找到可用设备，跳过磁盘扩展"
-          echo "📊 可用设备:"
-          lsblk | grep -E "disk|part"
-          exit 0
-        fi
-        
-        echo "🔧 使用设备: $AVAILABLE_DEVICES"
-        
-        # 检查是否已挂载
-        if ! mount | grep -q "$AVAILABLE_DEVICES"; then
-          echo "⚠️ 设备 $AVAILABLE_DEVICES 未挂载，跳过磁盘扩展"
-          exit 0
-        fi
-        
-        # 获取挂载点
-        MOUNT_POINT=$(mount | grep "$AVAILABLE_DEVICES" | awk '{print $3}')
-        echo "📍 设备挂载点: $MOUNT_POINT"
-        
-        # 检查是否是根分区
-        if [ "$MOUNT_POINT" = "/" ]; then
-          echo "⚠️ 设备 $AVAILABLE_DEVICES 是根分区，使用软链接方式扩展"
-        fi
-        
-        # 创建扩展工作目录
-        EXTEND_DIR="$MOUNT_POINT/immortalwrt-build"
-        echo "📁 创建扩展目录: $EXTEND_DIR"
-        sudo mkdir -p "$EXTEND_DIR"
-        sudo chown $USER:$GROUPS "$EXTEND_DIR"
-        
-        # 检查是否需要创建软链接
-        if [ ! -L "${{ env.WORKSPACE_DIR }}" ]; then
-          echo "🔗 创建软链接: $EXTEND_DIR -> ${{ env.WORKSPACE_DIR }}"
-          # 如果目录已存在，先备份
-          if [ -d "${{ env.WORKSPACE_DIR }}" ]; then
-            sudo mv "${{ env.WORKSPACE_DIR }}" "${{ env.WORKSPACE_DIR }}.bak.$(date +%s)"
-          fi
-          sudo ln -sf "$EXTEND_DIR" "${{ env.WORKSPACE_DIR }}"
+        # 尝试扩展磁盘空间
+        if [ -b /dev/sda ]; then
+          DEVICE="sda"
+        elif [ -b /dev/sdb ]; then
+          DEVICE="sdb"
         else
-          echo "🔗 软链接已存在"
+          echo "未找到可用的磁盘设备"
+          exit 1
         fi
         
-        # 验证软链接
-        echo "✅ 软链接验证:"
-        ls -la "${{ env.WORKSPACE_DIR }}"
-        echo "📍 实际路径: $(readlink -f "${{ env.WORKSPACE_DIR }}")"
+        echo "使用磁盘设备: /dev/$DEVICE"
         
-        # 显示扩展后磁盘空间
-        echo "📊 扩展后磁盘空间:"
+        # 检查磁盘分区
+        sudo fdisk -l /dev/$DEVICE
+        
+        # 尝试扩展分区
+        if sudo growpart /dev/$DEVICE 1; then
+          echo "分区扩展成功"
+          # 扩展文件系统
+          if sudo resize2fs /dev/${DEVICE}1; then
+            echo "文件系统扩展成功"
+          else
+            echo "文件系统扩展失败，尝试xfs文件系统"
+            sudo xfs_growfs /
+          fi
+        else
+          echo "分区扩展失败，可能已经是最大分区"
+        fi
+        
+        # 再次检查磁盘空间
         df -hT
-        
-        echo "💾 磁盘空间扩展完成，编译有足够空间"
+        echo "========================"
 
-    # -------------------------------------------------------------------------
-    # 5. 缓存管理
-    # -------------------------------------------------------------------------
-    - name: 💾 恢复缓存
-      id: cache_restore
-      uses: actions/cache@v4
-      with:
-        path: |
-          ${{ env.WORKSPACE_DIR }}/${{ env.REPO_NAME }}
-          ${{ env.WORKSPACE_DIR }}/ccache
-          ${{ env.WORKSPACE_DIR }}/dl
-        key: "${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}-${{ github.run_number }}-${{ github.sha }}"
-        restore-keys: |
-          ${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}-
-          ${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}-${{ env.REPO_BRANCH }}-
+    - name: 检出代码
+      uses: actions/checkout@v4
 
-    # -------------------------------------------------------------------------
-    # 6. 源码获取
-    # -------------------------------------------------------------------------
-    - name: 📥 获取源码
-      id: source
+    - name: 克隆源代码
       run: |
-        echo "=================================================================="
-        echo "📥 获取 ImmortalWrt 源码"
-        echo "=================================================================="
+        echo "========克隆源代码========"
+        df -hT $GITHUB_WORKSPACE
         
-        cd "${{ env.WORKSPACE_DIR }}"
+        # 创建工作目录
+        sudo mkdir -p /mnt/openwrt
+        sudo chown -R $(id -u):$(id -g) /mnt/openwrt
         
-        # 显示当前磁盘空间
-        echo "📊 源码下载前磁盘空间:"
-        df -hT
-        
-        # 检查是否已存在
-        if [ -d "${{ env.REPO_NAME }}" ] && [ "${{ github.event.inputs.force_rebuild }}" != "true" ]; then
-          echo "📂 源码已存在，更新代码..."
-          cd "${{ env.REPO_NAME }}"
-          git fetch origin
-          git checkout ${{ env.REPO_BRANCH }}
-          git pull origin ${{ env.REPO_BRANCH }}
-        else
-          echo "📥 克隆源码..."
-          git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} ${{ env.REPO_NAME }}
-        fi
-        
-        # 进入源码目录
-        cd "${{ env.SOURCE_PATH }}"
-        
-        # 获取版本信息
-        REPO_COMMIT=$(git rev-parse HEAD)
-        REPO_VERSION=$(git describe --tags --always)
-        REPO_DATE=$(git log -1 --format=%cd --date=format:%Y%m%d)
-        
-        echo "🔗 仓库地址: $(git config --get remote.origin.url)"
-        echo "🌿 当前分支: $(git rev-parse --abbrev-ref HEAD)"
-        echo "📝 提交哈希: $REPO_COMMIT"
-        echo "🏷️  版本标签: $REPO_VERSION"
-        echo "📅 提交日期: $REPO_DATE"
-        
-        # 显示源码大小
-        echo "📊 源码大小:"
-        du -sh .
-        
-        # 设置输出变量
-        echo "repo_commit=$REPO_COMMIT" >> $GITHUB_OUTPUT
-        echo "repo_version=$REPO_VERSION" >> $GITHUB_OUTPUT
-        echo "repo_date=$REPO_DATE" >> $GITHUB_OUTPUT
+        # 克隆源码
+        git clone --depth 1 -b $REPO_BRANCH --single-branch $REPO_URL /mnt/openwrt
+        cd /mnt/openwrt
         
         # 设置环境变量
-        echo "REPO_COMMIT=$REPO_COMMIT" >> $GITHUB_ENV
-        echo "REPO_VERSION=$REPO_VERSION" >> $GITHUB_ENV
-        echo "REPO_DATE=$REPO_DATE" >> $GITHUB_ENV
+        echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
         
-        echo "✅ 源码获取完成"
+        # 获取版本信息
+        VERSION_INFO=$(git show -s --date=short --format="作者: %an<br/>时间: %cd<br/>内容: %s<br/>hash: %H")
+        echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
+        
+        # 获取内核版本
+        VERSION_KERNEL=$(grep -oP 'LINUX_KERNEL_HASH-\K[0-9]+\.[0-9]+\.[0-9]+' target/linux/generic/kernel-6.12 2>/dev/null || echo "未知")
+        echo "VERSION_KERNEL=$VERSION_KERNEL" >> $GITHUB_ENV
+        
+        # 获取源码哈希
+        echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+        echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        
+        echo "源码克隆完成"
+        echo "========================"
 
-    # -------------------------------------------------------------------------
-    # 7. 环境变量检查
-    # -------------------------------------------------------------------------
-    - name: 🔍 环境变量检查
-      id: env_check
+    - name: 生成变量
       run: |
-        echo "=================================================================="
-        echo "🔍 环境变量检查"
-        echo "=================================================================="
-        
-        echo "📍 当前工作目录: $(pwd)"
-        echo "📁 用户: $(whoami)"
-        echo "📁 用户组: $(groups)"
-        echo "📁 环境变量:"
-        env | grep -E "(TOPDIR|STAGING_DIR|PATH)" | sort
-        
-        # 检查关键路径
-        echo "📁 关键路径检查:"
-        echo "WORKSPACE_DIR: ${{ env.WORKSPACE_DIR }}"
-        echo "SOURCE_PATH: ${{ env.SOURCE_PATH }}"
-        echo "SOURCE_CODE_DIR: ${{ env.SOURCE_CODE_DIR }}"
-        
-        # 检查软链接
-        if [ -L "${{ env.WORKSPACE_DIR }}" ]; then
-          echo "🔗 软链接状态: 存在"
-          echo "📍 链接目标: $(readlink -f "${{ env.WORKSPACE_DIR }}")"
-        else
-          echo "🔗 软链接状态: 不存在"
-        fi
-        
-        echo "✅ 环境变量检查完成"
-
-    # -------------------------------------------------------------------------
-    # 8. 源码验证
-    # -------------------------------------------------------------------------
-    - name: 🔍 源码验证
-      id: source_verify
-      run: |
-        echo "=================================================================="
-        echo "🔍 源码验证"
-        echo "=================================================================="
-        
-        cd "${{ env.SOURCE_PATH }}"
-        
-        echo "📍 当前目录: $(pwd)"
-        echo "📁 目录内容:"
-        ls -la
-        
-        # 检查关键文件
-        echo "📋 关键文件检查:"
-        for file in "Makefile" "rules.mk" "include/toplevel.mk"; do
-          if [ -f "$file" ]; then
-            echo "✅ $file: 存在"
-          else
-            echo "❌ $file: 不存在"
-          fi
-        done
-        
-        # 检查脚本目录
-        echo "📋 脚本目录检查:"
-        if [ -d "scripts" ]; then
-          echo "✅ scripts: 存在"
-          echo "📁 脚本文件:"
-          ls -la scripts/
-        else
-          echo "❌ scripts: 不存在"
-        fi
-        
-        # 检查权限
-        echo "📋 权限检查:"
-        find scripts -name "*.sh" -exec ls -la {} \;
-        
-        echo "✅ 源码验证完成"
-
-    # -------------------------------------------------------------------------
-    # 9. 加载自定义软件源
-    # -------------------------------------------------------------------------
-    - name: 🔧 加载自定义软件源
-      id: custom_feeds
-      run: |
-        echo "=================================================================="
-        echo "🔧 加载自定义软件源"
-        echo "=================================================================="
-        
-        # 确保在正确的目录
-        cd "${{ env.SOURCE_PATH }}"
-        
-        # 复制 feeds 配置
-        if [ -f "${{ env.SOURCE_CODE_DIR }}/${{ env.FEEDS_CONF }}" ]; then
-          echo "📋 复制 feeds 配置文件"
-          cp "${{ env.SOURCE_CODE_DIR }}/${{ env.FEEDS_CONF }}" "./feeds.conf.default"
-        else
-          echo "⚠️ feeds 配置文件不存在: ${{ env.SOURCE_CODE_DIR }}/${{ env.FEEDS_CONF }}"
-        fi
-        
-        # 检查脚本文件
-        echo "🔍 检查脚本文件..."
-        echo "📁 当前目录: $(pwd)"
-        echo "📁 源码检出目录: ${{ env.SOURCE_CODE_DIR }}"
-        echo "📁 脚本路径: ${{ env.SOURCE_CODE_DIR }}/${{ env.REPO_SCRIPT }}"
-        
-        # 检查脚本文件是否存在
-        if [ ! -f "${{ env.SOURCE_CODE_DIR }}/${{ env.REPO_SCRIPT }}" ]; then
-          echo "❌ 脚本文件不存在: ${{ env.SOURCE_CODE_DIR }}/${{ env.REPO_SCRIPT }}"
-          echo "🔍 搜索所有可能的 repo.sh 文件:"
-          find ${{ env.SOURCE_CODE_DIR }} -name "repo.sh" 2>/dev/null || true
-          exit 1
-        fi
-        
-        # 执行软件源脚本
-        echo "🔧 执行软件源集成脚本..."
-        chmod +x "${{ env.SOURCE_CODE_DIR }}/${{ env.REPO_SCRIPT }}"
-        "${{ env.SOURCE_CODE_DIR }}/${{ env.REPO_SCRIPT }}"
-        
-        echo "✅ 自定义软件源加载完成"
-
-    # -------------------------------------------------------------------------
-    # 10. 生成 defconfig 前的 LUCI 报告
-    # -------------------------------------------------------------------------
-    - name: 📊 生成 defconfig 前的 LUCI 报告
-      id: luci_report_before
-      run: |
-        echo "=================================================================="
-        echo "📊 生成 defconfig 前的 LUCI 软件包报告"
-        echo "=================================================================="
-        
-        cd "${{ env.SOURCE_PATH }}"
-        
-        # 执行 luci_report.sh
-        if [ -f "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}" ]; then
-          echo "🔧 执行 LUCI 报告脚本..."
-          chmod +x "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}"
-          "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}" "${{ env.SOURCE_CODE_DIR }}/${{ env.CONFIG_FILE }}"
-        else
-          echo "❌ LUCI 报告脚本不存在: ${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}"
-          exit 1
-        fi
-        
-        echo "✅ defconfig 前 LUCI 报告生成完成"
-
-    # -------------------------------------------------------------------------
-    # 11. 更新和安装 feeds
-    # -------------------------------------------------------------------------
-    - name: 🔄 更新 feeds
-      id: update_feeds
-      run: |
-        echo "=================================================================="
-        echo "🔄 更新 feeds"
-        echo "=================================================================="
-        
-        cd "${{ env.SOURCE_PATH }}"
-        
-        echo "📥 更新 feeds..."
-        ./scripts/feeds update -a
-        
-        echo "✅ feeds 更新完成"
-
-    - name: 📦 安装 feeds
-      id: install_feeds
-      run: |
-        echo "=================================================================="
-        echo "📦 安装 feeds"
-        echo "=================================================================="
-        
-        cd "${{ env.SOURCE_PATH }}"
-        
-        echo "📦 安装 feeds..."
-        ./scripts/feeds install -a
-        
-        echo "✅ feeds 安装完成"
-
-    # -------------------------------------------------------------------------
-    # 12. 加载自定义配置
-    # -------------------------------------------------------------------------
-    - name: ⚙️ 加载自定义配置
-      id: custom_config
-      run: |
-        echo "=================================================================="
-        echo "⚙️ 加载自定义配置"
-        echo "=================================================================="
-        
-        cd "${{ env.SOURCE_PATH }}"
-        
-        # 复制文件
-        if [ -d "${{ env.SOURCE_CODE_DIR }}/files" ]; then
-          echo "📁 复制自定义文件"
-          cp -r "${{ env.SOURCE_CODE_DIR }}/files" ./
-        fi
-        
+        echo "========生成变量========"
         # 复制配置文件
-        if [ -f "${{ env.SOURCE_CODE_DIR }}/${{ env.CONFIG_FILE }}" ]; then
-          echo "📋 复制配置文件"
-          cp "${{ env.SOURCE_CODE_DIR }}/${{ env.CONFIG_FILE }}" ./.config"
-        fi
+        cp $CONFIG_FILE $OPENWRT_PATH/.config
+        cd $OPENWRT_PATH
         
-        # 检查自定义脚本
-        echo "🔍 检查自定义脚本..."
-        echo "📁 脚本路径: ${{ env.SOURCE_CODE_DIR }}/${{ env.DIY_SCRIPT }}"
+        # 执行defconfig
+        make defconfig > /dev/null 2>&1
         
-        if [ ! -f "${{ env.SOURCE_CODE_DIR }}/${{ env.DIY_SCRIPT }}" ]; then
-          echo "❌ 自定义脚本不存在: ${{ env.SOURCE_CODE_DIR }}/${{ env.DIY_SCRIPT }}"
-          exit 1
-        fi
+        # 设置环境变量
+        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
+        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
         
-        # 执行自定义脚本
-        echo "🔧 执行自定义配置脚本..."
-        chmod +x "${{ env.SOURCE_CODE_DIR }}/${{ env.DIY_SCRIPT }}"
-        "${{ env.SOURCE_CODE_DIR }}/${{ env.DIY_SCRIPT }}"
+        DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
         
-        echo "✅ 自定义配置加载完成"
+        DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+        
+        # 从配置文件中提取设备列表
+        DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y$" .config | sed 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_\(.*\)=y$/\1/' | sort -u | tr '\n' ' ')
+        echo "DEVICES=$DEVICES" >> $GITHUB_ENV
+        
+        echo "设备列表: $DEVICES"
+        echo "变量生成完成"
+        echo "========================"
 
-    # -------------------------------------------------------------------------
-    # 13. 生成 defconfig 并生成对比报告
-    # -------------------------------------------------------------------------
-    - name: 📊 生成 defconfig 和对比报告
-      id: defconfig_report
-      run: |
-        echo "=================================================================="
-        echo "📊 生成 defconfig 和 LUCI 对比报告"
-        echo "=================================================================="
-        
-        # 确保在正确的目录
-        cd "${{ env.SOURCE_PATH }}"
-        
-        # 检查当前目录
-        echo "📍 当前工作目录: $(pwd)"
-        echo "📁 目录内容:"
-        ls -la
-        
-        # 检查 Makefile 是否存在
-        if [ ! -f "Makefile" ]; then
-          echo "❌ Makefile 不存在，可能路径错误"
-          echo "🔍 查找 Makefile:"
-          find . -name "Makefile" -type f 2>/dev/null || echo "未找到 Makefile"
-          exit 1
-        fi
-        
-        # 检查脚本权限
-        echo "🔍 检查脚本权限:"
-        ls -la scripts/
-        
-        # 修复脚本权限
-        echo "🔧 修复脚本权限..."
-        chmod +x scripts/* || true
-        
-        # 检查环境变量
-        echo "🔍 检查关键环境变量:"
-        echo "TOPDIR: $TOPDIR"
-        echo "STAGING_DIR_HOST: $STAGING_DIR_HOST"
-        
-        # 清理可能的问题
-        echo "🧹 清理可能的问题..."
-        rm -rf tmp/ || true
-        
-        # 生成 defconfig
-        echo "🔧 生成 defconfig..."
-        make defconfig V=s 2>&1 | tee defconfig.log
-        
-        # 检查 defconfig 是否成功
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
-          echo "❌ defconfig 生成失败"
-          echo "📋 错误日志:"
-          tail -20 defconfig.log
-          exit 1
-        fi
-        
-        # 生成 defconfig 后的 LUCI 报告
-        if [ -f "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}" ]; then
-          echo "🔧 执行 LUCI 报告脚本..."
-          chmod +x "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}"
-          "${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}" "${{ env.SOURCE_CODE_DIR }}/${{ env.CONFIG_FILE }}"
-        else
-          echo "❌ LUCI 报告脚本不存在: ${{ env.SOURCE_CODE_DIR }}/${{ env.LUCI_REPORT_SCRIPT }}"
-          exit 1
-        fi
-        
-        echo "✅ defconfig 和对比报告生成完成"
-
-    # -------------------------------------------------------------------------
-    # 14. 提取设备信息
-    # -------------------------------------------------------------------------
-    - name: 📱 提取设备信息
-      id: device_info
-      run: |
-        echo "=================================================================="
-        echo "📱 提取设备信息"
-        echo "=================================================================="
-        
-        cd "${{ env.SOURCE_PATH }}"
-        
-        # 提取设备列表
-        DEVICES=$(grep "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y$" .config 2>/dev/null | \
-                  sed 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_\(.*\)=y$/\1/' | \
-                  sort -u | tr '\n' ' ')
-        
-        if [ -z "$DEVICES" ]; then
-          echo "⚠️ 未找到设备配置"
-          echo "devices=unknown" >> $GITHUB_OUTPUT
-        else
-          echo "📱 目标设备: $DEVICES"
-          echo "devices=$DEVICES" >> $GITHUB_OUTPUT
-          
-          # 设置环境变量
-          echo "DEVICE_LIST=$DEVICES" >> $GITHUB_ENV
-          
-          # 为每个设备生成文件名后缀
-          FIRST_DEVICE=$(echo $DEVICES | awk '{print $1}')
-          echo "FIRST_DEVICE=$FIRST_DEVICE" >> $GITHUB_ENV
-        fi
-        
-        echo "✅ 设备信息提取完成"
-
-    # -------------------------------------------------------------------------
-    # 15. 下载软件包
-    # -------------------------------------------------------------------------
-    - name: 📥 下载软件包
-      id: download
-      run: |
-        echo "=================================================================="
-        echo "📥 下载软件包"
-        echo "=================================================================="
-        
-        cd "${{ env.SOURCE_PATH }}"
-        
-        # 显示下载前磁盘空间
-        echo "📊 下载前磁盘空间:"
-        df -hT
-        
-        echo "📥 开始下载软件包..."
-        make download -j${{ env.PARALLEL_JOBS }}
-        
-        # 清理小文件
-        echo "🧹 清理小文件..."
-        find dl -size -1024c -exec ls -l {} \; 2>/dev/null || true
-        find dl -size -1024c -exec rm -f {} \; 2>/dev/null || true
-        
-        # 显示下载后磁盘空间
-        echo "📊 下载后磁盘空间:"
-        df -hT
-        
-        echo "✅ 软件包下载完成"
-
-    # -------------------------------------------------------------------------
-    # 16. 编译固件
-    # -------------------------------------------------------------------------
-    - name: 🔨 编译固件
-      id: compile
-      run: |
-        echo "=================================================================="
-        echo "🔨 编译固件"
-        echo "=================================================================="
-        
-        cd "${{ env.SOURCE_PATH }}"
-        
-        # 显示编译前磁盘空间
-        echo "📊 编译前磁盘空间:"
-        df -hT
-        
-        echo "🔨 开始编译固件..."
-        echo "🔧 使用并行任务数: ${{ env.PARALLEL_JOBS }}"
-        
-        # 编译
-        make -j${{ env.PARALLEL_JOBS }} || make -j1 || make -j1 V=s
-        
-        # 检查编译结果
-        if [ $? -eq 0 ]; then
-          echo "✅ 固件编译成功"
-          echo "status=success" >> $GITHUB_OUTPUT
-        else
-          echo "❌ 固件编译失败"
-          echo "status=failed" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        
-        # 显示编译后磁盘空间
-        echo "📊 编译后磁盘空间:"
-        df -hT
-        
-        echo "✅ 编译完成"
-
-    # -------------------------------------------------------------------------
-    # 17. 编译后检查
-    # -------------------------------------------------------------------------
-    - name: 🔍 编译后检查
-      id: post_build_check
-      run: |
-        echo "=================================================================="
-        echo "🔍 编译后检查"
-        echo "=================================================================="
-        
-        # 检查输出文件
-        cd "${{ env.SOURCE_PATH }}"
-        
-        echo "📦 编译输出文件:"
-        if [ -d "bin/targets" ]; then
-          find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.sysupgrade.tar" | head -20
-        else
-          echo "⚠️ 未找到编译输出文件"
-        fi
-        
-        # 计算编译时间
-        BUILD_END_TIME=$(date +%s)
-        BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
-        BUILD_HOURS=$((BUILD_DURATION / 3600))
-        BUILD_MINUTES=$(((BUILD_DURATION % 3600) / 60))
-        BUILD_SECONDS=$((BUILD_DURATION % 60))
-        
-        echo "⏱️ 编译耗时: ${BUILD_HOURS}小时 ${BUILD_MINUTES}分钟 ${BUILD_SECONDS}秒"
-        
-        echo "✅ 编译后检查完成"
-
-    # -------------------------------------------------------------------------
-    # 18. 保存缓存
-    # -------------------------------------------------------------------------
-    - name: 💾 保存缓存
-      id: cache_save
-      if: always()
+    - name: 缓存工具链
       uses: actions/cache@v4
       with:
+        key: ${{ env.REPO_NAME }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.HASH }}-${{ env.CACHE_DATE }}
+        restore-keys: ${{ env.REPO_NAME }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-
         path: |
-          ${{ env.WORKSPACE_DIR }}/${{ env.REPO_NAME }}
-          ${{ env.WORKSPACE_DIR }}/ccache
-          ${{ env.WORKSPACE_DIR }}/dl
-        key: "${{ env.REPO_SHORT_NAME }}-${{ env.CACHE_VERSION }}-${{ github.run_number }}-${{ github.sha }}"
+          ${{ env.OPENWRT_PATH }}/.ccache
+          ${{ env.OPENWRT_PATH }}/staging_dir
 
-    # -------------------------------------------------------------------------
-    # 19. 整理固件文件
-    # -------------------------------------------------------------------------
-    - name: 📦 整理固件文件
-      id: organize
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
+    - name: 刷新缓存
       run: |
-        echo "=================================================================="
-        echo "📦 整理固件文件"
-        echo "=================================================================="
-        
-        cd "${{ env.SOURCE_PATH }}"
-        
-        # 查找固件目录
-        FIRMWARE_DIR=$(find bin/targets -type d -name "*" | head -1)
-        if [ -z "$FIRMWARE_DIR" ]; then
-          echo "❌ 未找到固件目录"
-          exit 1
+        echo "========刷新缓存========"
+        if [ -d "$OPENWRT_PATH/staging_dir" ]; then
+          find "$OPENWRT_PATH/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r dir; do
+              find "$dir" -type f -exec touch {} +
+          done
+          echo "缓存刷新完成"
+        else
+          echo "缓存目录不存在，跳过刷新"
         fi
-        
-        cd "$FIRMWARE_DIR"
-        
-        # 移除不需要的文件
-        echo "🧹 清理不需要的文件..."
-        rm -rf packages
-        
-        # 获取固件路径
-        FIRMWARE_PATH=$(pwd)
-        echo "📂 固件路径: $FIRMWARE_PATH"
-        
-        # 列出固件文件
-        echo "📦 固件文件列表:"
-        ls -la
-        
-        # 设置输出变量
-        echo "firmware_path=$FIRMWARE_PATH" >> $GITHUB_OUTPUT
-        echo "firmware_path=$FIRMWARE_PATH" >> $GITHUB_ENV
-        
-        echo "✅ 固件文件整理完成"
+        echo "========================"
 
-    # -------------------------------------------------------------------------
-    # 20. 上传构建产物
-    # -------------------------------------------------------------------------
-    - name: 📤 上传构建产物
-      id: upload_artifact
-      if: steps.organize.outputs.firmware_path != ''
+    - name: 安装Feeds
+      run: |
+        echo "========安装Feeds========"
+        cd $OPENWRT_PATH
+        echo "更新Feeds..."
+        ./scripts/feeds update -a
+        echo "安装Feeds..."
+        ./scripts/feeds install -a
+        echo "Feeds安装完成"
+        echo "========================"
+
+    - name: 显示编译前磁盘空间
+      run: |
+        echo "========编译前磁盘空间========"
+        df -hT
+        echo "========================"
+
+    - name: 更新第三方源并生成LUCI报告
+      run: |
+        echo "========更新第三方源并生成LUCI报告========"
+        cd $OPENWRT_PATH
+        
+        # 设置脚本权限
+        chmod +x $GITHUB_WORKSPACE/$REPO_SCRIPT
+        chmod +x $GITHUB_WORKSPACE/$LUCI_REPORT_SCRIPT
+        
+        # 复制配置文件
+        cp $GITHUB_WORKSPACE/$CONFIG_FILE $OPENWRT_PATH/.config
+        
+        # 运行repo.sh更新第三方源
+        echo "运行repo.sh更新第三方源..."
+        $GITHUB_WORKSPACE/$REPO_SCRIPT
+        
+        # 运行luci_report.sh生成defconfig前的报告
+        echo "生成defconfig前的LUCI报告..."
+        $GITHUB_WORKSPACE/$LUCI_REPORT_SCRIPT $OPENWRT_PATH/.config
+        
+        # 执行defconfig
+        echo "执行make defconfig..."
+        make defconfig
+        
+        # 运行luci_report.sh生成defconfig后的报告
+        echo "生成defconfig后的LUCI报告..."
+        $GITHUB_WORKSPACE/$LUCI_REPORT_SCRIPT $OPENWRT_PATH/.config
+        
+        # 上传报告文件
+        mkdir -p $GITHUB_WORKSPACE/reports
+        cp -r $OPENWRT_PATH/reports/* $GITHUB_WORKSPACE/reports/ 2>/dev/null || true
+        
+        echo "第三方源更新和LUCI报告生成完成"
+        echo "========================"
+
+    - name: 上传LUCI报告
       uses: actions/upload-artifact@v4
       with:
-        name: "${{ env.REPO_SHORT_NAME }}-${{ env.FIRST_DEVICE }}-${{ env.BUILD_ID }}"
-        path: ${{ steps.organize.outputs.firmware_path }}
-        retention-days: ${{ env.RETAIN_DAYS }}
+        name: ${{ env.REPO_NAME }}-luci-report-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        path: reports/
 
-    # -------------------------------------------------------------------------
-    # 21. 创建 Release
-    # -------------------------------------------------------------------------
-    - name: 🚀 创建 Release
-      id: release
-      if: steps.compile.outputs.status == 'success' && github.event.inputs.upload_release == 'true'
+    - name: 加载自定义配置
       run: |
-        echo "=================================================================="
-        echo "🚀 创建 Release"
-        echo "=================================================================="
-        
-        # 生成 Release 标签
-        RELEASE_TAG="v${{ env.REPO_DATE }}-${{ env.FIRST_DEVICE }}-${{ github.run_number }}"
-        echo "🏷️ Release 标签: $RELEASE_TAG"
-        
-        # 生成 Release 说明
-        cat > release_body.txt << EOF
-        # ImmortalWrt 固件发布
-        
-        ## 📋 基本信息
-        - **版本**: ${{ env.REPO_VERSION }}
-        - **提交**: ${{ env.REPO_COMMIT }}
-        - **设备**: ${{ env.DEVICE_LIST }}
-        - **编译时间**: $(date '+%Y-%m-%d %H:%M:%S')
-        - **编译ID**: ${{ env.BUILD_ID }}
-        
-        ## 📊 编译信息
-        - **defconfig 前软件包**: ${{ steps.luci_report_before.outputs.before_count }}"
-        - **defconfig 后软件包**: ${{ steps.defconfig_report.outputs.after_count }}
-        
-        ## 📦 包含文件
-        $(cd ${{ env.FIRMWARE_PATH }} && ls -la | grep -E '\.(bin|img|tar)$' | awk '{print "- " $9}')
-        
-        ## 📥 下载说明
-        1. 选择适合你设备的固件文件
-        2. 通过设备升级页面上传固件
-        3. 等待升级完成
-        
-        ---
-        🤖 自动编译于 $(date '+%Y-%m-%d %H:%M:%S')
-        EOF
-        
-        # 设置输出变量
-        echo "tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
-        echo "release_body=release_body.txt" >> $GITHUB_OUTPUT
-        
-        echo "✅ Release 信息准备完成"
+        echo "========加载自定义配置========"
+        chmod +x $DIY_SCRIPT
+        cd $OPENWRT_PATH
+        $GITHUB_WORKSPACE/$DIY_SCRIPT
+        echo "自定义配置加载完成"
+        echo "========================"
 
-    - name: 📤 上传到 Release
-      if: steps.release.outputs.tag != ''
-      uses: softprops/action-gh-release@v1
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
+    - name: 下载DL软件包
+      run: |
+        echo "========下载DL软件包========"
+        cd $OPENWRT_PATH
+        cat $GITHUB_WORKSPACE/$CONFIG_FILE > .config
+        make defconfig
+        make download -j$(nproc)
+        echo "DL软件包下载完成"
+        echo "========================"
+
+    - name: 编译固件
+      id: compile
+      run: |
+        echo "========编译固件========"
+        cd $OPENWRT_PATH
+        echo -e "$(nproc) 线程编译"
+        
+        # 尝试多线程编译，失败则尝试单线程
+        if ! make -j$(nproc); then
+          echo "多线程编译失败，尝试单线程编译..."
+          if ! make -j1; then
+            echo "单线程编译失败，尝试详细模式编译..."
+            make -j1 V=s
+          fi
+        fi
+        
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        echo "固件编译完成"
+        echo "========================"
+
+    - name: 显示编译后磁盘空间
+      if: (!cancelled())
+      run: |
+        echo "========编译后磁盘空间========"
+        df -hT
+        echo "========================"
+
+    - name: 上传Bin目录
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      uses: actions/upload-artifact@v4
       with:
-        tag_name: ${{ steps.release.outputs.tag }}
-        body_path: ${{ steps.release.outputs.release_body }}
-        files: ${{ env.FIRMWARE_PATH }}/*
-        draft: false
-        prerelease: false
+        name: ${{ env.REPO_NAME }}-bin-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        path: ${{ env.OPENWRT_PATH }}/bin
 
-    # -------------------------------------------------------------------------
-    # 22. 清理和总结
-    # -------------------------------------------------------------------------
-    - name: 🧹 清理和总结
-      id: cleanup
-      if: always()
+    - name: 整理文件
+      if: steps.compile.outputs.status == 'success'
       run: |
-        echo "=================================================================="
-        echo "🧹 清理和总结"
-        echo "=================================================================="
+        echo "========整理文件========"
+        cd $OPENWRT_PATH/bin/targets/*/*
         
-        # 计算总执行时间
-        TOTAL_END_TIME=$(date +%s)
-        TOTAL_DURATION=$((TOTAL_END_TIME - BUILD_START_TIME))
-        TOTAL_HOURS=$((TOTAL_DURATION / 3600))
-        TOTAL_MINUTES=$(((TOTAL_DURATION % 3600) / 60))
-        TOTAL_SECONDS=$((TOTAL_DURATION % 60))
+        # 复制配置文件
+        cp $OPENWRT_PATH/.config ImmortalWrt.config
         
-        echo "⏱️ 总执行时间: ${TOTAL_HOURS}小时 ${TOTAL_MINUTES}分钟 ${TOTAL_SECONDS}秒"
+        # 重命名文件
+        mv config.buildinfo ImmortalWrt.config.buildinfo
+        mv immortalwrt-qualcommax-ipq60xx.manifest immortalwrt-qualcommax-ipq60xx-ImmortalWrt.manifest
         
-        # 显示执行摘要
-        echo ""
-        echo "=================================================================="
-        echo "📊 执行摘要"
-        echo "=================================================================="
-        echo "✅ 编译状态: ${{ steps.compile.outputs.status }}"
-        echo "📱 目标设备: ${{ env.DEVICE_LIST }}"
-        echo "🏷️ Release 标签: ${{ steps.release.outputs.tag }}"
-        echo "📦 构建产物: ${{ steps.upload_artifact.outcome }}"
-        echo "💾 缓存状态: ${{ steps.cache_save.outcome }}"
-        echo ""
-        
-        if [ "${{ steps.compile.outputs.status }}" = "success" ]; then
-          echo "🎉 编译成功完成！"
-        else
-          echo "❌ 编译失败，请检查日志"
+        # 处理包文件
+        if [ -d "$OPENWRT_PATH/bin/packages" ]; then
+          mv -f $OPENWRT_PATH/bin/packages/*/*/*.apk packages 2>/dev/null || true
+          if [ -d "packages" ]; then
+            tar -zcf ImmortalWrt.Packages.tar.gz packages
+          fi
         fi
         
-        echo "=================================================================="
+        # 删除不需要的文件
+        rm -rf packages feeds.buildinfo version.buildinfo sha256sums profiles.json
         
-        # 设置最终状态
-        if [ "${{ steps.compile.outputs.status }}" = "success" ]; then
-          echo "status=success" >> $GITHUB_OUTPUT
-        else
-          echo "status=failed" >> $GITHUB_OUTPUT
-        fi
+        # 设置环境变量
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+        
+        echo "文件整理完成"
+        echo "========================"
 
-    # -------------------------------------------------------------------------
-    # 23. 清理旧资源
-    # -------------------------------------------------------------------------
-    - name: 🗑️ 清理旧资源
-      if: always()
+    - name: 上传固件到Artifact
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.REPO_NAME }}-firmware-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}-${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE_PATH }}
+
+    - name: 发布固件到Release
+      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+      uses: ncipollo/release-action@v1
+      with:
+        name: ${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+        allowUpdates: true
+        tag: ${{ env.FIRMWARE_TAG }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: ${{ env.FIRMWARE_PATH }}/*
+        body: |
+          **这是 ${{ env.FIRMWARE_TAG }} 平台使用的 ImmortalWrt 固件**
+          ### 📒 固件信息
+          - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了若干工具，具体详见对应机型的config。
+          - 💻 这是 ${{ env.FIRMWARE_TAG }} 平台使用的 ImmortalWrt 固件
+          - ⚽ 固件源码: ${{ env.REPO_URL }}
+          - 💝 源码分支: ${{ env.REPO_BRANCH }}
+          - 🌐 默认地址: **192.168.111.1**
+          - 🔑 默认密码: none
+          ### 🧊 固件版本
+          - 固件内核版本：**${{ env.VERSION_KERNEL }}**
+          - 固件编译前最后一次➦[主源码](${{ env.REPO_URL }})更新记录
+          - ${{ env.VERSION_INFO }}
+
+    - name: 删除旧缓存
+      run: |
+        echo "========删除旧缓存========"
+        # 获取缓存列表并删除
+        gh cache list --key ${{ env.REPO_NAME }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}- --json key --jq '.[] | .key' | while read -r key; do
+          gh cache delete "$key"
+        done
+        # 输出缓存状态
+        echo "ccache: $(du -sh $OPENWRT_PATH/.ccache 2>/dev/null | cut -f 1 || echo "0")"
+        echo "staging: $(du -sh $OPENWRT_PATH/staging_dir 2>/dev/null | cut -f 1 || echo "0")"
+        echo "========================"
       env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        echo "=================================================================="
-        echo "🗑️ 清理旧资源"
-        echo "=================================================================="
-        
-        # 检查 GitHub CLI 是否可用
-        if ! command -v gh &> /dev/null; then
-          echo "⚠️ GitHub CLI 未安装，跳过清理"
-          exit 0
-        fi
-        
-        # 清理旧的 workflow runs
-        echo "🧹 清理旧的 workflow runs..."
-        gh run list --repo ${{ github.repository }} --limit 50 \
-          --json databaseId \
-          --jq '.[10:] | .[].databaseId' 2>/dev/null | \
-          xargs -I {} gh run delete --repo ${{ github.repository }} {} 2>/dev/null || true
-        
-        # 清理旧的 releases
-        echo "🧹 清理旧的 releases..."
-        gh release list --repo ${{ github.repository }} --limit ${{ env.KEEP_RELEASES }} \
-          --json tagName \
-          --jq '.[0].tagName' 2>/dev/null > latest_release.txt
-        
-        if [ -s latest_release.txt ]; then
-          LATEST_RELEASE=$(cat latest_release.txt)
-          gh release list --repo ${{ github.repository }} \
-            --exclude latest \
-            --json tagName \
-            --jq ".[] | select(.tagName != \"$LATEST_RELEASE\") | .tagName" 2>/dev/null | \
-            xargs -I {} gh release delete --repo ${{ github.repository }} {} --yes 2>/dev/null || true
-        fi
-        
-        echo "✅ 旧资源清理完成"
-
-  # ==============================================================================
-  # 构建状态通知任务
-  # ==============================================================================
-  status:
-    name: 构建状态
-    if: always()
-    needs: build
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: 📊 构建状态通知
-      run: |
-        echo "=================================================================="
-        echo "📊 构建状态通知"
-        echo "=================================================================="
-        echo "🔗 仓库: ${{ github.repository }}"
-        echo "🏷️ 分支: ${{ github.ref_name }}"
-        echo "🔨 构建: ${{ github.run_number }}"
-        echo "📅 时间: $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "✅ 状态: ${{ needs.build.result }}"
-        echo "=================================================================="
-        
-        if [ "${{ needs.build.result }}" = "success" ]; then
-          echo "🎉 构建成功！"
-        else
-          echo "❌ 构建失败！"
-        fi
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
