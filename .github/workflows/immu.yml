@@ -11,7 +11,7 @@
 #
 # 作者: Mary
 # 日期：20251114
-# 版本: 3.4 - 彻底修复语法错误版
+# 版本: 3.5 - 最终修复语法错误版
 # ==============================================================================
 
 name: ImmortalWrt 固件编译工作流
@@ -46,7 +46,7 @@ on:
 
 env:
   # 工作流版本
-  WORKFLOW_VERSION: "v3.4"
+  WORKFLOW_VERSION: "v3.5"
   # 源码仓库配置
   REPO_URL: https://github.com/laipeng668/immortalwrt.git
   REPO_BRANCH: master
@@ -455,7 +455,7 @@ jobs:
         tag: ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }}
         token: ${{ secrets.GITHUB_TOKEN }}
         artifacts: ${{ env.FIRMWARE_PATH }}/*
-        body: |
+        body: >-
           **这是 ${{ env.FIRMWARE_TAG || 'ImmortalWrt' }} 平台使用的 ImmortalWrt 固件**
           ### 📒 固件信息
           - 这是开启全功能NSS的6.12内核固件，默认主题为Argon；该固件在ImmortalWrt的基础上，添加了若干工具，具体详见对应机型的config。
