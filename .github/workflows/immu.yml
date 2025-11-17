@@ -1,0 +1,363 @@
+# ==============================================================================
+# OpenWrt/ImmortalWrt 自动编译工作流
+#
+# 功能:
+#   自动编译OpenWrt/ImmortalWrt固件
+#   支持多设备同时编译
+#   自动生成固件差异报告
+#
+# 作者: Mary
+# 日期：2025-11-17
+# 版本: 3.0 - 企业级优化版
+# ==============================================================================
+
+name: OpenWrt/ImmortalWrt 自动编译
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'configs/**'
+      - 'scripts/**'
+      - '.github/workflows/immu.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'configs/**'
+      - 'scripts/**'
+      - '.github/workflows/immu.yml'
+  workflow_dispatch:
+    inputs:
+      upload_release:
+        description: '是否发布到Release'
+        required: true
+        default: 'false'
+        type: boolean
+
+env:
+  REPO_URL: https://github.com/laipeng668/immortalwrt.git
+  REPO_BRANCH: master
+  FEEDS_CONF: feeds.conf.default
+  CONFIG_FILE: configs/immu.config
+  DIY_P1_SH: scripts/diy.sh
+  DIY_P2_SH: scripts/repo.sh
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_COWTRANSFER: false
+  UPLOAD_WETRANSFER: false
+  UPLOAD_RELEASE: ${{ github.event.inputs.upload_release || 'false' }}
+  TZ: Asia/Shanghai
+  DEVICE_NAMES: "" # 将从配置文件中提取
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    
+    steps:
+    - name: 检查磁盘空间
+      id: check-disk
+      run: |
+        echo "::group::检查磁盘空间"
+        echo "初始磁盘空间:"
+        df -h
+        echo "::endgroup::"
+        
+    - name: 扩展磁盘空间
+      id: extend-disk
+      run: |
+        echo "::group::扩展磁盘空间"
+        # 检查是否有可用的磁盘设备
+        DISK=$(lsblk -d -n -o NAME,SIZE | grep -E 'sd[a-z]' | head -n 1 | awk '{print $1}')
+        
+        if [ -n "$DISK" ]; then
+          echo "找到磁盘设备: /dev/$DISK"
+          
+          # 检查磁盘是否已分区
+          if ! lsblk /dev/$DISK | grep -q "part"; then
+            echo "磁盘未分区，正在分区..."
+            echo -e "o\nn\np\n1\n\n\nw" | sudo fdisk /dev/$DISK
+            sudo partprobe /dev/$DISK
+          fi
+          
+          # 检查分区是否已格式化
+          PARTITION="/dev/${DISK}1"
+          if ! sudo blkid $PARTITION | grep -q "TYPE"; then
+            echo "分区未格式化，正在格式化为ext4..."
+            sudo mkfs.ext4 -F $PARTITION
+          fi
+          
+          # 创建挂载点并挂载
+          sudo mkdir -p /mnt/extra-space
+          sudo mount $PARTITION /mnt/extra-space
+          
+          # 创建工作目录并设置软链接
+          sudo mkdir -p /mnt/extra-space/openwrt
+          sudo ln -sf /mnt/extra-space/openwrt $GITHUB_WORKSPACE/openwrt
+          
+          echo "扩展磁盘空间完成"
+          df -h
+        else
+          echo "未找到可用的磁盘设备，跳过扩展磁盘空间"
+        fi
+        echo "::endgroup::"
+        
+    - name: 克隆源代码
+      uses: actions/checkout@v4
+      
+    - name: 初始化编译环境
+      id: init-env
+      run: |
+        echo "::group::初始化编译环境"
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2404)
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+        echo "::endgroup::"
+        
+    - name: 克隆ImmortalWrt源码
+      id: clone-repo
+      run: |
+        echo "::group::克隆ImmortalWrt源码"
+        df -h
+        cd /workdir
+        
+        # 使用浅克隆以节省时间和空间
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        cd openwrt
+        
+        echo "源码克隆完成"
+        df -h
+        echo "::endgroup::"
+        
+    - name: 加载自定义配置
+      id: load-config
+      run: |
+        echo "::group::加载自定义配置"
+        [ -e files ] && mv files openwrt/files
+        [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
+        chmod +x $DIY_P1_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+        echo "::endgroup::"
+        
+    - name: 更新软件源
+      id: update-feeds
+      run: |
+        echo "::group::更新软件源"
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        echo "::endgroup::"
+        
+    - name: 加载第三方源
+      id: load-repo
+      run: |
+        echo "::group::加载第三方源"
+        cd openwrt
+        chmod +x $GITHUB_WORKSPACE/$DIY_P2_SH
+        $GITHUB_WORKSPACE/$DIY_P2_SH
+        
+        # 更新软件源
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        
+        # 运行defconfig
+        make defconfig
+        echo "::endgroup::"
+        
+    - name: 生成Luci软件包差异报告
+      id: luci-report
+      run: |
+        echo "::group::生成Luci软件包差异报告"
+        cd openwrt
+        
+        # 创建报告脚本
+        cat > luci_report.sh << 'EOF'
+        #!/bin/bash
+        # ==============================================================================
+        # Luci软件包差异报告生成脚本
+        #
+        # 功能:
+        #   生成Luci软件包差异报告
+        #   对比配置文件中的Luci软件包与实际安装的软件包
+        #
+        # 作者: Mary
+        # 日期：2025-11-17
+        # 版本: 1.0
+        # ==============================================================================
+        
+        echo "========================================"
+        echo "Luci软件包差异报告"
+        echo "========================================"
+        echo "生成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo ""
+        
+        # 从配置文件中提取Luci软件包
+        CONFIG_LUCI_PACKAGES=$(grep "^CONFIG_PACKAGE_luci-.*=y" .config | sed 's/^CONFIG_PACKAGE_\(.*\)=y/\1/' | sort)
+        
+        # 获取实际安装的Luci软件包
+        INSTALLED_LUCI_PACKAGES=$(find ./feeds/luci/collections -name "*.mk" -exec grep -l "Package:" {} \; | xargs -I {} grep "Package:" {} | sed 's/.*Package:[[:space:]]*\(luci-.*\)/\1/' | sort -u)
+        
+        # 获取已安装的Luci软件包
+        INSTALLED_PACKAGES=$(find ./feeds/luci/applications -name "Makefile" -exec grep -l "Package:" {} \; | xargs -I {} grep "Package:" {} | sed 's/.*Package:[[:space:]]*\(luci-.*\)/\1/' | sort -u)
+        
+        # 合并已安装的软件包
+        ALL_INSTALLED_PACKAGES=$(echo -e "$INSTALLED_LUCI_PACKAGES\n$INSTALLED_PACKAGES" | sort -u)
+        
+        # 计算差异
+        MISSING_PACKAGES=$(comm -23 <(echo "$CONFIG_LUCI_PACKAGES") <(echo "$ALL_INSTALLED_PACKAGES"))
+        EXTRA_PACKAGES=$(comm -13 <(echo "$CONFIG_LUCI_PACKAGES") <(echo "$ALL_INSTALLED_PACKAGES"))
+        
+        # 输出报告
+        echo "配置文件中的Luci软件包数量: $(echo "$CONFIG_LUCI_PACKAGES" | wc -l)"
+        echo "实际安装的Luci软件包数量: $(echo "$ALL_INSTALLED_PACKAGES" | wc -l)"
+        echo ""
+        
+        if [ -n "$MISSING_PACKAGES" ]; then
+          echo "缺失的Luci软件包:"
+          echo "$MISSING_PACKAGES"
+          echo ""
+        else
+          echo "没有缺失的Luci软件包"
+          echo ""
+        fi
+        
+        if [ -n "$EXTRA_PACKAGES" ]; then
+          echo "额外的Luci软件包:"
+          echo "$EXTRA_PACKAGES"
+          echo ""
+        else
+          echo "没有额外的Luci软件包"
+          echo ""
+        fi
+        
+        echo "========================================"
+        EOF
+        
+        chmod +x luci_report.sh
+        ./luci_report.sh > ../luci_report.txt
+        echo "::endgroup::"
+        
+    - name: 提取设备名称
+      id: extract-devices
+      run: |
+        echo "::group::提取设备名称"
+        cd openwrt
+        
+        # 从配置文件中提取设备名称
+        DEVICE_NAMES=$(grep "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y" .config | sed 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_\(.*\)=y/\1/' | sort -u | tr '\n' ' ')
+        echo "提取到的设备名称: $DEVICE_NAMES"
+        
+        # 设置环境变量
+        echo "DEVICE_NAMES=$DEVICE_NAMES" >> $GITHUB_ENV
+        
+        # 输出到日志
+        echo "设备名称已设置为环境变量"
+        echo "::endgroup::"
+        
+    - name: 下载软件包
+      id: download-packages
+      run: |
+        echo "::group::下载软件包"
+        cd openwrt
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+        echo "::endgroup::"
+        
+    - name: 编译固件
+      id: build-firmware
+      run: |
+        echo "::group::编译固件"
+        cd openwrt
+        echo -e "$(nproc) thread build"
+        make -j$(nproc) || make -j1 || make -j1 V=s
+        echo "编译完成"
+        echo "::endgroup::"
+        
+    - name: 检查磁盘空间
+      id: check-disk-after
+      run: |
+        echo "::group::检查磁盘空间"
+        echo "编译后磁盘空间:"
+        df -h
+        echo "::endgroup::"
+        
+    - name: 整理文件
+      id: organize-files
+      run: |
+        echo "::group::整理文件"
+        cd openwrt
+        rm -rf ./tmp
+        mkdir -p ../firmware
+        
+        # 复制所有固件文件
+        find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.elf" -o -name "*.vmdk" | xargs -I {} cp {} ../firmware/
+        
+        # 复制manifest文件
+        find bin/targets -name "manifest" | xargs -I {} cp {} ../firmware/
+        
+        # 复制sha256sums文件
+        find bin/targets -name "sha256sums" | xargs -I {} cp {} ../firmware/
+        
+        # 复制配置文件
+        cp .config ../firmware/config.txt
+        
+        # 复制Luci报告
+        cp ../luci_report.txt ../firmware/
+        
+        # 重命名固件文件以包含设备名称
+        cd ../firmware
+        for device in $DEVICE_NAMES; do
+          for file in *$device*; do
+            if [ -f "$file" ]; then
+              new_name="${file}-${device}"
+              mv "$file" "$new_name"
+            fi
+          done
+        done
+        
+        echo "文件整理完成"
+        ls -lh
+        echo "::endgroup::"
+        
+    - name: 上传固件到Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: OpenWrt_firmware_${{ github.run_number }}
+        path: ./firmware/
+        
+    - name: 创建发布
+      id: create-release
+      if: steps.extract-devices.outputs.device-names != '' && env.UPLOAD_RELEASE == 'true'
+      uses: softprops/action-gh-release@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.run_number }}
+        body: |
+          ## 🎉 OpenWrt/ImmortalWrt 固件发布
+          
+          ### 📋 编译信息
+          - **编译时间**: ${{ steps.build-firmware.outputs.build-time }}
+          - **源码仓库**: ${{ env.REPO_URL }}
+          - **源码分支**: ${{ env.REPO_BRANCH }}
+          - **设备名称**: ${{ env.DEVICE_NAMES }}
+          
+          ### 📦 固件文件
+          - 固件文件已包含设备名称后缀
+          - 请根据您的设备型号选择对应的固件文件
+          
+          ### 📄 Luci软件包差异报告
+          - 请查看 luci_report.txt 文件了解软件包差异
+          
+          ### ⚠️ 注意事项
+          - 刷机前请备份原固件配置
+          - 刷机后请恢复出厂设置
+          - 首次启动可能需要较长时间
+        files: ./firmware/*
