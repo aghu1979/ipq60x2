@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：2025-11-17
-# 版本: 3.0 - 企业级优化版
+# 版本: 3.1 - 修复版
 # ==============================================================================
 
 # 导入通用函数
@@ -75,7 +75,7 @@ TOTAL_COUNT=0
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 3.0 - 企业级优化版"
+    log_info "版本: 3.1 - 修复版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
 }
@@ -230,6 +230,48 @@ check_and_remove_conflicts() {
     return 0
 }
 
+# 验证feeds.conf.default文件
+validate_feeds_config() {
+    log_processing "验证feeds.conf.default文件"
+    TOTAL_COUNT=$((TOTAL_COUNT + 1))
+    
+    # 检查文件是否存在
+    if [ ! -f "feeds.conf.default" ]; then
+        log_error "feeds.conf.default文件不存在"
+        ERROR_COUNT=$((ERROR_COUNT + 1))
+        return 1
+    fi
+    
+    # 检查文件语法
+    local line_num=0
+    local error_count=0
+    
+    while IFS= read -r line; do
+        line_num=$((line_num + 1))
+        
+        # 跳过空行和注释行
+        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+        
+        # 检查格式是否正确
+        if [[ ! "$line" =~ ^src- ]]; then
+            log_error "第 $line_num 行格式错误: $line"
+            ERROR_COUNT=$((ERROR_COUNT + 1))
+            error_count=$((error_count + 1))
+        fi
+    done < "feeds.conf.default"
+    
+    if [ $error_count -eq 0 ]; then
+        log_success "feeds.conf.default文件验证通过"
+        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+        return 0
+    else
+        log_error "feeds.conf.default文件验证失败，发现 $error_count 个错误"
+        return 1
+    fi
+}
+
 # 添加第三方软件源
 add_third_party_feeds() {
     log_step "添加第三方软件源"
@@ -284,9 +326,9 @@ add_third_party_feeds() {
     # luci-app-quickfile by sbwml
     clone_repo "https://github.com/sbwml/luci-app-quickfile" "package/luci-app-quickfile"
     
-    # momo和nikki
-    echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo;main" >> "feeds.conf.default"
-    echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki;main" >> "feeds.conf.default"
+    # momo和nikki - 直接添加到feeds.conf.default而不是使用echo
+    add_feed "momo" "https://github.com/nikkinikki-org/OpenWrt-momo.git" "main"
+    add_feed "nikki" "https://github.com/nikkinikki-org/OpenWrt-nikki.git" "main"
     
     # OpenAppFilter（OAF）
     clone_repo "https://github.com/destan19/OpenAppFilter" "package/luci-app-oaf"
@@ -303,6 +345,9 @@ add_third_party_feeds() {
     
     # kenzok8/small-package，后备之选
     clone_repo "https://github.com/kenzok8/small-package" "small"
+    
+    # 验证feeds.conf.default文件
+    validate_feeds_config
     
     log_success "第三方软件源添加完成"
 }
