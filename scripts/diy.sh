@@ -5,7 +5,6 @@
 #
 # 功能:
 #   配置设备初始管理IP/密码
-#   优化UI样式
 #   应用自定义配置
 #
 # 使用方法:
@@ -13,7 +12,7 @@
 #
 # 作者: Mary
 # 日期：2025-11-17
-# 版本: 3.0 - 企业级优化版
+# 版本: 3.1 - 修复版
 # ==============================================================================
 
 # 导入通用函数
@@ -25,7 +24,7 @@ DEFAULT_IP="192.168.111.1"
 # 默认密码（空）
 DEFAULT_PASSWORD=""
 # 默认主机名
-DEFAULT_HOSTNAME="ImmortalWrt"
+DEFAULT_HOSTNAME="WRT"
 # 默认主题
 DEFAULT_THEME="argon"
 
@@ -85,7 +84,7 @@ TOTAL_COUNT=0
 show_script_info() {
     log_step "OpenWrt/ImmortalWrt 自定义配置脚本"
     log_info "作者: Mary"
-    log_info "版本: 3.0 - 企业级优化版"
+    log_info "版本: 3.1 - 修复版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
 }
@@ -167,115 +166,6 @@ configure_initial_settings() {
     return 0
 }
 
-# 优化UI样式
-optimize_ui_styles() {
-    log_processing "优化UI样式..."
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 检查主题是否存在
-    local theme_dir="feeds/luci/themes/luci-theme-argon"
-    if [ ! -d "$theme_dir" ]; then
-        log_warning "Argon主题不存在，跳过UI优化"
-        WARNING_COUNT=$((WARNING_COUNT + 1))
-        return 1
-    fi
-    
-    local css_file="$theme_dir/htdocs/luci-static/argon/css/cascade.css"
-    
-    if [ ! -f "$css_file" ]; then
-        log_warning "Argon主题CSS文件不存在，跳过UI优化"
-        WARNING_COUNT=$((WARNING_COUNT + 1))
-        return 1
-    fi
-    
-    # 调整在Argon主题下，概览页面显示/隐藏按钮的样式
-    log_info "调整概览页面显示/隐藏按钮的样式"
-    
-    # 备份原文件
-    if cp "$css_file" "$css_file.bak"; then
-        log_success "CSS文件备份成功"
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-    else
-        log_error "CSS文件备份失败"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        return 1
-    fi
-    
-    # 修改CSS文件
-    if sed -i '/^\.td\.cbi-section-actions {$/,/^}$/ {
-        /^}$/a\
-.cbi-section.fade-in .cbi-title {\
-  position: relative;\
-  min-height: 2.765rem;\
-  display: flex;\
-  align-items: center\
-}\
-.cbi-section.fade-in .cbi-title>div:last-child {\
-  position: absolute;\
-  right: 1rem\
-}\
-.cbi-section.fade-in .cbi-title>div:last-child span {\
-  display: inline-block;\
-  position: relative;\
-  font-size: 0\
-}\
-.cbi-section.fade-in .cbi-title>div:last-child span::after {\
-  content: "\\e90f";\
-  font-family: '\''argon'\'' !important;\
-  font-size: 1.1rem;\
-  display: inline-block;\
-  transition: transform 0.3s ease;\
-  -webkit-font-smoothing: antialiased;\
-  line-height: 1\
-}\
-.cbi-section.fade-in .cbi-title>div:last-child span[data-style='\''inactive'\'']::after {\
-  transform: rotate(90deg);\
-}
-}' "$css_file"; then
-        log_success "CSS文件修改成功"
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-    else
-        log_error "CSS文件修改失败"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        return 1
-    fi
-    
-    # 修改状态页面JavaScript
-    local js_file="feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/index.js"
-    
-    if [ -f "$js_file" ]; then
-        log_info "修改状态页面JavaScript"
-        
-        # 备份原文件
-        if cp "$js_file" "$js_file.bak"; then
-            log_success "JavaScript文件备份成功"
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        else
-            log_error "JavaScript文件备份失败"
-            ERROR_COUNT=$((ERROR_COUNT + 1))
-            return 1
-        fi
-        
-        # 修改JavaScript文件
-        if sed -i -e '/btn\.setAttribute(\x27class\x27, include\.hide ? \x27label notice\x27 : \x27label\x27);/d' \
-               -e "/\x27class\x27: includes\[i\]\.hide ? \x27label notice\x27 : \x27label\x27,/d" \
-               "$js_file"; then
-            log_success "JavaScript文件修改成功"
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        else
-            log_error "JavaScript文件修改失败"
-            ERROR_COUNT=$((ERROR_COUNT + 1))
-            return 1
-        fi
-    else
-        log_warning "状态页面JavaScript文件不存在，跳过修改"
-        WARNING_COUNT=$((WARNING_COUNT + 1))
-    fi
-    
-    log_success "UI样式优化完成"
-    return 0
-}
-
 # 应用自定义配置
 apply_custom_configurations() {
     log_processing "应用自定义配置..."
@@ -325,9 +215,6 @@ main() {
     if check_environment; then
         # 配置初始IP和密码
         configure_initial_settings "$@"
-        
-        # 优化UI样式
-        optimize_ui_styles
         
         # 应用自定义配置
         apply_custom_configurations
