@@ -2,10 +2,10 @@
 
 # ==============================================================================
 # OpenWrt 自定义编译脚本
-# 版本: v2.1
+# 版本: v2.3
 # 日期: 2025-11-18
 # 功能: 修改系统配置、添加自定义软件源、更新并安装软件包
-# 作者: Mary (根据您的署名修改)
+# 作者: Mary
 # ==============================================================================
 
 # --- 1. 修改系统默认配置 ---
@@ -103,7 +103,7 @@ git_sparse_clone() {
 
 # --- 4.1 直接克隆到 package/ 目录 ---
 echo "  >> 直接克隆软件包..."
-# Sirpdboy 的软件包集合 (已移除错误的归属)
+# Sirpdboy 的软件包集合
 git clone --depth=1 https://github.com/sirpdboy/luci-app-adguardhome package/luci-app-adguardhome
 git clone --depth=1 https://github.com/sirpdboy/luci-app-ddns-go package/luci-app-ddns-go
 git clone --depth=1 https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata
@@ -128,7 +128,7 @@ git clone --depth=1 https://github.com/asvow/luci-app-tailscale package/luci-app
 git clone --depth=1 https://github.com/lmq8267/luci-app-vnt package/luci-app-vnt
 
 # SBWML 的软件包集合
-git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang # 恢复原始方案
+git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
 git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/luci-app-openlist
 git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns package/luci-app-mosdns
 git clone --depth=1 https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile
@@ -142,7 +142,6 @@ git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora package/luci-th
 mv -f package/luci-theme-aurora feeds/luci/themes/luci-theme-aurora
 
 # FRP (后端和Luci前端)
-# 注意：这里从 laipeng668 的 packages 仓库获取 frp 后端，从 luci 仓库获取前端
 git_sparse_clone ariang https://github.com/laipeng668/packages net/ariang
 mv -f net/ariang feeds/packages/net/
 git_sparse_clone frp https://github.com/laipeng668/packages net/frp
