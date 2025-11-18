@@ -1,0 +1,436 @@
+# .github/workflows/build.yml
+name: ImmortalWrt 固件编译系统
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: '选择要编译的变体'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - ultra
+        - max
+        - pro
+
+env:
+  REPO_OWNER: laipeng668
+  REPO_NAME: immortalwrt
+  REPO_BRANCH: master
+  FIRMWARE_IP: 192.168.111.1
+  FIRMWARE_NAME: WRT
+  AUTHOR_NAME: Mary
+  TZ: Asia/Shanghai
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      device_list: ${{ steps.extract_devices.outputs.devices }}
+      cache_key: ${{ steps.cache_key.outputs.key }}
+    steps:
+    - name: 🚀 检出代码
+      uses: actions/checkout@v4
+
+    - name: 📅 设置环境变量
+      run: |
+        echo "BUILD_DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
+        echo "BUILD_TIME=$(date +%H:%M:%S)" >> $GITHUB_ENV
+        echo "BUILD_TIMESTAMP=$(date +%s)" >> $GITHUB_ENV
+
+    - name: 📦 安装必要的软件包
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y $(curl -fsSL https://raw.githubusercontent.com/${{ github.repository_owner }}/${{ github.event.repository.name }}/main/scripts/requirements.txt 2>/dev/null || echo "build-essential ccache ecj fastjar file g++ gawk gettext git java-propose-classpath libelf-dev libncurses5-dev libncursesw5-dev libssl-dev python3 unzip python3-ziputils python3-pyelftools python3-pip rsync subversion swig time wget vim python3-pyelftools python3-dev curl)
+        sudo apt-get install -y jq
+
+    - name: 🔑 创建缓存键
+      id: cache_key
+      run: |
+        echo "key=immwrt-${{ env.REPO_BRANCH }}-${{ env.BUILD_TIMESTAMP }}" >> $GITHUB_OUTPUT
+
+    - name: 📱 提取设备名称
+      id: extract_devices
+      run: |
+        # 提取设备名称
+        devices=$(grep -oE 'CONFIG_TARGET_DEVICE_[^_]+_DEVICE_[^=]+' configs/base_ipq60xx.config 2>/dev/null | sed 's/CONFIG_TARGET_DEVICE_[^_]*_DEVICE_//' || echo "")
+        echo "devices=$devices" >> $GITHUB_OUTPUT
+        echo -e "\033[1;32m✅ 找到的设备: $devices\033[0m"
+
+    - name: 📁 创建工作目录
+      run: |
+        mkdir -p build workspace
+
+    - name: 💾 扩展磁盘空间
+      run: |
+        # 创建软链接扩展磁盘空间
+        sudo mkdir -p /mnt/ramdisk
+        sudo mount -t tmpfs -o size=10G tmpfs /mnt/ramdisk
+        sudo mkdir -p /mnt/ramdisk/build
+        sudo chown $USER:$USER /mnt/ramdisk/build
+        ln -sf /mnt/ramdisk/build ./build
+        echo -e "\033[1;32m✅ 磁盘空间扩展成功\033[0m"
+
+  build-ultra:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    if: github.event.inputs.variant == 'all' || github.event.inputs.variant == 'ultra' || github.event.inputs.variant == ''
+    outputs:
+      cache_hit: ${{ steps.cache.outputs.cache-hit }}
+    steps:
+    - name: 🚀 检出代码
+      uses: actions/checkout@v4
+
+    - name: 💾 恢复工作目录
+      run: |
+        sudo mkdir -p /mnt/ramdisk
+        sudo mount -t tmpfs -o size=10G tmpfs /mnt/ramdisk
+        sudo mkdir -p /mnt/ramdisk/build
+        sudo chown $USER:$USER /mnt/ramdisk/build
+        ln -sf /mnt/ramdisk/build ./build
+
+    - name: 💾 恢复缓存
+      uses: actions/cache@v4
+      id: cache
+      with:
+        path: |
+          ./build
+          ~/.ccache
+        key: ${{ needs.prepare.outputs.cache_key }}-ultra
+        restore-keys: |
+          immwrt-${{ env.REPO_BRANCH }}-
+
+    - name: 📥 克隆源码仓库
+      run: |
+        echo -e "\033[1;34m📥 开始克隆源码仓库...\033[0m"
+        git clone https://github.com/${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}.git -b ${{ env.REPO_BRANCH }} build/source
+        cd build/source
+        
+        # 复制配置文件和脚本
+        cp ../../configs/* ../configs/
+        cp ../../scripts/* ../scripts/
+        chmod +x ../scripts/*.sh
+
+    - name: 🔧 合并配置文件
+      run: |
+        cd build/source
+        echo -e "\033[1;34m🔧 合并配置文件...\033[0m"
+        cat ../configs/base_ipq60xx.config ../configs/base_immwrt.config ../configs/Ultra.config > .config
+        
+        # 运行 defconfig 补全配置
+        make defconfig
+        
+        # 提取并显示 luci 软件包差异
+        echo -e "\033[1;33m📋 LUCI 软件包报告\033[0m"
+        grep -E '^CONFIG_PACKAGE_luci.*=y$' .config > ../luci-after.txt
+        
+        echo -e "\033[1;36m📦 已包含的 LUCI 软件包:\033[0m"
+        cat ../luci-after.txt | while read line; do
+          pkg=$(echo $line | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g')
+          echo -e "  ✨ $pkg"
+        done
+
+    - name: 🎨 应用自定义脚本
+      run: |
+        cd build/source
+        echo -e "\033[1;34m🎨 应用自定义脚本...\033[0m"
+        ../scripts/diy.sh
+
+    - name: 📦 添加第三方软件源
+      run: |
+        cd build/source
+        echo -e "\033[1;34m📦 添加第三方软件源...\033[0m"
+        ../scripts/repo.sh
+
+    - name: 🔄 更新 feeds
+      run: |
+        cd build/source
+        echo -e "\033[1;34m🔄 更新 feeds...\033[0m"
+        ./scripts/feeds update -a
+        echo -e "\033[1;34m📦 安装 feeds...\033[0m"
+        ./scripts/feeds install -a
+
+    - name: 🔨 编译固件
+      run: |
+        cd build/source
+        echo -e "\033[1;34m🔨 开始编译固件...\033[0m"
+        make -j$(nproc) || make -j1 || echo -e "\033[1;31m❌ 编译失败\033[0m"
+
+    - name: 📦 整理编译产物
+      run: |
+        cd build/source
+        mkdir -p ../output/ultra
+        find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.sysupgrade" | xargs -I {} cp {} ../output/ultra/
+        
+        # 重命名固件文件
+        for device in ${{ needs.prepare.outputs.device_list }}; do
+          if [ -f "../output/ultra/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin" ]; then
+            mv "../output/ultra/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin" "../output/ultra/ImmortalWrt-${device}-Ultra-${{ env.BUILD_DATE }}.bin"
+            echo -e "\033[1;32m✅ 重命名: ImmortalWrt-${device}-Ultra-${{ env.BUILD_DATE }}.bin\033[0m"
+          fi
+        done
+
+    - name: 📤 上传编译产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: immortalwrt-ultra
+        path: build/output/ultra/
+        retention-days: 7
+
+  build-max:
+    needs: [prepare, build-ultra]
+    runs-on: ubuntu-24.04
+    if: github.event.inputs.variant == 'all' || github.event.inputs.variant == 'max' || github.event.inputs.variant == ''
+    steps:
+    - name: 🚀 检出代码
+      uses: actions/checkout@v4
+
+    - name: 💾 恢复工作目录
+      run: |
+        sudo mkdir -p /mnt/ramdisk
+        sudo mount -t tmpfs -o size=10G tmpfs /mnt/ramdisk
+        sudo mkdir -p /mnt/ramdisk/build
+        sudo chown $USER:$USER /mnt/ramdisk/build
+        ln -sf /mnt/ramdisk/build ./build
+
+    - name: 💾 恢复缓存
+      uses: actions/cache@v4
+      with:
+        path: |
+          ./build
+          ~/.ccache
+        key: ${{ needs.prepare.outputs.cache_key }}-ultra
+        restore-keys: |
+          immwrt-${{ env.REPO_BRANCH }}-
+
+    - name: 🔧 合并配置文件
+      run: |
+        cd build/source
+        
+        # 备份当前配置
+        cp .config ../configs/Ultra-backup.config
+        
+        # 合并配置
+        cat ../configs/base_ipq60xx.config ../configs/base_immwrt.config ../configs/Max.config > .config
+        
+        # 运行 defconfig 补全配置
+        make defconfig
+        
+        # 提取并显示 luci 软件包差异
+        echo -e "\033[1;33m📋 LUCI 软件包差异报告 (Max vs Ultra)\033[0m"
+        grep -E '^CONFIG_PACKAGE_luci.*=y$' .config > ../luci-after.txt
+        grep -E '^CONFIG_PACKAGE_luci.*=y$' ../configs/Ultra-backup.config > ../luci-before.txt
+        
+        echo -e "\033[1;32m➕ 新增的 LUCI 软件包:\033[0m"
+        comm -13 ../luci-before.txt ../luci-after.txt | while read line; do
+          pkg=$(echo $line | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g')
+          echo -e "  ✨ $pkg"
+        done || echo -e "  📭 无新增"
+        
+        echo -e "\033[1;31m➖ 移除的 LUCI 软件包:\033[0m"
+        comm -23 ../luci-before.txt ../luci-after.txt | while read line; do
+          pkg=$(echo $line | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g')
+          echo -e "  🗑️ $pkg"
+        done || echo -e "  📭 无移除"
+
+    - name: 🔨 编译固件
+      run: |
+        cd build/source
+        echo -e "\033[1;34m🔨 开始编译 Max 固件...\033[0m"
+        make -j$(nproc) || make -j1 || echo -e "\033[1;31m❌ 编译失败\033[0m"
+
+    - name: 📦 整理编译产物
+      run: |
+        cd build/source
+        mkdir -p ../output/max
+        find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.sysupgrade" | xargs -I {} cp {} ../output/max/
+        
+        # 重命名固件文件
+        for device in ${{ needs.prepare.outputs.device_list }}; do
+          if [ -f "../output/max/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin" ]; then
+            mv "../output/max/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin" "../output/max/ImmortalWrt-${device}-Max-${{ env.BUILD_DATE }}.bin"
+            echo -e "\033[1;32m✅ 重命名: ImmortalWrt-${device}-Max-${{ env.BUILD_DATE }}.bin\033[0m"
+          fi
+        done
+
+    - name: 📤 上传编译产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: immortalwrt-max
+        path: build/output/max/
+        retention-days: 7
+
+  build-pro:
+    needs: [prepare, build-ultra]
+    runs-on: ubuntu-24.04
+    if: github.event.inputs.variant == 'all' || github.event.inputs.variant == 'pro' || github.event.inputs.variant == ''
+    steps:
+    - name: 🚀 检出代码
+      uses: actions/checkout@v4
+
+    - name: 💾 恢复工作目录
+      run: |
+        sudo mkdir -p /mnt/ramdisk
+        sudo mount -t tmpfs -o size=10G tmpfs /mnt/ramdisk
+        sudo mkdir -p /mnt/ramdisk/build
+        sudo chown $USER:$USER /mnt/ramdisk/build
+        ln -sf /mnt/ramdisk/build ./build
+
+    - name: 💾 恢复缓存
+      uses: actions/cache@v4
+      with:
+        path: |
+          ./build
+          ~/.ccache
+        key: ${{ needs.prepare.outputs.cache_key }}-ultra
+        restore-keys: |
+          immwrt-${{ env.REPO_BRANCH }}-
+
+    - name: 🔧 合并配置文件
+      run: |
+        cd build/source
+        
+        # 备份当前配置
+        cp .config ../configs/Ultra-backup.config
+        
+        # 合并配置
+        cat ../configs/base_ipq60xx.config ../configs/base_immwrt.config ../configs/Pro.config > .config
+        
+        # 运行 defconfig 补全配置
+        make defconfig
+        
+        # 提取并显示 luci 软件包差异
+        echo -e "\033[1;33m📋 LUCI 软件包差异报告 (Pro vs Ultra)\033[0m"
+        grep -E '^CONFIG_PACKAGE_luci.*=y$' .config > ../luci-after.txt
+        grep -E '^CONFIG_PACKAGE_luci.*=y$' ../configs/Ultra-backup.config > ../luci-before.txt
+        
+        echo -e "\033[1;32m➕ 新增的 LUCI 软件包:\033[0m"
+        comm -13 ../luci-before.txt ../luci-after.txt | while read line; do
+          pkg=$(echo $line | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g')
+          echo -e "  ✨ $pkg"
+        done || echo -e "  📭 无新增"
+        
+        echo -e "\033[1;31m➖ 移除的 LUCI 软件包:\033[0m"
+        comm -23 ../luci-before.txt ../luci-after.txt | while read line; do
+          pkg=$(echo $line | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g')
+          echo -e "  🗑️ $pkg"
+        done || echo -e "  📭 无移除"
+
+    - name: 🔨 编译固件
+      run: |
+        cd build/source
+        echo -e "\033[1;34m🔨 开始编译 Pro 固件...\033[0m"
+        make -j$(nproc) || make -j1 || echo -e "\033[1;31m❌ 编译失败\033[0m"
+
+    - name: 📦 整理编译产物
+      run: |
+        cd build/source
+        mkdir -p ../output/pro
+        find bin/targets -name "*.bin" -o -name "*.img" -o -name "*.sysupgrade" | xargs -I {} cp {} ../output/pro/
+        
+        # 重命名固件文件
+        for device in ${{ needs.prepare.outputs.device_list }}; do
+          if [ -f "../output/pro/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin" ]; then
+            mv "../output/pro/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin" "../output/pro/ImmortalWrt-${device}-Pro-${{ env.BUILD_DATE }}.bin"
+            echo -e "\033[1;32m✅ 重命名: ImmortalWrt-${device}-Pro-${{ env.BUILD_DATE }}.bin\033[0m"
+          fi
+        done
+
+    - name: 📤 上传编译产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: immortalwrt-pro
+        path: build/output/pro/
+        retention-days: 7
+
+  release:
+    needs: [prepare, build-ultra, build-max, build-pro]
+    runs-on: ubuntu-24.04
+    if: success() && (github.event.inputs.variant == 'all' || github.event.inputs.variant == '')
+    steps:
+    - name: 📁 创建发布目录
+      run: |
+        mkdir -p release
+
+    - name: 📥 下载所有编译产物
+      uses: actions/download-artifact@v4
+      with:
+        path: release
+
+    - name: 📝 创建发布说明
+      run: |
+        cat > release/RELEASE_NOTES.md << EOF
+        # ImmortalWrt 固件发布 🚀
+        
+        ## 📅 构建信息
+        - 构建日期: ${{ env.BUILD_DATE }}
+        - 构建时间: ${{ env.BUILD_TIME }}
+        - 源码仓库: ${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}
+        - 源码分支: ${{ env.REPO_BRANCH }}
+        
+        ## 🎯 固件变体
+        - **Ultra**: 包含所有功能和软件包 🌟
+        - **Max**: 包含大部分功能和软件包 ⭐
+        - **Pro**: 包含常用功能和软件包 ✨
+        
+        ## 📱 支持的设备
+        ${{ needs.prepare.outputs.device_list }}
+        
+        ## 🔧 固件信息
+        - 固件IP地址: ${{ env.FIRMWARE_IP }}
+        - 固件名称: ${{ env.FIRMWARE_NAME }}
+        - 作者: ${{ env.AUTHOR_NAME }}
+        - 默认密码: 空
+        
+        ## 🎨 主题
+        - Argon 主题
+        - Aurora 主题
+        
+        ## 📦 第三方软件包
+        本固件包含以下第三方软件包:
+        - 🏮 京东云雅典娜LED控制
+        - 🚇 Passwall / Passwall2
+        - 🛡️ AdGuardHome
+        - 🌐 DDNS-GO
+        - 📊 NetData
+        - ⚡ 网络测速
+        - 💾 分区管理
+        - ⏰ 任务计划
+        - 🍀 Lucky
+        - 🔗 EasyTier
+        - 🏠 HomeProxy
+        - 🐹 Golang & OpenList2
+        - 🌊 MosDNS
+        - 📁 QuickFile
+        - 🎭 Momo / Nikki
+        - 🔒 OpenAppFilter
+        - ⚔️ OpenClash
+        - 🦊 Tailscale
+        - 🌐 VNT
+        
+        ## ⚠️ 注意事项
+        1. 首次刷机后请恢复出厂设置
+        2. 如遇问题，请尝试恢复出厂设置
+        3. 更多信息请访问项目主页
+        
+        ---
+        构建于 ${{ env.BUILD_DATE }} ${{ env.BUILD_TIME }}
+        EOF
+
+    - name: 🚀 发布固件
+      uses: softprops/action-gh-release@v2
+      with:
+        name: ImmortalWrt ${{ env.BUILD_DATE }}
+        body_path: release/RELEASE_NOTES.md
+        draft: false
+        prerelease: false
+        files: |
+          release/**/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
