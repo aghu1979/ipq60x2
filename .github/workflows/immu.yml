@@ -1,6 +1,6 @@
 # ==============================================================================
 # OpenWrt 自定义编译工作流
-# 版本: v2.4
+# 版本: v2.5
 # 日期: 2025-11-18
 # 功能: 修改系统配置、添加自定义软件源、更新并安装软件包
 # 作者: Mary
@@ -85,23 +85,7 @@ jobs:
         
         # 创建软链接扩展磁盘空间
         ln -sf ${{ env.DL_DIR }} dl
-        ln -sf ${{ env.TMP_DIR }} tmp
-
-    - name: Debug Environment(调试环境信息)
-      if: env.ENABLE_DEBUG == 'true'
-      run: |
-        cd $OPENWRT_PATH
-        echo "=== 调试信息 ==="
-        echo "工作目录: $(pwd)"
-        echo "OPENWRT_PATH: $OPENWRT_PATH"
-        echo "CONFIG_FILE: $CONFIG_FILE"
-        echo "DIY_SCRIPT: $DIY_SCRIPT"
-        echo "DIY_SCRIPT路径: $GITHUB_WORKSPACE/$DIY_SCRIPT"
-        echo "磁盘使用情况:"
-        df -hT
-        echo "内存使用情况:"
-        free -h
-        echo "=== 调试信息结束 ==="
+        ln -sf ${{ env.TEMP_DIR }} tmp
 
     - name: Validate Files(验证文件)
       run: |
@@ -157,99 +141,56 @@ jobs:
         fi
         echo "=== 差异结束 ==="
 
-    - name: Validate feeds.conf.default in Detail(详细验证feeds配置)
+    - name: Validate feeds.conf.default with OpenWrt Tool(使用OpenWrt工具验证feeds配置)
       run: |
         cd $OPENWRT_PATH
         
-        echo "=== 详细检查 feeds.conf.default 语法 ==="
-        line_num=0
-        error_count=0
-        warning_count=0
+        echo "=== 使用OpenWrt工具验证 feeds.conf.default ==="
         
-        while IFS= read -r line; do
-          line_num=$((line_num + 1))
-          
-          # 跳过空行和注释行
-          if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-            continue
-          fi
-          
-          echo "检查第 $line_num 行: $line"
-          
-          # 检查行格式是否正确
-          if [[ ! "$line" =~ ^src-(git|svn|cvs|link|hg)[[:space:]] ]]; then
-            echo "  ❌ 错误: 第 $line_num 行格式不正确，应以 src-git、src-svn、src-cvs、src-link 或 src-hg 开头"
-            error_count=$((error_count + 1))
-            continue
-          fi
-          
-          # 提取软件源名称和URL
-          feed_type=$(echo "$line" | awk '{print $1}')
-          feed_name=$(echo "$line" | awk '{print $2}')
-          feed_url=$(echo "$line" | awk '{print $3}')
-          
-          echo "  - 类型: $feed_type"
-          echo "  - 名称: $feed_name"
-          echo "  - URL: $feed_url"
-          
-          # 检查软件源名称是否有效
-          if [[ -z "$feed_name" ]]; then
-            echo "  ❌ 错误: 第 $line_num 行缺少软件源名称"
-            error_count=$((error_count + 1))
-            continue
-          fi
-          
-          # 检查URL是否有效
-          if [[ -z "$feed_url" ]]; then
-            echo "  ❌ 错误: 第 $line_num 行缺少URL"
-            error_count=$((error_count + 1))
-            continue
-          fi
-          
-          # 检查URL格式
-          if [[ "$feed_type" == "src-git" ]]; then
-            if [[ ! "$feed_url" =~ ^https?:// ]] && [[ ! "$feed_url" =~ ^git@ ]]; then
-              echo "  ⚠️ 警告: 第 $line_num 行URL格式可能不正确: $feed_url"
-              warning_count=$((warning_count + 1))
-            fi
-          fi
-          
-          # 检查是否有分号和分支
-          if [[ "$feed_url" =~ \; ]]; then
-            branch=$(echo "$feed_url" | cut -d';' -f2)
-            url_part=$(echo "$feed_url" | cut -d';' -f1)
-            echo "  - 分支: $branch"
-            echo "  - URL部分: $url_part"
-          fi
-          
-          echo "  ✓ 第 $line_num 行检查通过"
+        # 先尝试直接运行scripts/feeds检查语法
+        echo "运行 ./scripts/feeds 检查语法..."
+        ./scripts/feeds list > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+          echo "feeds语法检查失败，显示详细错误:"
+          ./scripts/feeds list
           echo ""
-        done < feeds.conf.default
-        
-        echo "=== 检查结果 ==="
-        echo "错误数量: $error_count"
-        echo "警告数量: $warning_count"
-        
-        if [ $error_count -gt 0 ]; then
-          echo "发现语法错误，请检查上述错误行"
+          echo "逐行分析 feeds.conf.default:"
+          
+          line_num=0
+          while IFS= read -r line; do
+            line_num=$((line_num + 1))
+            echo "第 $line_num 行: '$line'"
+            
+            # 检查是否有特殊字符
+            if [[ "$line" =~ [[:cntrl:]] ]]; then
+              echo "  ❌ 包含控制字符"
+            fi
+            
+            # 检查行尾是否有空格
+            if [[ "$line" =~ [[:space:]]+$ ]]; then
+              echo "  ❌ 行尾有空格"
+            fi
+            
+            # 检查是否为空行或注释行
+            if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+              echo "  ✓ 空行或注释行"
+              continue
+            fi
+            
+            # 检查格式
+            if [[ ! "$line" =~ ^src-(git|svn|cvs|link|hg)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]] ]]; then
+              echo "  ❌ 格式不正确"
+            else
+              echo "  ✓ 格式正确"
+            fi
+            
+            echo ""
+          done < feeds.conf.default
+          
           exit 1
         fi
         
-        echo "feeds.conf.default 语法检查通过"
-
-    - name: Validate DIY Script Results(验证DIY脚本结果)
-      run: |
-        cd $OPENWRT_PATH
-        
-        # 检查脚本执行是否成功
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
-          echo "错误: DIY脚本执行失败"
-          echo "最后20行日志:"
-          tail -n 20 $GITHUB_WORKSPACE/diy.log
-          exit 1
-        fi
-        
-        echo "DIY脚本执行成功"
+        echo "feeds.conf.default 验证通过"
 
     - name: Apply Base Configuration(应用基础配置)
       run: |
@@ -277,6 +218,11 @@ jobs:
           if grep -q "Syntax error in feeds.conf.default" $GITHUB_WORKSPACE/defconfig.log; then
             echo "发现feeds语法错误，显示详细错误信息:"
             grep -A 5 -B 5 "Syntax error in feeds.conf.default" $GITHUB_WORKSPACE/defconfig.log
+            
+            # 显示第13行及周围的内容
+            echo ""
+            echo "显示第13行及周围的内容:"
+            sed -n '10,16p' feeds.conf.default | nl -v10
           fi
           
           exit 1
