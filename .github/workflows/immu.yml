@@ -109,13 +109,43 @@ jobs:
         # 进入OpenWrt目录
         cd $OPENWRT_PATH
         
+        # 检查feeds配置文件
+        echo "检查 feeds.conf.default 文件..."
+        if [ -f "feeds.conf.default" ]; then
+          echo "feeds.conf.default 文件内容:"
+          cat -n feeds.conf.default
+          echo ""
+          
+          # 检查第13行是否有问题
+          LINE13=$(sed -n '13p' feeds.conf.default)
+          echo "第13行内容: $LINE13"
+          
+          # 如果第13行为空或包含特殊字符，尝试修复
+          if [ -z "$LINE13" ] || [[ "$LINE13" =~ [^a-zA-Z0-9_\-\./\:\s] ]]; then
+            echo "检测到第13行可能有问题，尝试修复..."
+            # 备份原文件
+            cp feeds.conf.default feeds.conf.default.backup
+            # 删除第13行
+            sed -i '13d' feeds.conf.default
+            echo "已删除第13行"
+          fi
+        else
+          echo "警告: feeds.conf.default 文件不存在"
+        fi
+        
         # 检查配置文件内容
         echo "配置文件前10行:"
         head -n 10 .config
         
-        # 运行defconfig
-        echo "运行 make defconfig..."
-        make defconfig
+        # 初始化feeds
+        echo "初始化feeds..."
+        make defconfig || {
+          echo "make defconfig 失败，尝试更新feeds..."
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          echo "再次尝试 make defconfig..."
+          make defconfig
+        }
         
         # 检查defconfig是否成功
         if [ $? -ne 0 ]; then
