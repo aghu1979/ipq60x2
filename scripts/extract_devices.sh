@@ -1,69 +1,75 @@
+# scripts/extract_devices.sh
 #!/bin/bash
+# =============================================================================
+# 设备名称提取和重命名脚本
+# =============================================================================
 
-# ==============================================================================
-# 从配置文件中提取设备名称脚本
-#
-# 功能:
-#   从配置文件中提取设备名称
-#   剔除重复项
-#
-# 使用方法:
-#   ./extract_devices.sh <配置文件路径>
-#
-# 作者: Mary
-# 日期：2025-11-17
-# 版本: 1.0
-# ==============================================================================
+# 检查参数
+if [ $# -lt 1 ]; then
+    echo "用法: $0 <配置文件路径>"
+    exit 1
+fi
 
-# 导入通用函数
-source "$(dirname "$0")/common.sh"
+CONFIG_FILE=$1
 
-# --- 主函数 ---
-main() {
-    local config_file="$1"
-    
-    if [ -z "$config_file" ]; then
-        log_error "请提供配置文件路径"
-        exit 1
-    fi
-    
-    if [ ! -f "$config_file" ]; then
-        log_error "配置文件不存在: $config_file"
-        exit 1
-    fi
-    
-    log_step "从配置文件中提取设备名称"
-    log_info "配置文件: $config_file"
-    
-    # 从配置文件中提取设备名称
-    local device_names=$(grep "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y" "$config_file" | sed 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_\(.*\)=y/\1/' | sort -u)
-    
-    if [ -z "$device_names" ]; then
-        log_warning "未找到设备名称"
-        exit 1
-    fi
-    
-    log_success "提取到的设备名称:"
-    for device in $device_names; do
-        echo -e "${COLOR_GREEN}  - $device${COLOR_RESET}"
-    done
-    
-    # 输出为环境变量格式
-    echo -e "${COLOR_CYAN}环境变量格式:${COLOR_RESET}"
-    echo -n "DEVICE_NAMES=\""
-    first=true
-    for device in $device_names; do
-        if [ "$first" = true ]; then
-            echo -n "$device"
-            first=false
-        else
-            echo -n " $device"
-        fi
-    done
-    echo "\""
-    
-    return 0
-}
+# 检查配置文件是否存在
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "错误: 配置文件不存在: $CONFIG_FILE"
+    exit 1
+fi
 
-# 执行主函数
-main "$@"
+# 提取设备名称
+echo "提取设备名称..."
+DEVICES=$(grep -oE 'CONFIG_TARGET_DEVICE_[^_]+_DEVICE_[^=]+' "$CONFIG_FILE" | sed 's/CONFIG_TARGET_DEVICE_[^_]*_DEVICE_//')
+
+if [ -z "$DEVICES" ]; then
+    echo "警告: 未找到设备名称"
+    exit 1
+fi
+
+echo "找到的设备:"
+for device in $DEVICES; do
+    echo "- $device"
+done
+
+# 生成重命名脚本
+cat > rename_firmware.sh << EOF
+#!/bin/bash
+# =============================================================================
+# 固件重命名脚本
+# 自动生成，请勿手动修改
+# =============================================================================
+
+# 检查参数
+if [ \$# -lt 2 ]; then
+    echo "用法: \$0 <固件目录> <变体名称>"
+    exit 1
+fi
+
+FIRMWARE_DIR=\$1
+VARIANT=\$2
+BUILD_DATE=\$(date +%Y-%m-%d)
+
+# 检查目录是否存在
+if [ ! -d "\$FIRMWARE_DIR" ]; then
+    echo "错误: 固件目录不存在: \$FIRMWARE_DIR"
+    exit 1
+fi
+
+# 重命名固件文件
+echo "重命名固件文件..."
+EOF
+
+for device in $DEVICES; do
+    echo "if [ -f \"\$FIRMWARE_DIR/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin\" ]; then" >> rename_firmware.sh
+    echo "    mv \"\$FIRMWARE_DIR/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin\" \"\$FIRMWARE_DIR/ImmortalWrt-${device}-\${VARIANT}-\${BUILD_DATE}.bin\"" >> rename_firmware.sh
+    echo "    echo \"重命名: ImmortalWrt-${device}-\${VARIANT}-\${BUILD_DATE}.bin\"" >> rename_firmware.sh
+    echo "fi" >> rename_firmware.sh
+done
+
+echo "echo \"固件重命名完成\"" >> rename_firmware.sh
+chmod +x rename_firmware.sh
+
+echo "设备名称提取完成！"
+echo "设备列表: $DEVICES"
+echo "重命名脚本: rename_firmware.sh"
