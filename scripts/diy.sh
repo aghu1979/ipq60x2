@@ -1,245 +1,164 @@
 #!/bin/bash
 
 # ==============================================================================
-# OpenWrt/ImmortalWrt 自定义配置脚本
-#
-# 功能:
-#   配置设备初始管理IP/密码
-#   应用自定义配置
-#
-# 使用方法:
-#   在 OpenWrt/ImmortalWrt 源码根目录下运行此脚本
-#
-# 作者: Mary
-# 日期：2025-11-17
-# 版本: 3.1 - 修复版
+# OpenWrt 自定义编译脚本
+# 版本: v2.1
+# 日期: 2025-11-18
+# 功能: 修改系统配置、添加自定义软件源、更新并安装软件包
+# 作者: Mary (根据您的署名修改)
 # ==============================================================================
 
-# 导入通用函数
-source "$(dirname "$0")/common.sh"
+# --- 1. 修改系统默认配置 ---
+echo ">>> 步骤 1/5: 修改系统默认配置"
+# 修改默认IP地址
+sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/bin/config_generate
+# 修改设备主机名
+sed -i "s/hostname='.*'/hostname='WRT'/g" package/base-files/files/bin/config_generate
+# 在Luci系统概览页面添加编译者信息
+sed -i "s/(\(luciversion || ''\))/(\1) + (' \/ Built by Mary')/g" feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
+# 删除luci-app-attendedsysupgrade在概览页面的升级提示
+rm -rf feeds/luci/applications/luci-app-attendedsysupgrade/htdocs/luci-static/resources/view/status/include/11_upgrades.js
 
-# --- 配置变量 ---
-# 默认IP地址
-DEFAULT_IP="192.168.111.1"
-# 默认密码（空）
-DEFAULT_PASSWORD=""
-# 默认主机名
-DEFAULT_HOSTNAME="WRT"
-# 默认主题
-DEFAULT_THEME="argon"
+# --- 2. 预删除将要被替换的软件包 ---
+echo ">>> 步骤 2/5: 预清理旧的软件包和Feeds，避免冲突"
+# 定义一个包含所有将要添加的软件包路径的数组
+packages_to_remove=(
+    # 将通过 git clone 添加到 package/ 目录的包
+    "package/luci-app-athena-led"
+    "package/luci-app-adguardhome"
+    "package/luci-app-ddns-go"
+    "package/luci-app-netdata"
+    "package/luci-app-netspeedtest"
+    "package/luci-app-partexp"
+    "package/luci-app-taskplan"
+    "package/lucky"
+    "package/luci-app-easytier"
+    "package/homeproxy"
+    "package/luci-app-openlist"
+    "package/luci-app-mosdns"
+    "package/luci-app-quickfile"
+    "package/luci-app-oaf"
+    "package/luci-app-tailscale"
+    "package/luci-app-vnt"
+    # 【修正】从正确的上游 (linkease) 添加的 iStore 相关软件包
+    "package/luci-app-istorex"
+    "package/luci-app-quickstart"
+    "package/luci-app-diskman"
+    # 将通过 git_sparse_clone 添加或移动的包
+    "feeds/packages/net/ariang"
+    "feeds/packages/net/frp"
+    "feeds/luci/applications/luci-app-frpc"
+    "feeds/luci/applications/luci-app-frps"
+    "feeds/luci/themes/luci-theme-argon"
+    "feeds/luci/themes/luci-theme-aurora"
+    # Golang 语言包
+    "feeds/packages/lang/golang"
+)
 
-# --- 颜色定义 ---
-COLOR_RED='\033[0;31m'
-COLOR_GREEN='\033[0;32m'
-COLOR_YELLOW='\033[0;33m'
-COLOR_BLUE='\033[0;34m'
-COLOR_PURPLE='\033[0;35m'
-COLOR_CYAN='\033[0;36m'
-COLOR_WHITE='\033[0;37m'
-COLOR_RESET='\033[0m'
-
-# --- 图标定义 ---
-ICON_INFO="ℹ️"
-ICON_SUCCESS="✅"
-ICON_WARNING="⚠️"
-ICON_ERROR="❌"
-ICON_PROCESSING="⏳"
-
-# --- 日志函数 ---
-log_info() {
-    echo -e "${COLOR_BLUE}${ICON_INFO} [INFO] $1${COLOR_RESET}"
-}
-
-log_success() {
-    echo -e "${COLOR_GREEN}${ICON_SUCCESS} [SUCCESS] $1${COLOR_RESET}"
-}
-
-log_warning() {
-    echo -e "${COLOR_YELLOW}${ICON_WARNING} [WARNING] $1${COLOR_RESET}"
-}
-
-log_error() {
-    echo -e "${COLOR_RED}${ICON_ERROR} [ERROR] $1${COLOR_RESET}"
-}
-
-log_processing() {
-    echo -e "${COLOR_PURPLE}${ICON_PROCESSING} [PROCESSING] $1${COLOR_RESET}"
-}
-
-log_step() {
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
-    echo -e "${COLOR_CYAN} $1${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
-}
-
-# --- 统计变量 ---
-SUCCESS_COUNT=0
-WARNING_COUNT=0
-ERROR_COUNT=0
-TOTAL_COUNT=0
-
-# --- 主函数 ---
-
-# 显示脚本信息
-show_script_info() {
-    log_step "OpenWrt/ImmortalWrt 自定义配置脚本"
-    log_info "作者: Mary"
-    log_info "版本: 3.1 - 修复版"
-    log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-}
-
-# 检查环境
-check_environment() {
-    log_processing "检查执行环境..."
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 检查是否在源码根目录
-    if [ ! -f "Makefile" ] || ! grep -q "OpenWrt" Makefile; then
-        log_error "不在OpenWrt/ImmortalWrt源码根目录"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        return 1
+# 遍历数组并删除
+for pkg_path in "${packages_to_remove[@]}"; do
+    if [ -d "$pkg_path" ]; then
+        echo "  - 删除旧包: $pkg_path"
+        rm -rf "$pkg_path"
     fi
-    
-    log_success "环境检查通过"
-    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-    return 0
-}
+done
 
-# 配置初始IP和密码
-configure_initial_settings() {
-    log_processing "配置初始IP和密码..."
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
+# --- 3. 添加自定义软件源 ---
+echo ">>> 步骤 3/5: 添加自定义软件源到 feeds.conf.default"
+# 函数：用于添加软件源，避免重复添加
+add_feed() {
+    local feed_name="$1"
+    local feed_url="$2"
+    local feed_branch="${3:-main}"
+    local feed_entry="src-git $feed_name $feed_url;$feed_branch"
     
-    local ip="${1:-$DEFAULT_IP}"
-    local password="${2:-$DEFAULT_PASSWORD}"
-    local hostname="${3:-$DEFAULT_HOSTNAME}"
-    
-    # 修改默认IP
-    log_info "设置默认IP: $ip"
-    if sed -i "s/192.168.1.1/$ip/g" package/base-files/files/bin/config_generate; then
-        log_success "IP设置成功"
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+    if ! grep -qF "src-git $feed_name" feeds.conf.default; then
+        echo "  - 添加软件源: $feed_name"
+        echo "$feed_entry" >> feeds.conf.default
     else
-        log_error "IP设置失败"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        return 1
-    fi
-    
-    # 设置主机名
-    log_info "设置主机名: $hostname"
-    if sed -i "s/OpenWrt/$hostname/g" package/base-files/files/bin/config_generate; then
-        log_success "主机名设置成功"
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-    else
-        log_error "主机名设置失败"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        return 1
-    fi
-    
-    # 生成密码哈希（如果密码不为空）
-    if [ -n "$password" ]; then
-        log_info "设置默认密码"
-        local password_hash
-        password_hash=$(openssl passwd -1 "$password")
-        if sed -i "s/root:::0:99999:7:::/root:$password_hash:18579:0:99999:7:::/g" package/base-files/files/etc/shadow; then
-            log_success "密码设置成功"
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        else
-            log_error "密码设置失败"
-            ERROR_COUNT=$((ERROR_COUNT + 1))
-            return 1
-        fi
-    else
-        log_info "设置空密码（无密码登录）"
-        if sed -i "s/root:::0:99999:7:::/root:::0:99999:7:::/g" package/base-files/files/etc/shadow; then
-            log_success "空密码设置成功"
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        else
-            log_error "空密码设置失败"
-            ERROR_COUNT=$((ERROR_COUNT + 1))
-            return 1
-        fi
-    fi
-    
-    log_success "初始IP和密码配置完成"
-    return 0
-}
-
-# 应用自定义配置
-apply_custom_configurations() {
-    log_processing "应用自定义配置..."
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 这里可以添加其他自定义配置
-    
-    log_success "自定义配置应用完成"
-    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-    return 0
-}
-
-# 生成摘要报告
-generate_final_summary() {
-    log_step "生成执行摘要"
-    
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
-    echo -e "${COLOR_CYAN} 执行摘要${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
-    echo -e "${COLOR_WHITE}总操作数: ${TOTAL_COUNT}${COLOR_RESET}"
-    echo -e "${COLOR_GREEN}成功操作数: ${SUCCESS_COUNT}${COLOR_RESET}"
-    echo -e "${COLOR_YELLOW}警告操作数: ${WARNING_COUNT}${COLOR_RESET}"
-    echo -e "${COLOR_RED}错误操作数: ${ERROR_COUNT}${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
-    
-    if [ $ERROR_COUNT -eq 0 ]; then
-        log_success "所有操作均成功完成"
-        return 0
-    else
-        log_error "存在 $ERROR_COUNT 个错误操作"
-        return 1
+        echo "  - 软件源已存在，跳过: $feed_name"
     fi
 }
 
-# =============================================================================
-# 主执行流程
-# =============================================================================
+# 添加各种自定义软件源
+add_feed "passwall_packages" "https://github.com/xiaorouji/openwrt-passwall-packages.git"
+add_feed "passwall_luci" "https://github.com/xiaorouji/openwrt-passwall.git"
+add_feed "luci-app-passwall2" "https://github.com/xiaorouji/openwrt-passwall2.git"
+add_feed "luci-app-openclash" "https://github.com/vernesong/OpenClash.git"
+add_feed "momo" "https://github.com/nikkinikki-org/OpenWrt-momo"
+add_feed "nikki" "https://github.com/nikkinikki-org/OpenWrt-nikki"
 
-main() {
-    # 记录开始时间
-    local start_time=$(date +%s)
-    
-    # 显示脚本信息
-    show_script_info
-    
-    # 检查环境
-    if check_environment; then
-        # 配置初始IP和密码
-        configure_initial_settings "$@"
-        
-        # 应用自定义配置
-        apply_custom_configurations
-        
-        # 生成摘要报告
-        generate_final_summary
-    else
-        log_error "环境检查失败，终止执行"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        generate_final_summary
-        exit 1
-    fi
-    
-    # 计算执行时间
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
-    log_info "总执行时间: ${duration}秒"
-    
-    # 返回执行结果
-    if [ $ERROR_COUNT -eq 0 ]; then
-        return 0
-    else
-        return 1
-    fi
+# --- 4. 克隆或更新软件包源码 ---
+echo ">>> 步骤 4/5: 克隆软件包源码"
+# Git稀疏克隆函数
+git_sparse_clone() {
+    branch="$1" repourl="$2" && shift 2
+    echo "  - 稀疏克隆: $repourl ($branch) -> $@"
+    git clone --depth=1 -b $branch --single-branch --filter=blob:none --sparse $repourl
+    repodir=$(echo $repourl | awk -F '/' '{print $(NF)}')
+    cd $repodir && git sparse-checkout set $@
+    mv -f $@ ../
+    cd .. && rm -rf $repodir
 }
 
-# 执行主函数
-main "$@"
+# --- 4.1 直接克隆到 package/ 目录 ---
+echo "  >> 直接克隆软件包..."
+# Sirpdboy 的软件包集合 (已移除错误的归属)
+git clone --depth=1 https://github.com/sirpdboy/luci-app-adguardhome package/luci-app-adguardhome
+git clone --depth=1 https://github.com/sirpdboy/luci-app-ddns-go package/luci-app-ddns-go
+git clone --depth=1 https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata
+git clone --depth=1 https://github.com/sirpdboy/luci-app-netspeedtest package/luci-app-netspeedtest
+git clone --depth=1 https://github.com/sirpdboy/luci-app-partexp package/luci-app-partexp
+git clone --depth=1 https://github.com/sirpdboy/luci-app-taskplan package/luci-app-taskplan
+
+# 【修正】从正确的上游 (linkease/iStore) 克隆，源自 small-package 推荐
+echo "  >> 从 iStore 仓库克隆软件包 (源自 small-package 推荐)..."
+git clone --depth=1 https://github.com/linkease/luci-app-istorex package/luci-app-istorex
+git clone --depth=1 https://github.com/linkease/luci-app-quickstart package/luci-app-quickstart
+git clone --depth=1 https://github.com/linkease/luci-app-diskman package/luci-app-diskman
+
+# 其他作者的独立软件包
+git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
+chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
+git clone --depth=1 https://github.com/gdy666/luci-app-lucky package/lucky
+git clone --depth=1 https://github.com/EasyTier/luci-app-easytier package/luci-app-easytier
+git clone --depth=1 https://github.com/VIKINGYFY/homeproxy package/homeproxy
+git clone --depth=1 https://github.com/destan19/OpenAppFilter package/luci-app-oaf
+git clone --depth=1 https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
+git clone --depth=1 https://github.com/lmq8267/luci-app-vnt package/luci-app-vnt
+
+# SBWML 的软件包集合
+git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang # 恢复原始方案
+git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/luci-app-openlist
+git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns package/luci-app-mosdns
+git clone --depth=1 https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile
+
+# --- 4.2 使用稀疏克隆并移动到指定目录 ---
+echo "  >> 稀疏克隆并移动软件包..."
+# 主题
+git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon package/luci-theme-argon
+mv -f package/luci-theme-argon feeds/luci/themes/luci-theme-argon
+git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora package/luci-theme-aurora
+mv -f package/luci-theme-aurora feeds/luci/themes/luci-theme-aurora
+
+# FRP (后端和Luci前端)
+# 注意：这里从 laipeng668 的 packages 仓库获取 frp 后端，从 luci 仓库获取前端
+git_sparse_clone ariang https://github.com/laipeng668/packages net/ariang
+mv -f net/ariang feeds/packages/net/
+git_sparse_clone frp https://github.com/laipeng668/packages net/frp
+mv -f net/frp feeds/packages/net/
+git_sparse_clone frp https://github.com/laipeng668/luci applications/luci-app-frpc applications/luci-app-frps
+mv -f applications/luci-app-frpc feeds/luci/applications/
+mv -f applications/luci-app-frps feeds/luci/applications/
+
+# 克隆 small-package 作为备用参考
+git clone --depth=1 https://github.com/kenzok8/small-package small
+
+# --- 5. 更新与安装Feeds ---
+echo ">>> 步骤 5/5: 更新并安装所有软件包"
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+echo "=============================================================================="
+echo "自定义脚本执行完成！"
+echo "=============================================================================="
