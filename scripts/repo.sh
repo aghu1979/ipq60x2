@@ -1,6 +1,8 @@
 #!/bin/bash
 # =============================================================================
 # ImmortalWrt 第三方软件源添加脚本
+# 版本: 1.0.0
+# 更新日期: 2025-11-18
 # =============================================================================
 
 # 颜色定义
@@ -19,6 +21,8 @@ exec > >(tee -a "$LOG_FILE")
 exec 2>&1
 
 echo -e "${BLUE}🚀 开始添加第三方软件源...${NC}"
+echo -e "${CYAN}📅 版本: 1.0.0${NC}"
+echo -e "${CYAN}📅 更新日期: 2025-11-18${NC}"
 echo -e "${CYAN}📅 时间: $(date)${NC}"
 
 # 检查网络连接
@@ -29,28 +33,49 @@ fi
 
 # 创建备份目录
 mkdir -p backup
-cp feeds.conf.default backup/feeds.conf.default.bak
-echo -e "${GREEN}✅ 备份原始 feeds.conf.default${NC}"
+if [ -f "feeds.conf.default" ]; then
+  cp feeds.conf.default backup/feeds.conf.default.bak
+  echo -e "${GREEN}✅ 备份原始 feeds.conf.default${NC}"
+else
+  echo -e "${YELLOW}⚠️ 警告: 找不到 feeds.conf.default 文件${NC}"
+fi
 
 # 添加Passwall软件源
-echo -e "${YELLOW}📦 添加Passwall软件源...${NC}"
-sed -i '1i\src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main\nsrc-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main' feeds.conf.default
+if [ -f "feeds.conf.default" ]; then
+  echo -e "${YELLOW}📦 添加Passwall软件源...${NC}"
+  sed -i '1i\src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main\nsrc-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main' feeds.conf.default
+else
+  echo -e "${YELLOW}⚠️ 警告: 找不到 feeds.conf.default 文件${NC}"
+fi
 
 # 添加Passwall2软件源
-echo -e "${YELLOW}📦 添加Passwall2软件源...${NC}"
-echo "src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main" >> feeds.conf.default
+if [ -f "feeds.conf.default" ]; then
+  echo -e "${YELLOW}📦 添加Passwall2软件源...${NC}"
+  echo "src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main" >> feeds.conf.default
+else
+  echo -e "${YELLOW}⚠️ 警告: 找不到 feeds.conf.default 文件${NC}"
+fi
 
 # 添加Momo和Nikki软件源
-echo -e "${YELLOW}📦 添加Momo和Nikki软件源...${NC}"
-echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo;main" >> feeds.conf.default
-echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki;main" >> feeds.conf.default
+if [ -f "feeds.conf.default" ]; then
+  echo -e "${YELLOW}📦 添加Momo和Nikki软件源...${NC}"
+  echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo;main" >> feeds.conf.default
+  echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki;main" >> feeds.conf.default
+else
+  echo -e "${YELLOW}⚠️ 警告: 找不到 feeds.conf.default 文件${NC}"
+fi
 
 # 添加OpenClash软件源
-echo -e "${YELLOW}📦 添加OpenClash软件源...${NC}"
-echo "src-git openclash https://github.com/vernesong/OpenClash.git" >> feeds.conf.default
+if [ -f "feeds.conf.default" ]; then
+  echo -e "${YELLOW}📦 添加OpenClash软件源...${NC}"
+  echo "src-git openclash https://github.com/vernesong/OpenClash.git" >> feeds.conf.default
+else
+  echo -e "${YELLOW}⚠️ 警告: 找不到 feeds.conf.default 文件${NC}"
+fi
 
 # 添加主题源
 echo -e "${YELLOW}🎨 添加主题源...${NC}"
+mkdir -p feeds/luci/themes
 git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon feeds/luci/themes/luci-theme-argon 2>/dev/null || echo -e "${RED}⚠️ 警告: 无法克隆Argon主题${NC}"
 git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora feeds/luci/themes/luci-theme-aurora 2>/dev/null || echo -e "${RED}⚠️ 警告: 无法克隆Aurora主题${NC}"
 
@@ -120,7 +145,11 @@ clone_package "OpenAppFilter" "https://github.com/destan19/OpenAppFilter" "packa
 
 # tailscale
 echo -e "${CYAN}🔄 处理tailscale...${NC}"
-sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile 2>/dev/null || echo -e "${RED}⚠️ 警告: 无法修改tailscale Makefile${NC}"
+if [ -f "feeds/packages/net/tailscale/Makefile" ]; then
+  sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile 2>/dev/null || echo -e "${RED}⚠️ 警告: 无法修改tailscale Makefile${NC}"
+else
+  echo -e "${YELLOW}⚠️ 警告: 找不到 tailscale Makefile${NC}"
+fi
 clone_package "luci-app-tailscale" "https://github.com/asvow/luci-app-tailscale" "package/luci-app-tailscale"
 
 # vnt
@@ -130,14 +159,22 @@ clone_package "vnt" "https://github.com/lmq8267/luci-app-vnt" "package/luci-app-
 clone_package "kenzok8/small-package（备用）" "https://github.com/kenzok8/small-package" "small"
 
 # 显示已添加的软件源
-echo -e "\n${PURPLE}📋 已添加的软件源:${NC}"
-cat feeds.conf.default | grep -v "^#" | grep -v "^$" | while read line; do
-    echo -e "  🔗 $line"
-done
+if [ -f "feeds.conf.default" ]; then
+  echo -e "\n${PURPLE}📋 已添加的软件源:${NC}"
+  cat feeds.conf.default | grep -v "^#" | grep -v "^$" | while read line; do
+      echo -e "  🔗 $line"
+  done
+else
+  echo -e "\n${YELLOW}⚠️ 警告: 找不到 feeds.conf.default 文件${NC}"
+fi
 
 # 显示已克隆的软件包
-echo -e "\n${PURPLE}📦 已克隆的软件包:${NC}"
-ls -la package/ | grep "^d" | grep -v "base\|freifunk\|kernel\|libs\|network\|system\|utils\|mail\|multimedia\|sound\|languages" | awk '{print "  📁 " $9}'
+if [ -d "package" ]; then
+  echo -e "\n${PURPLE}📦 已克隆的软件包:${NC}"
+  ls -la package/ | grep "^d" | grep -v "base\|freifunk\|kernel\|libs\|network\|system\|utils\|mail\|multimedia\|sound\|languages" | awk '{print "  📁 " $9}'
+else
+  echo -e "\n${YELLOW}⚠️ 警告: 找不到 package 目录${NC}"
+fi
 
 echo -e "\n${GREEN}🎉 第三方软件源添加完成！${NC}"
 echo -e "${CYAN}📄 日志文件: $LOG_FILE${NC}"
