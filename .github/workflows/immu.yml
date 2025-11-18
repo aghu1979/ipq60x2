@@ -91,6 +91,59 @@ jobs:
         cd $OPENWRT_PATH
         $GITHUB_WORKSPACE/$DIY_SCRIPT
 
+    - name: Fix Feeds Configuration(修复Feeds配置)
+      run: |
+        cd $OPENWRT_PATH
+        
+        # 检查并修复feeds.conf.default文件
+        echo "检查并修复 feeds.conf.default 文件..."
+        
+        if [ -f "feeds.conf.default" ]; then
+          # 备份原文件
+          cp feeds.conf.default feeds.conf.default.backup
+          
+          # 显示文件内容和行号
+          echo "原始 feeds.conf.default 文件内容:"
+          cat -n feeds.conf.default
+          echo ""
+          
+          # 获取文件总行数
+          TOTAL_LINES=$(wc -l < feeds.conf.default)
+          echo "文件总行数: $TOTAL_LINES"
+          
+          # 检查第13行
+          if [ $TOTAL_LINES -ge 13 ]; then
+            LINE13=$(sed -n '13p' feeds.conf.default)
+            echo "第13行原始内容: '$LINE13'"
+            
+            # 显示第13行的十六进制表示，以便查看隐藏字符
+            echo "第13行十六进制表示:"
+            echo -n "$LINE13" | hexdump -C
+            echo ""
+            
+            # 尝试修复：删除第13行
+            echo "删除第13行..."
+            sed -i '13d' feeds.conf.default
+            
+            # 再次检查文件
+            echo "修复后的 feeds.conf.default 文件内容:"
+            cat -n feeds.conf.default
+          else
+            echo "文件行数少于13行，可能是其他问题"
+          fi
+        else
+          echo "警告: feeds.conf.default 文件不存在，尝试创建默认配置..."
+          # 创建默认的feeds配置
+          cat > feeds.conf.default << EOF
+src-git base https://github.com/immortalwrt/immortalwrt.git;main
+src-git packages https://github.com/immortalwrt/packages.git;main
+src-git luci https://github.com/immortalwrt/luci.git;main
+src-git routing https://github.com/immortalwrt/routing.git;main
+src-git telephony https://github.com/immortalwrt/telephony.git;main
+EOF
+          echo "已创建默认的 feeds.conf.default 文件"
+        fi
+
     - name: Apply Base Configuration(应用基础配置)
       run: |
         # 检查配置文件是否存在
@@ -109,43 +162,21 @@ jobs:
         # 进入OpenWrt目录
         cd $OPENWRT_PATH
         
-        # 检查feeds配置文件
-        echo "检查 feeds.conf.default 文件..."
-        if [ -f "feeds.conf.default" ]; then
-          echo "feeds.conf.default 文件内容:"
-          cat -n feeds.conf.default
-          echo ""
-          
-          # 检查第13行是否有问题
-          LINE13=$(sed -n '13p' feeds.conf.default)
-          echo "第13行内容: $LINE13"
-          
-          # 如果第13行为空或包含特殊字符，尝试修复
-          if [ -z "$LINE13" ] || [[ "$LINE13" =~ [^a-zA-Z0-9_\-\./\:\s] ]]; then
-            echo "检测到第13行可能有问题，尝试修复..."
-            # 备份原文件
-            cp feeds.conf.default feeds.conf.default.backup
-            # 删除第13行
-            sed -i '13d' feeds.conf.default
-            echo "已删除第13行"
-          fi
-        else
-          echo "警告: feeds.conf.default 文件不存在"
-        fi
-        
         # 检查配置文件内容
         echo "配置文件前10行:"
         head -n 10 .config
         
-        # 初始化feeds
-        echo "初始化feeds..."
-        make defconfig || {
-          echo "make defconfig 失败，尝试更新feeds..."
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          echo "再次尝试 make defconfig..."
-          make defconfig
-        }
+        # 尝试更新feeds
+        echo "更新feeds..."
+        ./scripts/feeds update -a
+        
+        # 安装feeds
+        echo "安装feeds..."
+        ./scripts/feeds install -a
+        
+        # 运行defconfig
+        echo "运行 make defconfig..."
+        make defconfig
         
         # 检查defconfig是否成功
         if [ $? -ne 0 ]; then
