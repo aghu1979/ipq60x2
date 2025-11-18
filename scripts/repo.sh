@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：2025-11-17
-# 版本: 3.6 - 详细日志分析版
+# 版本: 3.7 - 修复日志污染版
 # ==============================================================================
 
 # 导入通用函数
@@ -38,29 +38,29 @@ ICON_PROCESSING="⏳"
 
 # --- 日志函数 ---
 log_info() {
-    echo -e "${COLOR_BLUE}${ICON_INFO} [INFO] $1${COLOR_RESET}"
+    echo -e "${COLOR_BLUE}${ICON_INFO} [INFO] $1${COLOR_RESET}" >&2
 }
 
 log_success() {
-    echo -e "${COLOR_GREEN}${ICON_SUCCESS} [SUCCESS] $1${COLOR_RESET}"
+    echo -e "${COLOR_GREEN}${ICON_SUCCESS} [SUCCESS] $1${COLOR_RESET}" >&2
 }
 
 log_warning() {
-    echo -e "${COLOR_YELLOW}${ICON_WARNING} [WARNING] $1${COLOR_RESET}"
+    echo -e "${COLOR_YELLOW}${ICON_WARNING} [WARNING] $1${COLOR_RESET}" >&2
 }
 
 log_error() {
-    echo -e "${COLOR_RED}${ICON_ERROR} [ERROR] $1${COLOR_RESET}"
+    echo -e "${COLOR_RED}${ICON_ERROR} [ERROR] $1${COLOR_RESET}" >&2
 }
 
 log_processing() {
-    echo -e "${COLOR_PURPLE}${ICON_PROCESSING} [PROCESSING] $1${COLOR_RESET}"
+    echo -e "${COLOR_PURPLE}${ICON_PROCESSING} [PROCESSING] $1${COLOR_RESET}" >&2
 }
 
 log_step() {
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
-    echo -e "${COLOR_CYAN} $1${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
+    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
+    echo -e "${COLOR_CYAN} $1${COLOR_RESET}" >&2
+    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
 }
 
 # --- 统计变量 ---
@@ -69,82 +69,13 @@ WARNING_COUNT=0
 ERROR_COUNT=0
 TOTAL_COUNT=0
 
-# --- 调试函数 ---
-
-# 显示行的详细信息
-debug_line() {
-    local line_num="$1"
-    local line_content="$2"
-    
-    echo -e "${COLOR_YELLOW}--- 第 $line_num 行详细信息 ---${COLOR_RESET}"
-    echo -e "${COLOR_WHITE}原始内容: '$line_content'${COLOR_RESET}"
-    
-    # 显示字符的十六进制表示
-    echo -e "${COLOR_CYAN}十六进制表示:${COLOR_RESET}"
-    echo -n "$line_content" | hexdump -C
-    echo ""
-    
-    # 检查行尾是否有特殊字符
-    if [[ "$line_content" =~ $'\r'$ ]]; then
-        echo -e "${COLOR_RED}警告: 行尾包含Windows回车符(\\r)${COLOR_RESET}"
-    fi
-    
-    # 检查是否有不可见字符
-    local clean_line=$(echo "$line_content" | tr -d '\r\n')
-    if [[ "$line_content" != "$clean_line" ]]; then
-        echo -e "${COLOR_RED}警告: 行包含不可见字符${COLOR_RESET}"
-    fi
-}
-
-# 分析错误原因
-analyze_feeds_error() {
-    local error_line="$1"
-    local line_content="$2"
-    
-    echo -e "${COLOR_RED}--- 错误分析 ---${COLOR_RESET}"
-    
-    # 检查是否为空行
-    if [[ -z "$line_content" ]]; then
-        echo -e "${COLOR_RED}错误原因: 空行${COLOR_RESET}"
-        return
-    fi
-    
-    # 检查是否为注释行
-    if [[ "$line_content" =~ ^[[:space:]]*# ]]; then
-        echo -e "${COLOR_GREEN}这是注释行，应该不会报错${COLOR_RESET}"
-        return
-    fi
-    
-    # 检查是否以src-开头
-    if [[ ! "$line_content" =~ ^src- ]]; then
-        echo -e "${COLOR_RED}错误原因: 不以'src-'开头${COLOR_RESET}"
-        return
-    fi
-    
-    # 检查格式
-    if [[ "$line_content" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
-        echo -e "${COLOR_GREEN}格式看起来正确，可能是其他问题${COLOR_RESET}"
-        
-        # 检查URL是否有效
-        local url=$(echo "$line_content" | awk '{print $3}')
-        if [[ "$url" =~ ^http ]] || [[ "$url" =~ ^git ]]; then
-            echo -e "${COLOR_GREEN}URL格式正确${COLOR_RESET}"
-        else
-            echo -e "${COLOR_RED}错误原因: URL格式不正确 '$url'${COLOR_RESET}"
-        fi
-    else
-        echo -e "${COLOR_RED}错误原因: 格式不正确${COLOR_RESET}"
-        echo -e "${COLOR_YELLOW}正确格式应为: src-<type> <name> <url>[;<branch>]${COLOR_RESET}"
-    fi
-}
-
 # --- 函数定义 ---
 
 # 显示脚本信息
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 3.6 - 详细日志分析版"
+    log_info "版本: 3.7 - 修复日志污染版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
 }
@@ -277,9 +208,9 @@ create_clean_feeds_config() {
     # 创建临时文件
     local temp_file=$(mktemp)
     
-    # 重新构建文件
+    # 重新构建文件 - 不使用echo，直接写入
     {
-        # 添加原始的有效行（不包括可能出错的行）
+        # 添加原始的有效行
         while IFS= read -r line; do
             # 跳过空行
             if [[ -z "$line" ]]; then
@@ -295,13 +226,10 @@ create_clean_feeds_config() {
             # 只保留格式正确的行
             if [[ "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
                 printf "%s\n" "$line"
-            else
-                echo -e "${COLOR_YELLOW}跳过格式错误的行: $line${COLOR_RESET}"
             fi
         done < "feeds.conf.default"
         
         # 添加所有需要的第三方源
-        echo -e "${COLOR_GREEN}添加第三方软件源...${COLOR_RESET}"
         printf "%s\n" "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main"
         printf "%s\n" "src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main"
         printf "%s\n" "src-git luci-app-passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main"
@@ -319,9 +247,9 @@ create_clean_feeds_config() {
     return 0
 }
 
-# 详细验证feeds.conf.default文件
-validate_feeds_config_detailed() {
-    log_processing "详细验证feeds.conf.default文件"
+# 验证feeds.conf.default文件
+validate_feeds_config() {
+    log_processing "验证feeds.conf.default文件"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
     
     # 检查文件是否存在
@@ -333,13 +261,12 @@ validate_feeds_config_detailed() {
     
     # 显示文件内容
     log_info "当前feeds.conf.default文件内容:"
-    cat -n feeds.conf.default
-    echo ""
+    cat -n feeds.conf.default >&2
+    echo "" >&2
     
     # 检查文件语法
     local line_num=0
     local error_count=0
-    local error_lines=()
     
     while IFS= read -r line; do
         line_num=$((line_num + 1))
@@ -352,13 +279,8 @@ validate_feeds_config_detailed() {
         # 检查格式是否正确
         if [[ ! "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
             log_error "第 $line_num 行格式错误: $line"
-            error_lines+=("$line_num:$line")
+            ERROR_COUNT=$((ERROR_COUNT + 1))
             error_count=$((error_count + 1))
-            
-            # 显示详细分析
-            debug_line "$line_num" "$line"
-            analyze_feeds_error "$line_num" "$line"
-            echo ""
         fi
     done < "feeds.conf.default"
     
@@ -388,8 +310,6 @@ validate_feeds_config_detailed() {
             # 检查格式是否正确
             if [[ ! "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
                 log_error "修复后第 $line_num 行仍然错误: $line"
-                debug_line "$line_num" "$line"
-                analyze_feeds_error "$line_num" "$line"
                 error_count=$((error_count + 1))
             fi
         done < "feeds.conf.default"
@@ -472,8 +392,8 @@ add_third_party_feeds() {
     # 创建干净的feeds.conf.default文件
     create_clean_feeds_config
     
-    # 详细验证feeds.conf.default文件
-    validate_feeds_config_detailed
+    # 验证feeds.conf.default文件
+    validate_feeds_config
     
     log_success "第三方软件源添加完成"
 }
@@ -482,14 +402,14 @@ add_third_party_feeds() {
 generate_final_summary() {
     log_step "生成执行摘要"
     
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
-    echo -e "${COLOR_CYAN} 执行摘要${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
-    echo -e "${COLOR_WHITE}总操作数: ${TOTAL_COUNT}${COLOR_RESET}"
-    echo -e "${COLOR_GREEN}成功操作数: ${SUCCESS_COUNT}${COLOR_RESET}"
-    echo -e "${COLOR_YELLOW}警告操作数: ${WARNING_COUNT}${COLOR_RESET}"
-    echo -e "${COLOR_RED}错误操作数: ${ERROR_COUNT}${COLOR_RESET}"
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}"
+    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
+    echo -e "${COLOR_CYAN} 执行摘要${COLOR_RESET}" >&2
+    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
+    echo -e "${COLOR_WHITE}总操作数: ${TOTAL_COUNT}${COLOR_RESET}" >&2
+    echo -e "${COLOR_GREEN}成功操作数: ${SUCCESS_COUNT}${COLOR_RESET}" >&2
+    echo -e "${COLOR_YELLOW}警告操作数: ${WARNING_COUNT}${COLOR_RESET}" >&2
+    echo -e "${COLOR_RED}错误操作数: ${ERROR_COUNT}${COLOR_RESET}" >&2
+    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
     
     if [ $ERROR_COUNT -eq 0 ]; then
         log_success "所有操作均成功完成"
