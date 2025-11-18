@@ -91,30 +91,65 @@ jobs:
         cd $OPENWRT_PATH
         $GITHUB_WORKSPACE/$DIY_SCRIPT
 
-    - name: Apply Configuration and Generate Variables(应用配置并生成变量)
+    - name: Apply Base Configuration(应用基础配置)
       run: |
+        # 检查配置文件是否存在
+        if [ ! -f "$CONFIG_FILE" ]; then
+          echo "错误: 配置文件 $CONFIG_FILE 不存在"
+          exit 1
+        fi
+        
         # 应用配置文件
+        echo "应用配置文件: $CONFIG_FILE"
         cp $CONFIG_FILE $OPENWRT_PATH/.config
-        cd $OPENWRT_PATH
         
         # 保存原始配置用于Luci报告
         cp $OPENWRT_PATH/.config $OPENWRT_PATH/.config.original
         
-        # 运行一次defconfig
-        make defconfig > /dev/null 2>&1
+        # 进入OpenWrt目录
+        cd $OPENWRT_PATH
+        
+        # 检查配置文件内容
+        echo "配置文件前10行:"
+        head -n 10 .config
+        
+        # 运行defconfig
+        echo "运行 make defconfig..."
+        make defconfig
+        
+        # 检查defconfig是否成功
+        if [ $? -ne 0 ]; then
+          echo "错误: make defconfig 失败"
+          exit 1
+        fi
+        
+        echo "make defconfig 成功完成"
+
+    - name: Generate Variables(生成变量)
+      run: |
+        cd $OPENWRT_PATH
         
         # 生成变量
         SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        
         DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
         echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
+        
         DEVICE_SUBTARGET=$(cat .config | grep CONFIG_TARGET_SUBTARGET | awk -F '"' '{print $2}')
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+        
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
         
         # 标记defconfig已完成
         echo "DEFCONFIG_COMPLETED=true" >> $GITHUB_ENV
+        
+        # 输出生成的变量用于调试
+        echo "生成的变量:"
+        echo "SOURCE_REPO: $SOURCE_REPO"
+        echo "DEVICE_TARGET: $DEVICE_TARGET"
+        echo "DEVICE_SUBTARGET: $DEVICE_SUBTARGET"
 
     - name: Cache Toolchain(缓存工具链)
       if: env.CACHE_TOOLCHAIN == 'true'
