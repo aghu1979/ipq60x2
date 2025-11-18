@@ -1,424 +1,143 @@
 #!/bin/bash
-
-# ==============================================================================
-# OpenWrt 第三方软件源集成脚本
-#
-# 功能:
-#   添加第三方软件源
-#   检查并删除官方feeds中可能存在的不同名称的软件包
-#   使用kenzok8/small-package作为后备仓库
-#
-# 使用方法:
-#   在 OpenWrt/ImmortalWrt 源码根目录下运行此脚本
-#
-# 作者: Mary
-# 日期：2025-11-17
-# 版本: 3.8 - 最终修复版
-# ==============================================================================
-
-# 导入通用函数
-source "$(dirname "$0")/common.sh"
-
-# --- 颜色定义 ---
-COLOR_RED='\033[0;31m'
-COLOR_GREEN='\033[0;32m'
-COLOR_YELLOW='\033[0;33m'
-COLOR_BLUE='\033[0;34m'
-COLOR_PURPLE='\033[0;35m'
-COLOR_CYAN='\033[0;36m'
-COLOR_WHITE='\033[0;37m'
-COLOR_RESET='\033[0m'
-
-# --- 图标定义 ---
-ICON_INFO="ℹ️"
-ICON_SUCCESS="✅"
-ICON_WARNING="⚠️"
-ICON_ERROR="❌"
-ICON_PROCESSING="⏳"
-
-# --- 日志函数 ---
-log_info() {
-    echo -e "${COLOR_BLUE}${ICON_INFO} [INFO] $1${COLOR_RESET}" >&2
-}
-
-log_success() {
-    echo -e "${COLOR_GREEN}${ICON_SUCCESS} [SUCCESS] $1${COLOR_RESET}" >&2
-}
-
-log_warning() {
-    echo -e "${COLOR_YELLOW}${ICON_WARNING} [WARNING] $1${COLOR_RESET}" >&2
-}
-
-log_error() {
-    echo -e "${COLOR_RED}${ICON_ERROR} [ERROR] $1${COLOR_RESET}" >&2
-}
-
-log_processing() {
-    echo -e "${COLOR_PURPLE}${ICON_PROCESSING} [PROCESSING] $1${COLOR_RESET}" >&2
-}
-
-log_step() {
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
-    echo -e "${COLOR_CYAN} $1${COLOR_RESET}" >&2
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
-}
-
-# --- 统计变量 ---
-SUCCESS_COUNT=0
-WARNING_COUNT=0
-ERROR_COUNT=0
-TOTAL_COUNT=0
-
-# --- 函数定义 ---
-
-# 显示脚本信息
-show_script_info() {
-    log_step "OpenWrt 第三方软件源集成脚本"
-    log_info "作者: Mary"
-    log_info "版本: 3.8 - 最终修复版"
-    log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-}
-
-# 检查环境
-check_environment() {
-    log_processing "检查执行环境..."
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 检查是否在源码根目录
-    if [ ! -f "Makefile" ] || ! grep -q "OpenWrt" Makefile; then
-        log_error "不在OpenWrt/ImmortalWrt源码根目录"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        return 1
-    fi
-    
-    log_success "环境检查通过"
-    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-    return 0
-}
-
-# 克隆仓库
-clone_repo() {
-    local repo_url="$1"
-    local target_dir="$2"
-    local branch="${3:-}"
-    
-    log_processing "正在克隆 $repo_url 到 $target_dir"
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 如果目标目录已存在，先删除
-    if [ -d "$target_dir" ]; then
-        log_info "目标目录已存在，删除旧目录"
-        rm -rf "$target_dir"
-    fi
-    
-    # 克隆仓库
-    if [ -n "$branch" ]; then
-        if git clone -b "$branch" "$repo_url" "$target_dir"; then
-            log_success "克隆成功: $target_dir"
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            return 0
-        else
-            log_error "克隆失败: $target_dir"
-            ERROR_COUNT=$((ERROR_COUNT + 1))
-            return 1
-        fi
-    else
-        if git clone "$repo_url" "$target_dir"; then
-            log_success "克隆成功: $target_dir"
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            return 0
-        else
-            log_error "克隆失败: $target_dir"
-            ERROR_COUNT=$((ERROR_COUNT + 1))
-            return 1
-        fi
-    fi
-}
-
-# 检查并删除官方feeds中可能存在的不同名称的软件包
-check_and_remove_conflicts() {
-    log_processing "检查并删除官方feeds中可能存在的不同名称的软件包"
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 定义可能冲突的软件包列表
-    local conflict_packages=(
-        "luci-app-adguardhome"
-        "luci-app-ddns-go"
-        "luci-app-netdata"
-        "luci-app-netspeedtest"
-        "luci-app-partexp"
-        "luci-app-taskplan"
-        "luci-app-lucky"
-        "luci-app-easytier"
-        "luci-app-momo"
-        "luci-app-nikki"
-        "luci-app-oaf"
-        "luci-app-openclash"
-        "luci-app-tailscale"
-        "luci-app-vnt"
-        "luci-app-openlist2"
-        "luci-app-quickfile"
-        "luci-app-passwall"
-        "luci-app-passwall2"
-    )
-    
-    local removed_count=0
-    
-    # 检查每个可能冲突的软件包
-    for package in "${conflict_packages[@]}"; do
-        # 查找官方feeds中的软件包
-        local official_packages=$(find ./feeds -name "$package" -type d 2>/dev/null)
-        
-        if [ -n "$official_packages" ]; then
-            log_info "发现官方feeds中的冲突软件包: $package"
-            
-            # 删除官方feeds中的软件包
-            for pkg_path in $official_packages; do
-                log_info "删除官方软件包: $pkg_path"
-                if rm -rf "$pkg_path"; then
-                    log_success "删除成功: $pkg_path"
-                    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-                    removed_count=$((removed_count + 1))
-                else
-                    log_error "删除失败: $pkg_path"
-                    ERROR_COUNT=$((ERROR_COUNT + 1))
-                fi
-            done
-        fi
-    done
-    
-    if [ $removed_count -gt 0 ]; then
-        log_success "共删除 $removed_count 个冲突软件包"
-    else
-        log_info "未发现冲突软件包"
-    fi
-    
-    return 0
-}
-
-# 创建标准格式的feeds.conf.default文件
-create_standard_feeds_config() {
-    log_processing "创建标准格式的feeds.conf.default文件"
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 备份原文件
-    cp feeds.conf.default feeds.conf.default.backup
-    
-    # 创建临时文件
-    local temp_file=$(mktemp)
-    
-    # 写入标准格式的feeds配置
-    cat > "$temp_file" << 'EOF'
-src-git nss_packages https://github.com/qosmio/nss-packages.git
-src-git sqm_scripts_nss https://github.com/qosmio/sqm-scripts-nss.git
-src-git packages https://github.com/immortalwrt/packages.git
-src-git luci https://github.com/immortalwrt/luci.git
-src-git routing https://github.com/openwrt/routing.git
-src-git telephony https://github.com/openwrt/telephony.git
-src-git video https://github.com/openwrt/video.git
-#src-git targets https://github.com/openwrt/targets.git
-#src-git oldpackages http://git.openwrt.org/packages.git
-#src-link custom /usr/src/openwrt/custom-feed
-src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main
-src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main
-src-git luci-app-passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
-src-git luci-app-openclash https://github.com/vernesong/OpenClash.git
-src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main
-src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main
-EOF
-    
-    # 替换原文件
-    mv "$temp_file" "feeds.conf.default"
-    
-    log_success "feeds.conf.default文件创建完成"
-    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-    return 0
-}
-
-# 验证并测试feeds配置
-test_feeds_config() {
-    log_processing "验证并测试feeds配置"
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 显示文件内容
-    log_info "当前feeds.conf.default文件内容:"
-    cat -n feeds.conf.default >&2
-    echo "" >&2
-    
-    # 测试feeds脚本是否能正确解析
-    log_info "测试feeds脚本解析..."
-    if ./scripts/feeds list > /dev/null 2>&1; then
-        log_success "feeds脚本解析成功"
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        return 0
-    else
-        log_error "feeds脚本解析失败"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        
-        # 尝试逐行测试
-        log_info "逐行测试feeds配置..."
-        local line_num=0
-        while IFS= read -r line; do
-            line_num=$((line_num + 1))
-            
-            # 跳过空行和注释行
-            if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-                continue
-            fi
-            
-            # 创建临时文件测试单行
-            local temp_test=$(mktemp)
-            echo "$line" > "$temp_test"
-            
-            if ./scripts/feeds list -c "$temp_test" > /dev/null 2>&1; then
-                log_success "第 $line_num 行测试通过: $line"
-            else
-                log_error "第 $line_num 行测试失败: $line"
-                ERROR_COUNT=$((ERROR_COUNT + 1))
-            fi
-            
-            rm -f "$temp_test"
-        done < "feeds.conf.default"
-        
-        return 1
-    fi
-}
-
-# 添加第三方软件源
-add_third_party_feeds() {
-    log_step "添加第三方软件源"
-    
-    # 京东云雅典娜led控制
-    clone_repo "https://github.com/NONGFAH/luci-app-athena-led" "package/luci-app-athena-led"
-    if [ -d "package/luci-app-athena-led" ]; then
-        chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
-    fi
-    
-    # AdGuardHome
-    clone_repo "https://github.com/sirpdboy/luci-app-adguardhome" "package/luci-app-adguardhome"
-    
-    # ddns-go by sirpdboy
-    clone_repo "https://github.com/sirpdboy/luci-app-ddns-go" "package/luci-app-ddns-go"
-    
-    # luci-app-netdata by sirpdboy
-    clone_repo "https://github.com/sirpdboy/luci-app-netdata" "package/luci-app-netdata"
-    
-    # luci-app-netspeedtest by sirpdboy
-    clone_repo "https://github.com/sirpdboy/luci-app-netspeedtest" "package/luci-app-netspeedtest"
-    
-    # luci-app-partexp by sirpdboy
-    clone_repo "https://github.com/sirpdboy/luci-app-partexp" "package/luci-app-partexp"
-    
-    # luci-app-taskplan by sirpdboy
-    clone_repo "https://github.com/sirpdboy/luci-app-taskplan" "package/luci-app-taskplan"
-    
-    # lucky by gdy666
-    clone_repo "https://github.com/gdy666/luci-app-lucky" "package/lucky"
-    
-    # luci-app-easytier
-    clone_repo "https://github.com/EasyTier/luci-app-easytier" "package/luci-app-easytier"
-    
-    # homeproxy
-    clone_repo "https://github.com/VIKINGYFY/homeproxy" "package/homeproxy"
-    
-    # golang & luci-app-openlist2 by sbwml
-    clone_repo "https://github.com/sbwml/packages_lang_golang" "feeds/packages/lang/golang" "25.x"
-    clone_repo "https://github.com/sbwml/luci-app-openlist2" "package/luci-app-openlist2"
-    
-    # luci-app-mosdns by sbwml
-    clone_repo "https://github.com/sbwml/luci-app-mosdns" "package/luci-app-mosdns" "v5"
-    
-    # luci-app-quickfile by sbwml
-    clone_repo "https://github.com/sbwml/luci-app-quickfile" "package/luci-app-quickfile"
-    
-    # OpenAppFilter（OAF）
-    clone_repo "https://github.com/destan19/OpenAppFilter" "package/luci-app-oaf"
-    
-    # tailscale
-    if [ -f "feeds/packages/net/tailscale/Makefile" ]; then
-        log_info "处理tailscale特殊需求"
-        sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
-    fi
-    clone_repo "https://github.com/asvow/luci-app-tailscale" "package/luci-app-tailscale"
-    
-    # vnt
-    clone_repo "https://github.com/lmq8267/luci-app-vnt" "package/luci-app-vnt"
-    
-    # kenzok8/small-package，后备之选
-    clone_repo "https://github.com/kenzok8/small-package" "small"
-    
-    # 创建标准格式的feeds.conf.default文件
-    create_standard_feeds_config
-    
-    # 验证并测试feeds配置
-    test_feeds_config
-    
-    log_success "第三方软件源添加完成"
-}
-
-# 生成摘要报告
-generate_final_summary() {
-    log_step "生成执行摘要"
-    
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
-    echo -e "${COLOR_CYAN} 执行摘要${COLOR_RESET}" >&2
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
-    echo -e "${COLOR_WHITE}总操作数: ${TOTAL_COUNT}${COLOR_RESET}" >&2
-    echo -e "${COLOR_GREEN}成功操作数: ${SUCCESS_COUNT}${COLOR_RESET}" >&2
-    echo -e "${COLOR_YELLOW}警告操作数: ${WARNING_COUNT}${COLOR_RESET}" >&2
-    echo -e "${COLOR_RED}错误操作数: ${ERROR_COUNT}${COLOR_RESET}" >&2
-    echo -e "${COLOR_CYAN}========================================${COLOR_RESET}" >&2
-    
-    if [ $ERROR_COUNT -eq 0 ]; then
-        log_success "所有操作均成功完成"
-        return 0
-    else
-        log_error "存在 $ERROR_COUNT 个错误操作"
-        return 1
-    fi
-}
-
 # =============================================================================
-# 主执行流程
+# ImmortalWrt 第三方软件源添加脚本
 # =============================================================================
 
-main() {
-    # 记录开始时间
-    local start_time=$(date +%s)
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# 创建日志目录
+mkdir -p logs
+LOG_FILE="logs/repo_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$LOG_FILE")
+exec 2>&1
+
+echo -e "${BLUE}🚀 开始添加第三方软件源...${NC}"
+echo -e "${CYAN}📅 时间: $(date)${NC}"
+
+# 检查网络连接
+if ! ping -c 1 github.com &> /dev/null; then
+    echo -e "${RED}❌ 错误: 无法连接到GitHub，请检查网络连接${NC}"
+    exit 1
+fi
+
+# 创建备份目录
+mkdir -p backup
+cp feeds.conf.default backup/feeds.conf.default.bak
+echo -e "${GREEN}✅ 备份原始 feeds.conf.default${NC}"
+
+# 添加Passwall软件源
+echo -e "${YELLOW}📦 添加Passwall软件源...${NC}"
+sed -i '1i\src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main\nsrc-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main' feeds.conf.default
+
+# 添加Passwall2软件源
+echo -e "${YELLOW}📦 添加Passwall2软件源...${NC}"
+echo "src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main" >> feeds.conf.default
+
+# 添加Momo和Nikki软件源
+echo -e "${YELLOW}📦 添加Momo和Nikki软件源...${NC}"
+echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo;main" >> feeds.conf.default
+echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki;main" >> feeds.conf.default
+
+# 添加OpenClash软件源
+echo -e "${YELLOW}📦 添加OpenClash软件源...${NC}"
+echo "src-git openclash https://github.com/vernesong/OpenClash.git" >> feeds.conf.default
+
+# 添加主题源
+echo -e "${YELLOW}🎨 添加主题源...${NC}"
+git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon feeds/luci/themes/luci-theme-argon 2>/dev/null || echo -e "${RED}⚠️ 警告: 无法克隆Argon主题${NC}"
+git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora feeds/luci/themes/luci-theme-aurora 2>/dev/null || echo -e "${RED}⚠️ 警告: 无法克隆Aurora主题${NC}"
+
+# 克隆第三方软件包
+echo -e "${BLUE}📥 开始克隆第三方软件包...${NC}"
+
+# 定义克隆函数
+clone_package() {
+    local name=$1
+    local url=$2
+    local path=$3
     
-    # 显示脚本信息
-    show_script_info
-    
-    # 检查环境
-    if check_environment; then
-        # 检查并删除官方feeds中可能存在的不同名称的软件包
-        check_and_remove_conflicts
-        
-        # 添加第三方软件源
-        add_third_party_feeds
-        
-        # 生成摘要报告
-        generate_final_summary
+    echo -e "${CYAN}🔄 克隆 $name...${NC}"
+    if git clone $url $path 2>/dev/null; then
+        echo -e "${GREEN}✅ $name 克隆成功${NC}"
+        # 设置权限（如果有脚本）
+        if [ -f "$path/root/etc/init.d/athena_led" ]; then
+            chmod +x $path/root/etc/init.d/athena_led $path/root/usr/sbin/athena-led 2>/dev/null
+        fi
     else
-        log_error "环境检查失败，终止执行"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        generate_final_summary
-        exit 1
-    fi
-    
-    # 计算执行时间
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
-    log_info "总执行时间: ${duration}秒"
-    
-    # 返回执行结果
-    if [ $ERROR_COUNT -eq 0 ]; then
-        return 0
-    else
-        return 1
+        echo -e "${RED}❌ $name 克隆失败${NC}"
     fi
 }
 
-# 执行主函数
-main "$@"
+# 京东云雅典娜LED控制
+clone_package "京东云雅典娜LED控制" "https://github.com/NONGFAH/luci-app-athena-led" "package/luci-app-athena-led"
+
+# AdGuardHome
+clone_package "AdGuardHome" "https://github.com/sirpdboy/luci-app-adguardhome" "package/luci-app-adguardhome"
+
+# ddns-go
+clone_package "ddns-go" "https://github.com/sirpdboy/luci-app-ddns-go" "package/luci-app-ddns-go"
+
+# luci-app-netdata
+clone_package "luci-app-netdata" "https://github.com/sirpdboy/luci-app-netdata" "package/luci-app-netdata"
+
+# luci-app-netspeedtest
+clone_package "luci-app-netspeedtest" "https://github.com/sirpdboy/luci-app-netspeedtest" "package/luci-app-netspeedtest"
+
+# luci-app-partexp
+clone_package "luci-app-partexp" "https://github.com/sirpdboy/luci-app-partexp" "package/luci-app-partexp"
+
+# luci-app-taskplan
+clone_package "luci-app-taskplan" "https://github.com/sirpdboy/luci-app-taskplan" "package/luci-app-taskplan"
+
+# lucky
+clone_package "lucky" "https://github.com/gdy666/luci-app-lucky" "package/lucky"
+
+# luci-app-easytier
+clone_package "luci-app-easytier" "https://github.com/EasyTier/luci-app-easytier" "package/luci-app-easytier"
+
+# homeproxy
+clone_package "homeproxy" "https://github.com/VIKINGYFY/homeproxy" "package/homeproxy"
+
+# golang & luci-app-openlist2
+clone_package "golang" "https://github.com/sbwml/packages_lang_golang -b 25.x" "feeds/packages/lang/golang"
+clone_package "luci-app-openlist2" "https://github.com/sbwml/luci-app-openlist2" "package/luci-app-openlist"
+
+# luci-app-mosdns
+clone_package "luci-app-mosdns" "https://github.com/sbwml/luci-app-mosdns -b v5" "package/luci-app-mosdns"
+
+# luci-app-quickfile
+clone_package "luci-app-quickfile" "https://github.com/sbwml/luci-app-quickfile" "package/luci-app-quickfile"
+
+# OpenAppFilter（OAF）
+clone_package "OpenAppFilter" "https://github.com/destan19/OpenAppFilter" "package/luci-app-oaf"
+
+# tailscale
+echo -e "${CYAN}🔄 处理tailscale...${NC}"
+sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile 2>/dev/null || echo -e "${RED}⚠️ 警告: 无法修改tailscale Makefile${NC}"
+clone_package "luci-app-tailscale" "https://github.com/asvow/luci-app-tailscale" "package/luci-app-tailscale"
+
+# vnt
+clone_package "vnt" "https://github.com/lmq8267/luci-app-vnt" "package/luci-app-vnt"
+
+# kenzok8/small-package（备用）
+clone_package "kenzok8/small-package（备用）" "https://github.com/kenzok8/small-package" "small"
+
+# 显示已添加的软件源
+echo -e "\n${PURPLE}📋 已添加的软件源:${NC}"
+cat feeds.conf.default | grep -v "^#" | grep -v "^$" | while read line; do
+    echo -e "  🔗 $line"
+done
+
+# 显示已克隆的软件包
+echo -e "\n${PURPLE}📦 已克隆的软件包:${NC}"
+ls -la package/ | grep "^d" | grep -v "base\|freifunk\|kernel\|libs\|network\|system\|utils\|mail\|multimedia\|sound\|languages" | awk '{print "  📁 " $9}'
+
+echo -e "\n${GREEN}🎉 第三方软件源添加完成！${NC}"
+echo -e "${CYAN}📄 日志文件: $LOG_FILE${NC}"
