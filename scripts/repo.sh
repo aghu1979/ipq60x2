@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：2025-11-17
-# 版本: 3.5 - 精确修复版
+# 版本: 3.6 - 详细日志分析版
 # ==============================================================================
 
 # 导入通用函数
@@ -69,13 +69,82 @@ WARNING_COUNT=0
 ERROR_COUNT=0
 TOTAL_COUNT=0
 
+# --- 调试函数 ---
+
+# 显示行的详细信息
+debug_line() {
+    local line_num="$1"
+    local line_content="$2"
+    
+    echo -e "${COLOR_YELLOW}--- 第 $line_num 行详细信息 ---${COLOR_RESET}"
+    echo -e "${COLOR_WHITE}原始内容: '$line_content'${COLOR_RESET}"
+    
+    # 显示字符的十六进制表示
+    echo -e "${COLOR_CYAN}十六进制表示:${COLOR_RESET}"
+    echo -n "$line_content" | hexdump -C
+    echo ""
+    
+    # 检查行尾是否有特殊字符
+    if [[ "$line_content" =~ $'\r'$ ]]; then
+        echo -e "${COLOR_RED}警告: 行尾包含Windows回车符(\\r)${COLOR_RESET}"
+    fi
+    
+    # 检查是否有不可见字符
+    local clean_line=$(echo "$line_content" | tr -d '\r\n')
+    if [[ "$line_content" != "$clean_line" ]]; then
+        echo -e "${COLOR_RED}警告: 行包含不可见字符${COLOR_RESET}"
+    fi
+}
+
+# 分析错误原因
+analyze_feeds_error() {
+    local error_line="$1"
+    local line_content="$2"
+    
+    echo -e "${COLOR_RED}--- 错误分析 ---${COLOR_RESET}"
+    
+    # 检查是否为空行
+    if [[ -z "$line_content" ]]; then
+        echo -e "${COLOR_RED}错误原因: 空行${COLOR_RESET}"
+        return
+    fi
+    
+    # 检查是否为注释行
+    if [[ "$line_content" =~ ^[[:space:]]*# ]]; then
+        echo -e "${COLOR_GREEN}这是注释行，应该不会报错${COLOR_RESET}"
+        return
+    fi
+    
+    # 检查是否以src-开头
+    if [[ ! "$line_content" =~ ^src- ]]; then
+        echo -e "${COLOR_RED}错误原因: 不以'src-'开头${COLOR_RESET}"
+        return
+    fi
+    
+    # 检查格式
+    if [[ "$line_content" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
+        echo -e "${COLOR_GREEN}格式看起来正确，可能是其他问题${COLOR_RESET}"
+        
+        # 检查URL是否有效
+        local url=$(echo "$line_content" | awk '{print $3}')
+        if [[ "$url" =~ ^http ]] || [[ "$url" =~ ^git ]]; then
+            echo -e "${COLOR_GREEN}URL格式正确${COLOR_RESET}"
+        else
+            echo -e "${COLOR_RED}错误原因: URL格式不正确 '$url'${COLOR_RESET}"
+        fi
+    else
+        echo -e "${COLOR_RED}错误原因: 格式不正确${COLOR_RESET}"
+        echo -e "${COLOR_YELLOW}正确格式应为: src-<type> <name> <url>[;<branch>]${COLOR_RESET}"
+    fi
+}
+
 # --- 函数定义 ---
 
 # 显示脚本信息
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 3.5 - 精确修复版"
+    log_info "版本: 3.6 - 详细日志分析版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
 }
@@ -133,45 +202,6 @@ clone_repo() {
             ERROR_COUNT=$((ERROR_COUNT + 1))
             return 1
         fi
-    fi
-}
-
-# 安全地添加软件源到feeds.conf.default
-safe_add_feed() {
-    local feed_type="$1"
-    local feed_url="$2"
-    local feed_branch="${3:-}"
-    
-    log_processing "添加软件源: $feed_type"
-    TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 构建软件源条目 - 确保格式完全正确
-    local feed_entry="src-git $feed_type $feed_url"
-    if [ -n "$feed_branch" ]; then
-        feed_entry="$feed_entry;$feed_branch"
-    fi
-    
-    # 检查是否已存在相同的软件源
-    if grep -qF "$feed_entry" feeds.conf.default; then
-        log_warning "软件源已存在，跳过添加: $feed_type"
-        WARNING_COUNT=$((WARNING_COUNT + 1))
-        return 1
-    fi
-    
-    # 备份原文件
-    cp feeds.conf.default feeds.conf.default.bak
-    
-    # 添加软件源 - 使用printf确保没有隐藏字符
-    if printf "%s\n" "$feed_entry" >> feeds.conf.default; then
-        log_success "添加软件源成功: $feed_type"
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        return 0
-    else
-        log_error "添加软件源失败: $feed_type"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        # 恢复备份
-        mv feeds.conf.default.bak feeds.conf.default
-        return 1
     fi
 }
 
@@ -236,9 +266,9 @@ check_and_remove_conflicts() {
     return 0
 }
 
-# 彻底清理并重建feeds.conf.default
-rebuild_feeds_config() {
-    log_processing "彻底清理并重建feeds.conf.default"
+# 创建干净的feeds.conf.default文件
+create_clean_feeds_config() {
+    log_processing "创建干净的feeds.conf.default文件"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
     
     # 备份原文件
@@ -247,9 +277,9 @@ rebuild_feeds_config() {
     # 创建临时文件
     local temp_file=$(mktemp)
     
-    # 重新构建文件 - 只保留有效的源
+    # 重新构建文件
     {
-        # 保留原始的有效行
+        # 添加原始的有效行（不包括可能出错的行）
         while IFS= read -r line; do
             # 跳过空行
             if [[ -z "$line" ]]; then
@@ -265,10 +295,13 @@ rebuild_feeds_config() {
             # 只保留格式正确的行
             if [[ "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
                 printf "%s\n" "$line"
+            else
+                echo -e "${COLOR_YELLOW}跳过格式错误的行: $line${COLOR_RESET}"
             fi
         done < "feeds.conf.default"
         
-        # 添加所有需要的第三方源 - 确保格式正确
+        # 添加所有需要的第三方源
+        echo -e "${COLOR_GREEN}添加第三方软件源...${COLOR_RESET}"
         printf "%s\n" "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main"
         printf "%s\n" "src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main"
         printf "%s\n" "src-git luci-app-passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main"
@@ -281,14 +314,14 @@ rebuild_feeds_config() {
     # 替换原文件
     mv "$temp_file" "feeds.conf.default"
     
-    log_success "feeds.conf.default文件重建完成"
+    log_success "feeds.conf.default文件创建完成"
     SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     return 0
 }
 
-# 验证feeds.conf.default文件
-validate_feeds_config() {
-    log_processing "验证feeds.conf.default文件"
+# 详细验证feeds.conf.default文件
+validate_feeds_config_detailed() {
+    log_processing "详细验证feeds.conf.default文件"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
     
     # 检查文件是否存在
@@ -298,13 +331,15 @@ validate_feeds_config() {
         return 1
     fi
     
-    # 显示文件内容用于调试
+    # 显示文件内容
     log_info "当前feeds.conf.default文件内容:"
     cat -n feeds.conf.default
+    echo ""
     
     # 检查文件语法
     local line_num=0
     local error_count=0
+    local error_lines=()
     
     while IFS= read -r line; do
         line_num=$((line_num + 1))
@@ -314,11 +349,16 @@ validate_feeds_config() {
             continue
         fi
         
-        # 检查格式是否正确 - 更严格的检查
+        # 检查格式是否正确
         if [[ ! "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
             log_error "第 $line_num 行格式错误: $line"
-            ERROR_COUNT=$((ERROR_COUNT + 1))
+            error_lines+=("$line_num:$line")
             error_count=$((error_count + 1))
+            
+            # 显示详细分析
+            debug_line "$line_num" "$line"
+            analyze_feeds_error "$line_num" "$line"
+            echo ""
         fi
     done < "feeds.conf.default"
     
@@ -328,7 +368,41 @@ validate_feeds_config() {
         return 0
     else
         log_error "feeds.conf.default文件验证失败，发现 $error_count 个错误"
-        return 1
+        
+        # 尝试自动修复
+        log_info "尝试自动修复错误..."
+        create_clean_feeds_config
+        
+        # 再次验证
+        log_info "修复后重新验证..."
+        error_count=0
+        line_num=0
+        while IFS= read -r line; do
+            line_num=$((line_num + 1))
+            
+            # 跳过空行和注释行
+            if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+                continue
+            fi
+            
+            # 检查格式是否正确
+            if [[ ! "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
+                log_error "修复后第 $line_num 行仍然错误: $line"
+                debug_line "$line_num" "$line"
+                analyze_feeds_error "$line_num" "$line"
+                error_count=$((error_count + 1))
+            fi
+        done < "feeds.conf.default"
+        
+        if [ $error_count -eq 0 ]; then
+            log_success "修复成功，feeds.conf.default文件验证通过"
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            return 0
+        else
+            log_error "修复失败，仍有 $error_count 个错误"
+            ERROR_COUNT=$((ERROR_COUNT + 1))
+            return 1
+        fi
     fi
 }
 
@@ -395,11 +469,11 @@ add_third_party_feeds() {
     # kenzok8/small-package，后备之选
     clone_repo "https://github.com/kenzok8/small-package" "small"
     
-    # 彻底清理并重建feeds.conf.default
-    rebuild_feeds_config
+    # 创建干净的feeds.conf.default文件
+    create_clean_feeds_config
     
-    # 验证feeds.conf.default文件
-    validate_feeds_config
+    # 详细验证feeds.conf.default文件
+    validate_feeds_config_detailed
     
     log_success "第三方软件源添加完成"
 }
@@ -460,7 +534,8 @@ main() {
     log_info "总执行时间: ${duration}秒"
     
     # 返回执行结果
-    if [ $ERROR_COUNT -eq 0 ]; then return 0
+    if [ $ERROR_COUNT -eq 0 ]; then
+        return 0
     else
         return 1
     fi
