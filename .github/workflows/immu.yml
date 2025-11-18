@@ -85,11 +85,25 @@ jobs:
         ln -sf ${{ env.DL_DIR }} dl
         ln -sf ${{ env.TMP_DIR }} tmp
 
-    - name: Generate Variables(生成变量)
+    - name: Load Custom Configuration(加载自定义配置)
       run: |
+        chmod +x $DIY_SCRIPT
+        cd $OPENWRT_PATH
+        $GITHUB_WORKSPACE/$DIY_SCRIPT
+
+    - name: Apply Configuration and Generate Variables(应用配置并生成变量)
+      run: |
+        # 应用配置文件
         cp $CONFIG_FILE $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
+        
+        # 保存原始配置用于Luci报告
+        cp $OPENWRT_PATH/.config $OPENWRT_PATH/.config.original
+        
+        # 运行一次defconfig
         make defconfig > /dev/null 2>&1
+        
+        # 生成变量
         SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
         echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
         DEVICE_TARGET=$(cat .config | grep CONFIG_TARGET_BOARD | awk -F '"' '{print $2}')
@@ -98,6 +112,9 @@ jobs:
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
         echo "HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
         echo "CACHE_DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
+        
+        # 标记defconfig已完成
+        echo "DEFCONFIG_COMPLETED=true" >> $GITHUB_ENV
 
     - name: Cache Toolchain(缓存工具链)
       if: env.CACHE_TOOLCHAIN == 'true'
@@ -128,23 +145,10 @@ jobs:
           done
         fi
 
-    - name: Load Custom Configuration(加载自定义配置)
-      run: |
-        chmod +x $DIY_SCRIPT
-        cd $OPENWRT_PATH
-        $GITHUB_WORKSPACE/$DIY_SCRIPT
-
     - name: Luci Packages Report(Luci软件包报告)
       run: |
         echo "## Luci软件包报告" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # 保存原始配置
-        cp $OPENWRT_PATH/.config $OPENWRT_PATH/.config.original
-        
-        # 运行defconfig
-        cd $OPENWRT_PATH
-        make defconfig > /dev/null 2>&1
         
         # 提取原始配置中的luci软件包
         echo "### 原始配置中的Luci软件包" >> $GITHUB_STEP_SUMMARY
@@ -200,9 +204,8 @@ jobs:
 
     - name: Download DL Package(下载DL软件包)
       run: |
-        cat $CONFIG_FILE > $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
-        make defconfig
+        # 不再需要运行make defconfig，因为已经在之前的步骤中完成
         make download -j$(nproc)
 
     - name: Compile Firmware(开始编译固件)
