@@ -1,6 +1,6 @@
 # ==============================================================================
 # OpenWrt 自定义编译工作流
-# 版本: v2.5
+# 版本: v2.7
 # 日期: 2025-11-18
 # 功能: 修改系统配置、添加自定义软件源、更新并安装软件包
 # 作者: Mary
@@ -31,8 +31,6 @@ env:
   # 缓存配置
   CACHE_TOOLCHAIN: true
   CACHE_DL: true
-  # 调试配置
-  ENABLE_DEBUG: true
 
 jobs:
   Build:
@@ -104,89 +102,24 @@ jobs:
         
         echo "文件验证通过"
 
-    - name: Show Original feeds.conf.default(显示原始feeds配置)
-      run: |
-        cd $OPENWRT_PATH
-        echo "=== 原始 feeds.conf.default 内容 ==="
-        nl -ba feeds.conf.default
-        echo "=== 内容结束 ==="
-
-    - name: Backup feeds.conf.default(备份feeds配置)
-      run: |
-        cd $OPENWRT_PATH
-        if [ -f "feeds.conf.default" ]; then
-          cp feeds.conf.default feeds.conf.default.backup
-          echo "已备份原始 feeds.conf.default"
-        fi
-
     - name: Load Custom Configuration(加载自定义配置)
       run: |
         chmod +x $DIY_SCRIPT
         cd $OPENWRT_PATH
         echo "执行自定义脚本..."
-        $GITHUB_WORKSPACE/$DIY_SCRIPT 2>&1 | tee $GITHUB_WORKSPACE/diy.log
+        $GITHUB_WORKSPACE/$DIY_SCRIPT
 
-    - name: Show Modified feeds.conf.default(显示修改后的feeds配置)
-      run: |
-        cd $OPENWRT_PATH
-        echo "=== 修改后 feeds.conf.default 内容 ==="
-        nl -ba feeds.conf.default
-        echo "=== 内容结束 ==="
-        
-        echo "=== 与备份文件的差异 ==="
-        if [ -f "feeds.conf.default.backup" ]; then
-            diff -u feeds.conf.default.backup feeds.conf.default || true
-        else
-            echo "没有备份文件可供比较"
-        fi
-        echo "=== 差异结束 ==="
-
-    - name: Validate feeds.conf.default with OpenWrt Tool(使用OpenWrt工具验证feeds配置)
+    - name: Validate feeds.conf.default(验证feeds配置)
       run: |
         cd $OPENWRT_PATH
         
-        echo "=== 使用OpenWrt工具验证 feeds.conf.default ==="
+        echo "=== 验证 feeds.conf.default ==="
         
-        # 先尝试直接运行scripts/feeds检查语法
-        echo "运行 ./scripts/feeds 检查语法..."
+        # 使用OpenWrt工具验证
         ./scripts/feeds list > /dev/null 2>&1
         if [ $? -ne 0 ]; then
-          echo "feeds语法检查失败，显示详细错误:"
+          echo "错误: feeds语法检查失败"
           ./scripts/feeds list
-          echo ""
-          echo "逐行分析 feeds.conf.default:"
-          
-          line_num=0
-          while IFS= read -r line; do
-            line_num=$((line_num + 1))
-            echo "第 $line_num 行: '$line'"
-            
-            # 检查是否有特殊字符
-            if [[ "$line" =~ [[:cntrl:]] ]]; then
-              echo "  ❌ 包含控制字符"
-            fi
-            
-            # 检查行尾是否有空格
-            if [[ "$line" =~ [[:space:]]+$ ]]; then
-              echo "  ❌ 行尾有空格"
-            fi
-            
-            # 检查是否为空行或注释行
-            if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-              echo "  ✓ 空行或注释行"
-              continue
-            fi
-            
-            # 检查格式
-            if [[ ! "$line" =~ ^src-(git|svn|cvs|link|hg)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]] ]]; then
-              echo "  ❌ 格式不正确"
-            else
-              echo "  ✓ 格式正确"
-            fi
-            
-            echo ""
-          done < feeds.conf.default
-          
           exit 1
         fi
         
@@ -206,25 +139,11 @@ jobs:
         
         # 运行defconfig
         echo "运行 make defconfig..."
-        make defconfig 2>&1 | tee $GITHUB_WORKSPACE/defconfig.log
+        make defconfig
         
         # 检查defconfig是否成功
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        if [ $? -ne 0 ]; then
           echo "错误: make defconfig 失败"
-          echo "最后20行日志:"
-          tail -n 20 $GITHUB_WORKSPACE/defconfig.log
-          
-          # 特别检查feeds相关错误
-          if grep -q "Syntax error in feeds.conf.default" $GITHUB_WORKSPACE/defconfig.log; then
-            echo "发现feeds语法错误，显示详细错误信息:"
-            grep -A 5 -B 5 "Syntax error in feeds.conf.default" $GITHUB_WORKSPACE/defconfig.log
-            
-            # 显示第13行及周围的内容
-            echo ""
-            echo "显示第13行及周围的内容:"
-            sed -n '10,16p' feeds.conf.default | nl -v10
-          fi
-          
           exit 1
         fi
         
@@ -287,59 +206,73 @@ jobs:
 
     - name: Luci Packages Report(Luci软件包报告)
       run: |
-        echo "## Luci软件包报告" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
+        cd $OPENWRT_PATH
+        
+        # 创建报告内容
+        REPORT_FILE="/tmp/luci_report.md"
+        echo "## Luci软件包报告" > $REPORT_FILE
+        echo "" >> $REPORT_FILE
         
         # 提取原始配置中的luci软件包
-        echo "### 原始配置中的Luci软件包" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config.original | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | sort >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 原始配置中的Luci软件包" >> $REPORT_FILE
+        echo '```' >> $REPORT_FILE
+        grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config.original | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | sort >> $REPORT_FILE
+        echo '```' >> $REPORT_FILE
+        echo "" >> $REPORT_FILE
         
         # 提取defconfig后的luci软件包
-        echo "### Defconfig后的Luci软件包" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | sort >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Defconfig后的Luci软件包" >> $REPORT_FILE
+        echo '```' >> $REPORT_FILE
+        grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | sort >> $REPORT_FILE
+        echo '```' >> $REPORT_FILE
+        echo "" >> $REPORT_FILE
         
         # 比较差异
-        echo "### Luci软件包差异" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Luci软件包差异" >> $REPORT_FILE
+        echo "" >> $REPORT_FILE
         
         # 新增的软件包
         NEW_PACKAGES=$(comm -13 <(grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config.original | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | sort) <(grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | sort))
         if [ -n "$NEW_PACKAGES" ]; then
-          echo "#### 🆕 新增的Luci软件包" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "$NEW_PACKAGES" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 🆕 新增的Luci软件包" >> $REPORT_FILE
+          echo '```' >> $REPORT_FILE
+          echo "$NEW_PACKAGES" >> $REPORT_FILE
+          echo '```' >> $REPORT_FILE
+          echo "" >> $REPORT_FILE
         fi
         
         # 缺失的软件包
         MISSING_PACKAGES=$(comm -23 <(grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config.original | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | sort) <(grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g' | sort))
         if [ -n "$MISSING_PACKAGES" ]; then
-          echo "#### ❌ 缺失的Luci软件包" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "$MISSING_PACKAGES" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### ❌ 缺失的Luci软件包" >> $REPORT_FILE
+          echo '```' >> $REPORT_FILE
+          echo "$MISSING_PACKAGES" >> $REPORT_FILE
+          echo '```' >> $REPORT_FILE
+          echo "" >> $REPORT_FILE
         fi
         
         # 统计信息
         ORIGINAL_COUNT=$(grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config.original | wc -l)
         CURRENT_COUNT=$(grep "^CONFIG_PACKAGE_luci.*=y" $OPENWRT_PATH/.config | wc -l)
-        echo "### 📊 统计信息" >> $GITHUB_STEP_SUMMARY
-        echo "- 原始配置中的Luci软件包数量: $ORIGINAL_COUNT" >> $GITHUB_STEP_SUMMARY
-        echo "- Defconfig后的Luci软件包数量: $CURRENT_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 统计信息" >> $REPORT_FILE
+        echo "- 原始配置中的Luci软件包数量: $ORIGINAL_COUNT" >> $REPORT_FILE
+        echo "- Defconfig后的Luci软件包数量: $CURRENT_COUNT" >> $REPORT_FILE
         if [ $ORIGINAL_COUNT -lt $CURRENT_COUNT ]; then
-          echo "- 新增软件包数量: $(($CURRENT_COUNT - $ORIGINAL_COUNT))" >> $GITHUB_STEP_SUMMARY
+          echo "- 新增软件包数量: $(($CURRENT_COUNT - $ORIGINAL_COUNT))" >> $REPORT_FILE
         elif [ $ORIGINAL_COUNT -gt $CURRENT_COUNT ]; then
-          echo "- 缺失软件包数量: $(($ORIGINAL_COUNT - $CURRENT_COUNT))" >> $GITHUB_STEP_SUMMARY
+          echo "- 缺失软件包数量: $(($ORIGINAL_COUNT - $CURRENT_COUNT))" >> $REPORT_FILE
         else
-          echo "- 软件包数量无变化" >> $GITHUB_STEP_SUMMARY
+          echo "- 软件包数量无变化" >> $REPORT_FILE
+        fi
+        
+        # 输出报告到日志
+        echo "=== Luci软件包报告 ==="
+        cat $REPORT_FILE
+        echo "=== 报告结束 ==="
+        
+        # 尝试写入到GitHub步骤摘要
+        if [ -n "$GITHUB_STEP_SUMMARY" ]; then
+          cat $REPORT_FILE >> $GITHUB_STEP_SUMMARY
         fi
 
     - name: Download DL Package(下载DL软件包)
