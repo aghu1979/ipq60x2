@@ -83,8 +83,8 @@ add_feed() {
 # 添加各种自定义软件源
 add_feed "passwall_packages" "https://github.com/xiaorouji/openwrt-passwall-packages.git"
 add_feed "passwall_luci" "https://github.com/xiaorouji/openwrt-passwall.git"
-add_feed "luci-app-passwall2" "https://github.com/xiaorouji/openwrt-passwall2.git"
-add_feed "luci-app-openclash" "https://github.com/vernesong/OpenClash.git"
+add_feed "passwall2" "https://github.com/xiaorouji/openwrt-passwall2.git"
+add_feed "openclash" "https://github.com/vernesong/OpenClash.git"
 add_feed "momo" "https://github.com/nikkinikki-org/OpenWrt-momo"
 add_feed "nikki" "https://github.com/nikkinikki-org/OpenWrt-nikki"
 
