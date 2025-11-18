@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：2025-11-17
-# 版本: 3.3 - 优化环境检查版
+# 版本: 3.4 - 彻底修复版
 # ==============================================================================
 
 # 导入通用函数
@@ -168,7 +168,7 @@ declare -A FEEDS_PACKAGES=(
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 3.3 - 优化环境检查版"
+    log_info "版本: 3.4 - 彻底修复版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
 }
@@ -398,6 +398,67 @@ check_and_remove_conflicts() {
     return 0
 }
 
+# 彻底修复feeds.conf.default文件
+fix_feeds_config_completely() {
+    log_processing "彻底修复feeds.conf.default文件"
+    TOTAL_COUNT=$((TOTAL_COUNT + 1))
+    
+    # 创建临时文件
+    local temp_file=$(mktemp)
+    
+    # 首先备份原文件
+    cp feeds.conf.default feeds.conf.default.backup
+    
+    # 重新构建文件
+    {
+        # 添加原始的有效行
+        while IFS= read -r line; do
+            # 跳过空行
+            if [[ -z "$line" ]]; then
+                continue
+            fi
+            
+            # 保留注释行
+            if [[ "$line" =~ ^[[:space:]]*# ]]; then
+                echo "$line"
+                continue
+            fi
+            
+            # 检查格式是否正确
+            if [[ "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+ ]]; then
+                echo "$line"
+            fi
+        done < "feeds.conf.default"
+        
+        # 添加所有需要的软件源
+        for feed_name in "${!FEED_SOURCES[@]}"; do
+            local feed_info="${FEED_SOURCES[$feed_name]}"
+            local feed_url="${feed_info%|*}"
+            local branch="${feed_info#*|}"
+            
+            # 如果没有分支信息，branch会等于url，需要处理
+            if [ "$branch" = "$feed_url" ]; then
+                branch=""
+            fi
+            
+            # 构建软件源条目
+            local feed_entry="src-git $feed_name $feed_url"
+            if [ -n "$branch" ]; then
+                feed_entry="$feed_entry;$branch"
+            fi
+            
+            echo "$feed_entry"
+        done
+    } > "$temp_file"
+    
+    # 替换原文件
+    mv "$temp_file" "feeds.conf.default"
+    
+    log_success "feeds.conf.default文件彻底修复完成"
+    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+    return 0
+}
+
 # 验证feeds.conf.default文件
 validate_feeds_config() {
     log_processing "验证feeds.conf.default文件"
@@ -409,6 +470,10 @@ validate_feeds_config() {
         ERROR_COUNT=$((ERROR_COUNT + 1))
         return 1
     fi
+    
+    # 显示文件内容用于调试
+    log_info "当前feeds.conf.default文件内容:"
+    cat -n feeds.conf.default
     
     # 检查文件语法
     local line_num=0
@@ -458,6 +523,9 @@ process_repos() {
     
     # 处理特殊需求
     process_special_requirements
+    
+    # 彻底修复feeds.conf.default文件
+    fix_feeds_config_completely
     
     # 验证feeds.conf.default文件
     validate_feeds_config
