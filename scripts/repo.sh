@@ -13,7 +13,7 @@
 #
 # 作者: Mary
 # 日期：2025-11-17
-# 版本: 3.7 - 修复日志污染版
+# 版本: 3.8 - 最终修复版
 # ==============================================================================
 
 # 导入通用函数
@@ -75,7 +75,7 @@ TOTAL_COUNT=0
 show_script_info() {
     log_step "OpenWrt 第三方软件源集成脚本"
     log_info "作者: Mary"
-    log_info "版本: 3.7 - 修复日志污染版"
+    log_info "版本: 3.8 - 最终修复版"
     log_info "开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
 }
@@ -197,9 +197,9 @@ check_and_remove_conflicts() {
     return 0
 }
 
-# 创建干净的feeds.conf.default文件
-create_clean_feeds_config() {
-    log_processing "创建干净的feeds.conf.default文件"
+# 创建标准格式的feeds.conf.default文件
+create_standard_feeds_config() {
+    log_processing "创建标准格式的feeds.conf.default文件"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
     
     # 备份原文件
@@ -208,36 +208,25 @@ create_clean_feeds_config() {
     # 创建临时文件
     local temp_file=$(mktemp)
     
-    # 重新构建文件 - 不使用echo，直接写入
-    {
-        # 添加原始的有效行
-        while IFS= read -r line; do
-            # 跳过空行
-            if [[ -z "$line" ]]; then
-                continue
-            fi
-            
-            # 保留注释行
-            if [[ "$line" =~ ^[[:space:]]*# ]]; then
-                printf "%s\n" "$line"
-                continue
-            fi
-            
-            # 只保留格式正确的行
-            if [[ "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
-                printf "%s\n" "$line"
-            fi
-        done < "feeds.conf.default"
-        
-        # 添加所有需要的第三方源
-        printf "%s\n" "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main"
-        printf "%s\n" "src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main"
-        printf "%s\n" "src-git luci-app-passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main"
-        printf "%s\n" "src-git luci-app-openclash https://github.com/vernesong/OpenClash.git"
-        printf "%s\n" "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main"
-        printf "%s\n" "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main"
-        
-    } > "$temp_file"
+    # 写入标准格式的feeds配置
+    cat > "$temp_file" << 'EOF'
+src-git nss_packages https://github.com/qosmio/nss-packages.git
+src-git sqm_scripts_nss https://github.com/qosmio/sqm-scripts-nss.git
+src-git packages https://github.com/immortalwrt/packages.git
+src-git luci https://github.com/immortalwrt/luci.git
+src-git routing https://github.com/openwrt/routing.git
+src-git telephony https://github.com/openwrt/telephony.git
+src-git video https://github.com/openwrt/video.git
+#src-git targets https://github.com/openwrt/targets.git
+#src-git oldpackages http://git.openwrt.org/packages.git
+#src-link custom /usr/src/openwrt/custom-feed
+src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main
+src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main
+src-git luci-app-passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main
+src-git luci-app-openclash https://github.com/vernesong/OpenClash.git
+src-git momo https://github.com/nikkinikki-org/OpenWrt-momo.git;main
+src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main
+EOF
     
     # 替换原文件
     mv "$temp_file" "feeds.conf.default"
@@ -247,58 +236,29 @@ create_clean_feeds_config() {
     return 0
 }
 
-# 验证feeds.conf.default文件
-validate_feeds_config() {
-    log_processing "验证feeds.conf.default文件"
+# 验证并测试feeds配置
+test_feeds_config() {
+    log_processing "验证并测试feeds配置"
     TOTAL_COUNT=$((TOTAL_COUNT + 1))
-    
-    # 检查文件是否存在
-    if [ ! -f "feeds.conf.default" ]; then
-        log_error "feeds.conf.default文件不存在"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-        return 1
-    fi
     
     # 显示文件内容
     log_info "当前feeds.conf.default文件内容:"
     cat -n feeds.conf.default >&2
     echo "" >&2
     
-    # 检查文件语法
-    local line_num=0
-    local error_count=0
-    
-    while IFS= read -r line; do
-        line_num=$((line_num + 1))
-        
-        # 跳过空行和注释行
-        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-            continue
-        fi
-        
-        # 检查格式是否正确
-        if [[ ! "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
-            log_error "第 $line_num 行格式错误: $line"
-            ERROR_COUNT=$((ERROR_COUNT + 1))
-            error_count=$((error_count + 1))
-        fi
-    done < "feeds.conf.default"
-    
-    if [ $error_count -eq 0 ]; then
-        log_success "feeds.conf.default文件验证通过"
+    # 测试feeds脚本是否能正确解析
+    log_info "测试feeds脚本解析..."
+    if ./scripts/feeds list > /dev/null 2>&1; then
+        log_success "feeds脚本解析成功"
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
         return 0
     else
-        log_error "feeds.conf.default文件验证失败，发现 $error_count 个错误"
+        log_error "feeds脚本解析失败"
+        ERROR_COUNT=$((ERROR_COUNT + 1))
         
-        # 尝试自动修复
-        log_info "尝试自动修复错误..."
-        create_clean_feeds_config
-        
-        # 再次验证
-        log_info "修复后重新验证..."
-        error_count=0
-        line_num=0
+        # 尝试逐行测试
+        log_info "逐行测试feeds配置..."
+        local line_num=0
         while IFS= read -r line; do
             line_num=$((line_num + 1))
             
@@ -307,22 +267,21 @@ validate_feeds_config() {
                 continue
             fi
             
-            # 检查格式是否正确
-            if [[ ! "$line" =~ ^src-(git|svn|cvs|hg|link|bzr)[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+ ]]; then
-                log_error "修复后第 $line_num 行仍然错误: $line"
-                error_count=$((error_count + 1))
+            # 创建临时文件测试单行
+            local temp_test=$(mktemp)
+            echo "$line" > "$temp_test"
+            
+            if ./scripts/feeds list -c "$temp_test" > /dev/null 2>&1; then
+                log_success "第 $line_num 行测试通过: $line"
+            else
+                log_error "第 $line_num 行测试失败: $line"
+                ERROR_COUNT=$((ERROR_COUNT + 1))
             fi
+            
+            rm -f "$temp_test"
         done < "feeds.conf.default"
         
-        if [ $error_count -eq 0 ]; then
-            log_success "修复成功，feeds.conf.default文件验证通过"
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            return 0
-        else
-            log_error "修复失败，仍有 $error_count 个错误"
-            ERROR_COUNT=$((ERROR_COUNT + 1))
-            return 1
-        fi
+        return 1
     fi
 }
 
@@ -389,11 +348,11 @@ add_third_party_feeds() {
     # kenzok8/small-package，后备之选
     clone_repo "https://github.com/kenzok8/small-package" "small"
     
-    # 创建干净的feeds.conf.default文件
-    create_clean_feeds_config
+    # 创建标准格式的feeds.conf.default文件
+    create_standard_feeds_config
     
-    # 验证feeds.conf.default文件
-    validate_feeds_config
+    # 验证并测试feeds配置
+    test_feeds_config
     
     log_success "第三方软件源添加完成"
 }
