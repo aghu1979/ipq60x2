@@ -1,7 +1,7 @@
 # scripts/extract_devices.sh
 # =============================================================================
-# 设备名称提取和重命名脚本
-# 版本: 1.0.0
+# 设备名称提取脚本
+# 版本: 1.0.4
 # 更新日期: 2025-11-18
 # =============================================================================
 
@@ -30,15 +30,20 @@ fi
 
 # 提取设备名称
 echo -e "${BLUE}📱 提取设备名称...${NC}"
-DEVICES=$(grep -oE 'CONFIG_TARGET_DEVICE_[^_]+_DEVICE_[^=]+' "$CONFIG_FILE" | sed 's/CONFIG_TARGET_DEVICE_[^_]*_DEVICE_//')
 
-if [ -z "$DEVICES" ]; then
-    echo -e "${YELLOW}⚠️ 警告: 未找到设备名称${NC}"
-    exit 1
+# 使用正则表达式提取设备名称
+# 根据实际配置文件格式，匹配两种格式的设备配置
+# 1. CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_xxx=y
+# 2. CONFIG_TARGET_DEVICE_qualcommax_ipq60xx_DEVICE_xxx=y
+devices=$(grep -oE 'CONFIG_TARGET(_DEVICE)?_qualcommax_ipq60xx_DEVICE_[^=]+=y' "$CONFIG_FILE" | sed -E 's/CONFIG_TARGET(_DEVICE)?_qualcommax_ipq60xx_DEVICE_([^=]+)=y/\2/' | sort -u)
+
+if [ -z "$devices" ]; then
+    echo -e "${YELLOW}⚠️ 警告: 未找到设备名称，使用默认设备${NC}"
+    devices="jdcloud_re-ss-01 jdcloud_re-cs-02 jdcloud_rz-caa-07"
 fi
 
 echo -e "${GREEN}✅ 找到的设备:${NC}"
-for device in $DEVICES; do
+for device in $devices; do
     echo -e "  📱 $device"
 done
 
@@ -47,7 +52,7 @@ cat > rename_firmware.sh << EOF
 #!/bin/bash
 # =============================================================================
 # 固件重命名脚本
-# 版本: 1.0.0
+# 版本: 1.0.4
 # 更新日期: 2025-11-18
 # 自动生成，请勿手动修改
 # =============================================================================
@@ -75,20 +80,28 @@ if [ ! -d "\$FIRMWARE_DIR" ]; then
     exit 1
 fi
 
+# 设备列表
+DEVICES="$devices"
+
 # 重命名固件文件
 echo -e "\${BLUE}🔄 重命名固件文件...\${NC}"
-EOF
-
-for device in $DEVICES; do
-    echo "if [ -f \"\$FIRMWARE_DIR/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin\" ]; then" >> rename_firmware.sh
-    echo "    mv \"\$FIRMWARE_DIR/immortalwrt-*-qualcommax-ipq60xx-${device}-squashfs-sysupgrade.bin\" \"\$FIRMWARE_DIR/ImmortalWrt-${device}-\${VARIANT}-\${BUILD_DATE}.bin\"" >> rename_firmware.sh
-    echo "    echo -e \"\${GREEN}✅ 重命名: ImmortalWrt-${device}-\${VARIANT}-\${BUILD_DATE}.bin\${NC}\"" >> rename_firmware.sh
-    echo "fi" >> rename_firmware.sh
+for device in \$DEVICES; do
+    if [ -f "\$FIRMWARE_DIR/immortalwrt-*-qualcommax-ipq60xx-\$device-squashfs-sysupgrade.bin" ]; then
+        mv "\$FIRMWARE_DIR/immortalwrt-*-qualcommax-ipq60xx-\$device-squashfs-sysupgrade.bin" "\$FIRMWARE_DIR/ImmortalWrt-\$device-\${VARIANT}-\${BUILD_DATE}.bin"
+        echo -e "\${GREEN}✅ 重命名: ImmortalWrt-\$device-\${VARIANT}-\${BUILD_DATE}.bin\${NC}"
+    else
+        echo -e "\${YELLOW}⚠️ 警告: 找不到设备 \$device 的固件文件\${NC}"
+    fi
 done
 
-echo "echo -e \"\${GREEN}🎉 固件重命名完成\${NC}\"" >> rename_firmware.sh
+echo -e "\${GREEN}🎉 固件重命名完成\${NC}"
+EOF
+
 chmod +x rename_firmware.sh
 
 echo -e "${GREEN}✅ 设备名称提取完成！${NC}"
-echo -e "${CYAN}📱 设备列表: $DEVICES${NC}"
+echo -e "${CYAN}📱 设备列表: $devices${NC}"
 echo -e "${CYAN}📄 重命名脚本: rename_firmware.sh${NC}"
+
+# 输出设备列表（不包含颜色代码，供其他脚本使用）
+echo "$devices"
