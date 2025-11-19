@@ -1,19 +1,19 @@
 # scripts/luci-report.sh
 # =============================================================================
 # 生成Luci软件包变更报告
-# 版本: 1.0.1
+# 版本: 1.1.1
 # 更新日期: 2025-11-19
 # =============================================================================
 
 # 检查参数
-if [ -z "$1" ] || [ -z "$2" ]; then
-    echo "用法: $0 <ImmortalWrt源码目录> <变体名称>"
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+    echo "用法: $0 <ImmortalWrt源码目录> <变体名称> <输出文件路径>" >&2
     exit 1
 fi
 
 WORKDIR=$1
 VARIANT=$2
-REPORT_FILE="$GITHUB_WORKSPACE/$LUCI_REPORT"
+OUTPUT_PATH=$3
 
 cd "$WORKDIR" || exit 1
 
@@ -51,9 +51,6 @@ current_packages=$(extract_luci_packages .config)
     echo ""
     
     # 使用comm命令比较两个已排序的列表
-    # comm -12: 同时存在于两个文件中的行
-    # comm -23: 只存在于第一个文件中的行
-    # comm -13: 只存在于第二个文件中的行
     
     # 新增的软件包
     echo "🟢 新增的Luci软件包:"
@@ -83,7 +80,7 @@ current_packages=$(extract_luci_packages .config)
     else
         echo "  无未变更软件包"
     fi
-} > "$REPORT_FILE"
+} > "$OUTPUT_PATH"
 
 # 在控制台也显示一份报告
-cat "$REPORT_FILE"
+cat "$OUTPUT_PATH"
