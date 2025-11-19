@@ -1,7 +1,7 @@
 # scripts/luci-report.sh
 # =============================================================================
 # 生成Luci软件包变更报告
-# 版本: 1.1.1
+# 版本: 1.3.0
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -33,6 +33,17 @@ extract_luci_packages() {
 original_packages=$(extract_luci_packages .config.orig)
 current_packages=$(extract_luci_packages .config)
 
+# 使用comm命令比较两个已排序的列表
+new_packages=$(comm -13 <(echo "$original_packages") <(echo "$current_packages"))
+removed_packages=$(comm -23 <(echo "$original_packages") <(echo "$current_packages"))
+unchanged_packages=$(comm -12 <(echo "$original_packages") <(echo "$current_packages"))
+
+# 判断报告中是否包含任何软件包列表 (使用更稳健的检查方式)
+has_list=false
+if [[ "$new_packages" =~ [^[:space:]] ]] || [[ "$removed_packages" =~ [^[:space:]] ]] || [[ "$unchanged_packages" =~ [^[:space:]] ]]; then
+    has_list=true
+fi
+
 # 生成报告
 {
     echo "========================================"
@@ -50,37 +61,31 @@ current_packages=$(extract_luci_packages .config)
     echo "  - defconfig后的Luci软件包数量: $current_count"
     echo ""
     
-    # 使用comm命令比较两个已排序的列表
+    # --- 列出原始配置中的软件包 ---
+    echo "🔵 原始配置中的Luci软件包列表:"
+    echo "$original_packages" | sed 's/^/  - /'
+    echo ""
     
-    # 新增的软件包
+    # --- 列出defconfig后的软件包 ---
+    echo "🔵 defconfig后的Luci软件包列表:"
+    echo "$current_packages" | sed 's/^/  - /'
+    echo ""
+    
+    # --- 列出变更的软件包 ---
     echo "🟢 新增的Luci软件包:"
-    new_packages=$(comm -13 <(echo "$original_packages") <(echo "$current_packages"))
-    if [ -n "$new_packages" ]; then
-        echo "$new_packages" | sed 's/^/  + /'
-    else
-        echo "  无新增软件包"
-    fi
+    echo "$new_packages" | sed 's/^/  + /'
     echo ""
     
-    # 移除的软件包
     echo "🔴 移除的Luci软件包:"
-    removed_packages=$(comm -23 <(echo "$original_packages") <(echo "$current_packages"))
-    if [ -n "$removed_packages" ]; then
-        echo "$removed_packages" | sed 's/^/  - /'
-    else
-        echo "  无移除软件包"
-    fi
+    echo "$removed_packages" | sed 's/^/  - /'
     echo ""
     
-    # 未变更的软件包
     echo "🔵 未变更的Luci软件包:"
-    unchanged_packages=$(comm -12 <(echo "$original_packages") <(echo "$current_packages"))
-    if [ -n "$unchanged_packages" ]; then
-        echo "$unchanged_packages" | wc -l | xargs -I {} echo "  共 {} 个软件包未变更"
-    else
-        echo "  无未变更软件包"
-    fi
+    echo "$unchanged_packages" | sed 's/^/  - /'
 } > "$OUTPUT_PATH"
 
 # 在控制台也显示一份报告
 cat "$OUTPUT_PATH"
+
+# 输出状态标志，供工作流使用
+echo "has_list=$has_list"
