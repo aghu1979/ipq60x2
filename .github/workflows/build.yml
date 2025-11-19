@@ -1,7 +1,7 @@
 # .github/workflows/build.yml
 # =============================================================================
 # ImmortalWrt 自动编译工作流 (优化版)
-# 版本: 2.1.0
+# 版本: 2.1.1
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -177,11 +177,14 @@ jobs:
           ./scripts/feeds install -a
 
       - name: 生成Luci软件包报告
+        id: generate-report
         run: |
-          # 将报告生成到 GITHUB_WORKSPACE，以便 artifact 上传
-          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt Ultra $GITHUB_WORKSPACE/luci_report.txt
+          report_output=$(bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt Ultra $GITHUB_WORKSPACE/luci_report.txt)
+          echo "$report_output"
+          echo "has_list=$(echo "$report_output" | grep '^has_list=' | cut -d'=' -f2)" >> $GITHUB_OUTPUT
 
       - name: 上传Luci报告
+        if: steps.generate-report.outputs.has_list != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: luci-report-ultra
@@ -189,10 +192,8 @@ jobs:
 
       - name: 执行自定义DIY脚本
         run: |
-          # 将脚本复制到源码根目录
           cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
           cd /workdir/immortalwrt
-          # 直接执行根目录下的脚本
           ./diy.sh
 
       - name: 下载软件包
@@ -291,11 +292,14 @@ jobs:
           ./scripts/feeds install -a
 
       - name: 生成Luci软件包报告
+        id: generate-report
         run: |
-          # 将报告生成到 GITHUB_WORKSPACE，以便 artifact 上传
-          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }} $GITHUB_WORKSPACE/luci_report.txt
+          report_output=$(bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }} $GITHUB_WORKSPACE/luci_report.txt)
+          echo "$report_output"
+          echo "has_list=$(echo "$report_output" | grep '^has_list=' | cut -d'=' -f2)" >> $GITHUB_OUTPUT
 
       - name: 上传Luci报告
+        if: steps.generate-report.outputs.has_list != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: luci-report-${{ matrix.variant }}
@@ -303,10 +307,8 @@ jobs:
 
       - name: 执行自定义DIY脚本
         run: |
-          # 将脚本复制到源码根目录
           cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
           cd /workdir/immortalwrt
-          # 直接执行根目录下的脚本
           ./diy.sh
 
       - name: 下载软件包
