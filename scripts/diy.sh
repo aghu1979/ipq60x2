@@ -1,7 +1,7 @@
 # scripts/diy.sh
 # =============================================================================
 # ImmortalWrt 固件自定义脚本
-# 版本: 1.0.0
+# 版本: 1.0.7
 # 更新日期: 2025-11-18
 # =============================================================================
 
@@ -20,7 +20,7 @@ FIRMWARE_NAME=${FIRMWARE_NAME:-"WRT"}
 AUTHOR_NAME=${AUTHOR_NAME:-"Mary"}
 
 echo -e "${BLUE}🎨 开始应用自定义设置...${NC}"
-echo -e "${CYAN}📅 版本: 1.0.0 (${AUTHOR_NAME})${NC}"
+echo -e "${CYAN}📅 版本: 1.0.7 (${AUTHOR_NAME})${NC}"
 echo -e "${CYAN}📅 更新日期: 2025-11-18${NC}"
 
 # 设置时区
@@ -72,7 +72,7 @@ if [ -d "package/base-files/files" ]; then
   cat > package/base-files/files/etc/rc.local << EOF
 #!/bin/sh
 # 自定义启动脚本
-# 版本: 1.0.0
+# 版本: 1.0.7
 # 更新日期: 2025-11-18
 
 exit 0
@@ -82,4 +82,25 @@ else
   echo -e "${YELLOW}⚠️ 警告: 找不到 base-files/files 目录${NC}"
 fi
 
-echo -e "${GREEN}🎉 自定义设置应用完成！${NC}"
+# 生成LUCI软件包报告
+echo -e "\n${BLUE}📋 生成LUCI软件包报告...${NC}"
+if [ -f ".config" ]; then
+  # 提取所有luci软件包
+  grep -E '^CONFIG_PACKAGE_luci.*=y$' .config > luci-packages.txt || true
+  
+  # 统计数量
+  if [ -f "luci-packages.txt" ]; then
+    count=$(wc -l < luci-packages.txt)
+    echo -e "${CYAN}📦 当前包含的LUCI软件包 ($count个):${NC}"
+    cat luci-packages.txt | while read line; do
+      pkg=$(echo $line | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g')
+      echo -e "  ✨ $pkg"
+    done
+  else
+    echo -e "${YELLOW}📭 未找到LUCI软件包${NC}"
+  fi
+else
+  echo -e "${YELLOW}⚠️ 警告: 找不到 .config 文件${NC}"
+fi
+
+echo -e "\n${GREEN}🎉 自定义设置应用完成！${NC}"
