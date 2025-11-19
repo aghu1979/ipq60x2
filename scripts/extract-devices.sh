@@ -1,7 +1,7 @@
 # scripts/extract-devices.sh
 # =============================================================================
-# 从配置文件中提取设备信息并生成JSON格式输出
-# 版本: 1.0.0
+# 从配置文件中提取设备信息，去重后生成JSON格式输出
+# 版本: 1.1.0
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -18,29 +18,36 @@ if [ ! -f "$CONFIG_FILE" ]; then
     exit 1
 fi
 
-# 使用jq来构建JSON，确保格式正确
-echo "["
+# 检查jq是否安装
+if ! command -v jq &> /dev/null; then
+    echo "错误: 'jq' 命令未找到，请先安装。"
+    exit 1
+fi
 
-# 首次运行标志
-first_entry=true
+echo ">>> 开始提取设备信息..."
 
-# 使用正则表达式匹配设备配置并循环处理
-grep -E "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y" "$CONFIG_FILE" | while read -r line; do
-    # 提取设备名
-    device_name=$(echo "$line" | sed -r 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y/\1/')
-    
-    # 如果不是第一个条目，则添加逗号
-    if [ "$first_entry" = false ]; then
-        echo ","
-    fi
-    
-    # 生成JSON格式的设备信息
-    echo "  {"
-    echo "    \"name\": \"$device_name\","
-    echo "    \"config\": \"$line\""
-    echo -n "  }"
-    
-    first_entry=false
-done
+# 1. 从配置文件中提取设备名
+# 2. 使用 sort -u 进行排序和去重
+# 3. 使用 jq 将去重后的列表转换为 JSON 数组
+devices_json=$(grep -E "^CONFIG_TARGET_DEVICE_.*_DEVICE_.*=y" "$CONFIG_FILE" \
+    | sed -r 's/^CONFIG_TARGET_DEVICE_.*_DEVICE_(.*)=y/\1/' \
+    | sort -u \
+    | jq -R . | jq -s .)
 
-echo "]"
+if [ -z "$devices_json" ] || [ "$devices_json" == "[]" ]; then
+    echo "警告: 未在配置文件中找到任何设备。"
+    devices_json="[]"
+fi
+
+# 输出 JSON 到控制台，以便调试
+echo ">>> 提取到的设备信息:"
+echo "$devices_json" | jq -C .
+
+# 将 JSON 数组写入文件，供后续步骤使用
+echo "$devices_json" > devices.json
+
+# 设置 GitHub Actions 输出，确保是单行且格式正确
+# 注意：GITHUB_OUTPUT 文件在较新的 Actions 版本中是标准方式
+echo "devices=$devices_json" >> $GITHUB_OUTPUT
+
+echo ">>> 设备信息提取完成，并已保存至 devices.json"
