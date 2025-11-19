@@ -1,7 +1,7 @@
 # scripts/repo.sh
 # =============================================================================
 # ImmortalWrt 第三方软件源添加脚本
-# 版本: 1.0.6
+# 版本: 1.0.7
 # 更新日期: 2025-11-18
 # =============================================================================
 
@@ -21,22 +21,25 @@ exec > >(tee -a "$LOG_FILE")
 exec 2>&1
 
 echo -e "${BLUE}🚀 开始添加第三方软件源...${NC}"
-echo -e "${CYAN}📅 版本: 1.0.6${NC}"
+echo -e "${CYAN}📅 版本: 1.0.7${NC}"
 echo -e "${CYAN}📅 更新日期: 2025-11-18${NC}"
 echo -e "${CYAN}📅 时间: $(date)${NC}"
+
+# 保存添加前的luci软件包列表
+echo -e "${BLUE}📋 保存添加前的LUCI软件包列表...${NC}"
+if [ -f ".config" ]; then
+  grep -E '^CONFIG_PACKAGE_luci.*=y$' .config > luci-before.txt || true
+  before_count=$(wc -l < luci-before.txt 2>/dev/null || echo 0)
+  echo -e "${CYAN}📦 添加前LUCI软件包数量: $before_count${NC}"
+else
+  touch luci-before.txt
+  before_count=0
+fi
 
 # 检查网络连接
 echo -e "${BLUE}🔍 检查网络连接...${NC}"
 if ! ping -c 1 github.com &> /dev/null; then
-    echo -e "${RED}❌ 错误: 无法连接到GitHub，请检查网络连接${NC}"
-    echo -e "${YELLOW}⚠️ 尝试使用DNS 8.8.8.8...${NC}"
-    # 尝试使用公共DNS
-    echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
-    if ! ping -c 1 github.com &> /dev/null; then
-        echo -e "${RED}❌ 网络连接仍然失败，但继续执行脚本${NC}"
-    else
-        echo -e "${GREEN}✅ 网络连接已恢复${NC}"
-    fi
+    echo -e "${RED}❌ 错误: 无法连接到GitHub，但继续执行脚本${NC}"
 else
     echo -e "${GREEN}✅ 网络连接正常${NC}"
 fi
@@ -184,6 +187,43 @@ if [ -d "package" ]; then
   ls -la package/ | grep "^d" | grep -v "base\|freifunk\|kernel\|libs\|network\|system\|utils\|mail\|multimedia\|sound\|languages" | awk '{print "  📁 " $9}'
 else
   echo -e "\n${YELLOW}⚠️ 警告: 找不到 package 目录${NC}"
+fi
+
+# 生成添加后的LUCI软件包报告
+echo -e "\n${BLUE}📋 生成添加后的LUCI软件包报告...${NC}"
+if [ -f ".config" ]; then
+  grep -E '^CONFIG_PACKAGE_luci.*=y$' .config > luci-after.txt || true
+  after_count=$(wc -l < luci-after.txt 2>/dev/null || echo 0)
+  
+  echo -e "\n${CYAN}📦 添加第三方软件源后的LUCI软件包 ($after_count个):${NC}"
+  if [ -f "luci-after.txt" ]; then
+    cat luci-after.txt | while read line; do
+      pkg=$(echo $line | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g')
+      echo -e "  ✨ $pkg"
+    done
+  fi
+  
+  # 生成对比报告
+  if [ -f "luci-before.txt" ] && [ -f "luci-after.txt" ]; then
+    echo -e "\n${GREEN}➕ 新增的LUCI软件包:${NC}"
+    comm -13 luci-before.txt luci-after.txt | while read line; do
+      pkg=$(echo $line | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g')
+      echo -e "  ✨ $pkg"
+    done || echo -e "  📭 无新增"
+    
+    echo -e "\n${RED}➖ 移除的LUCI软件包:${NC}"
+    comm -23 luci-before.txt luci-after.txt | while read line; do
+      pkg=$(echo $line | sed 's/CONFIG_PACKAGE_//g' | sed 's/=y//g')
+      echo -e "  🗑️ $pkg"
+    done || echo -e "  📭 无移除"
+    
+    # 生成摘要
+    added_count=$(comm -13 luci-before.txt luci-after.txt | wc -l)
+    removed_count=$(comm -23 luci-before.txt luci-after.txt | wc -l)
+    echo -e "\n${PURPLE}📊 摘要: 添加前($before_count个) -> 添加后($after_count个), 新增$added_count个, 移除$removed_count个${NC}"
+  fi
+else
+  echo -e "\n${YELLOW}⚠️ 警告: 找不到 .config 文件${NC}"
 fi
 
 echo -e "\n${GREEN}🎉 第三方软件源添加完成！${NC}"
