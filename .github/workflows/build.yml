@@ -1,7 +1,7 @@
 # .github/workflows/build.yml
 # =============================================================================
 # ImmortalWrt 自动编译工作流 (优化版)
-# 版本: 2.0.5
+# 版本: 2.1.0
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -28,6 +28,9 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+
+      - name: 授权脚本
+        run: chmod +x $GITHUB_WORKSPACE/scripts/*.sh
 
       - name: 初始化编译环境
         env:
@@ -78,7 +81,6 @@ jobs:
       - name: 提取设备信息
         id: extract-devices
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/extract-devices.sh
           devices_json=$(bash $GITHUB_WORKSPACE/scripts/extract-devices.sh $GITHUB_WORKSPACE/configs/base_ipq60xx.config)
           echo "devices=$devices_json" >> $GITHUB_OUTPUT
           echo "$devices_json" > devices.json
@@ -104,16 +106,11 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 调试 - 列出工作空间内容
-        run: |
-          echo "当前工作目录: $(pwd)"
-          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
-          echo "工作空间内容:"
-          ls -la $GITHUB_WORKSPACE
+      - name: 授权脚本
+        run: chmod +x $GITHUB_WORKSPACE/scripts/*.sh
 
       - name: 扩展磁盘空间
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/extend-disk.sh
           bash $GITHUB_WORKSPACE/scripts/extend-disk.sh
 
       - name: 初始化编译环境
@@ -171,7 +168,6 @@ jobs:
 
       - name: 合并配置文件
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/merge-configs.sh
           bash $GITHUB_WORKSPACE/scripts/merge-configs.sh $GITHUB_WORKSPACE/configs/base_ipq60xx.config $GITHUB_WORKSPACE/configs/base_immwrt.config $GITHUB_WORKSPACE/configs/Ultra.config /workdir/immortalwrt/.config
 
       - name: 更新和安装Feeds
@@ -182,8 +178,8 @@ jobs:
 
       - name: 生成Luci软件包报告
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/luci-report.sh
-          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt Ultra luci_report.txt
+          # 将报告生成到 GITHUB_WORKSPACE，以便 artifact 上传
+          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt Ultra $GITHUB_WORKSPACE/luci_report.txt
 
       - name: 上传Luci报告
         uses: actions/upload-artifact@v4
@@ -193,7 +189,6 @@ jobs:
 
       - name: 执行自定义DIY脚本
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/diy.sh
           # 将脚本复制到源码根目录
           cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
           cd /workdir/immortalwrt
@@ -228,16 +223,11 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 调试 - 列出工作空间内容
-        run: |
-          echo "当前工作目录: $(pwd)"
-          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
-          echo "工作空间内容:"
-          ls -la $GITHUB_WORKSPACE
+      - name: 授权脚本
+        run: chmod +x $GITHUB_WORKSPACE/scripts/*.sh
 
       - name: 扩展磁盘空间
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/extend-disk.sh
           bash $GITHUB_WORKSPACE/scripts/extend-disk.sh
 
       - name: 初始化编译环境
@@ -292,7 +282,6 @@ jobs:
 
       - name: 合并配置文件
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/merge-configs.sh
           bash $GITHUB_WORKSPACE/scripts/merge-configs.sh $GITHUB_WORKSPACE/configs/base_ipq60xx.config $GITHUB_WORKSPACE/configs/base_immwrt.config $GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config /workdir/immortalwrt/.config
 
       - name: 更新和安装Feeds
@@ -303,8 +292,8 @@ jobs:
 
       - name: 生成Luci软件包报告
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/luci-report.sh
-          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }} luci_report.txt
+          # 将报告生成到 GITHUB_WORKSPACE，以便 artifact 上传
+          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }} $GITHUB_WORKSPACE/luci_report.txt
 
       - name: 上传Luci报告
         uses: actions/upload-artifact@v4
@@ -314,7 +303,6 @@ jobs:
 
       - name: 执行自定义DIY脚本
         run: |
-          chmod +x $GITHUB_WORKSPACE/scripts/diy.sh
           # 将脚本复制到源码根目录
           cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
           cd /workdir/immortalwrt
