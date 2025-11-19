@@ -1,7 +1,7 @@
 # scripts/diy.sh
 # =============================================================================
 # ImmortalWrt 固件自定义脚本
-# 版本: 1.0.8
+# 版本: 1.1.1
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -9,8 +9,8 @@
 echo ">>> 1. 修改默认IP、主机名和编译署名..."
 sed -i 's/192.168.1.1/192.168.111.1/g' package/base-files/files/bin/config_generate
 sed -i "s/hostname='.*'/hostname='WRT'/g" package/base-files/files/bin/config_generate
-# 修复 sed 命令，使用 | 作为分隔符，避免与内容中的 / 冲突
-sed -i "s|(\(luciversion || ''\))|(\1) + (' / Built by Mary')|g" feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
+# 修复 sed 命令，转义替换字符串中的括号
+sed -i "s|(\(luciversion || ''\))|\\(\1\\) + (' / Built by Mary')|g" feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
 
 # 删除luci-app-attendedsysupgrade在概览页面的升级提示
 echo ">>> 删除luci-app-attendedsysupgrade升级提示..."
@@ -152,9 +152,9 @@ echo "  - 添加 momo & nikki 软件源"
 echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo;main" >> "feeds.conf.default"
 echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki;main" >> "feeds.conf.default"
 
-# OpenClash
+# OpenClash (使用简化的稀疏克隆)
 echo "  - 克隆 OpenClash"
-git_sparse_clone openclash https://github.com/vernesong/OpenClash package/openclash
+git_sparse_clone master https://github.com/vernesong/OpenClash luci-app-openclash
 
 # Tailscale (asvow's version)
 echo "  - 克隆 luci-app-tailscale"
@@ -175,3 +175,112 @@ echo ">>> 6. 更新和安装所有Feeds..."
 ./scripts/feeds install -a
 
 echo ">>> DIY脚本执行完成！"
+
+# --- 7. 备用软件源 (已注释) ---
+# 以下为之前版本的备用源，已被上方的 Mary 软件源或其他替代品取代，但保留在此以供参考。
+: <<'COMMENT'
+
+# # 暂停使用或者使用Mary的软件源
+# # git_sparse_clone master https://github.com/kenzok8/openwrt-packages adguardhome luci-app-adguardhome
+# # git_sparse_clone main https://github.com/VIKINGYFY/packages luci-app-wolplus
+# # git clone --depth=1 https://github.com/gdy666/luci-app-lucky package/luci-app-lucky
+# # git clone --depth=1 https://github.com/tty228/luci-app-wechatpush package/luci-app-wechatpush
+# # git clone --depth=1 https://github.com/destan19/OpenAppFilter.git package/luci-app-oaf
+# # git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac package/openwrt-gecoosac
+# # git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon feeds/luci/themes/luci-theme-argon
+# # git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora feeds/luci/themes/luci-theme-aurora
+# # git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
+# # chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
+
+# # === Mary 软件源 === #
+# # 京东云雅典娜led控制
+# git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
+# chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
+
+# # Argon & Aurora主题
+# git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon feeds/luci/themes/luci-theme-argon
+# git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora feeds/luci/themes/luci-theme-aurora
+
+# # passwall by xiaorouji，
+# echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> "feeds.conf.default"
+# echo "src-git passwall_luci https://github.com/xiaorouji/openwrt-passwall.git;main" >> "feeds.conf.default"
+# # passwall2 by xiaorouji，
+# echo "src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git;main" >> "feeds.conf.default"
+
+# # AdGuardHome，官方推荐OpenWrt LUCI app by @kongfl888 (originally by @rufengsuixing).作为备选
+# # 首选使用luci-app-adguardhome by sirpdboy
+# git clone --depth=1 https://github.com/sirpdboy/luci-app-adguardhome package/luci-app-adguardhome
+# # git clone https://github.com/sirpdboy/luci-app-adguardhome package/luci-app-adguardhome
+# # git clone https://github.com/kongfl888/luci-app-adguardhome package/luci-app-adguardhome
+
+# # ddns-go by sirpdboy，自带luci-app
+# git clone --depth=1 https://github.com/sirpdboy/luci-app-ddns-go package/luci-app-ddns-go
+# # git clone https://github.com/sirpdboy/luci-app-ddns-go package/luci-app-ddns-go
+
+# # luci-app-netdata by sirpdboy
+# git clone --depth=1 https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata
+# # git clone https://github.com/sirpdboy/luci-app-netdata package/luci-app-netdata
+
+# # luci-app-netspeedtest by sirpdboy
+# git clone --depth=1 https://github.com/sirpdboy/luci-app-netspeedtest package/luci-app-netspeedtest
+# # git clone https://github.com/sirpdboy/luci-app-netspeedtest package/luci-app-netspeedtest
+
+# # luci-app-partexp by sirpdboy
+# git clone --depth=1 https://github.com/sirpdboy/luci-app-partexp package/luci-app-partexp
+# # git clone https://github.com/sirpdboy/luci-app-partexp package/luci-app-partexp
+
+# # luci-app-taskplan by sirpdboy
+# git clone --depth=1 https://github.com/sirpdboy/luci-app-taskplan package/luci-app-taskplan
+# # git clone https://github.com/sirpdboy/luci-app-taskplan package/luci-app-taskplan
+
+# # lucky by gdy666，自带luci-app，sirpdboy也有luci-app但是可能与原作者有冲突，使用原作者，sirpdboy备选
+# git clone --depth=1 https://github.com/gdy666/luci-app-lucky package/luci-app-lucky
+# # git clone https://github.com/gdy666/luci-app-lucky package/lucky
+# # git clone https://github.com/sirpdboy/luci-app-lucky package/lucky
+
+# # luci-app-easytier
+# git clone --depth=1 https://github.com/EasyTier/luci-app-easytier package/luci-app-easytier
+# # git clone https://github.com/EasyTier/luci-app-easytier package/luci-app-easytier
+
+# # homeproxy immortalwrt官方出品，无luci-app，建议使用https://github.com/VIKINGYFY/homeproxy更新
+# git clone --depth=1 https://github.com/VIKINGYFY/homeproxy package/homeproxy
+# # git clone https://github.com/VIKINGYFY/homeproxy package/homeproxy
+# # 一个更方便地生成 ImmortalWrt/OpenWrt(23.05.x+) HomeProxy 插件大多数常用配置的脚本。
+# # (必备) 通过私密 Gist 或其它可被正常访问的私有链接定制你的专属 rules.sh 配置内容；
+# # 执行以下命令（脚本执行期间会向你索要你的定制配置URL）：bash -c "$(curl -fsSl https://raw.githubusercontent.com/thisIsIan-W/homeproxy-autogen-configuration/refs/heads/main/generate_homeproxy_rules.sh)"
+
+# # luci-app-mosdns by sbwml
+# git clone --depth=1 https://github.com/sbwml/luci-app-mosdns -b v5 package/mosdns
+# git clone --depth=1 https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
+# # git clone https://github.com/sbwml/luci-app-mosdns -b v5 package/mosdns
+# # git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
+
+# # luci-app-quickfile by sbwml
+# git clone --depth=1 https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile
+# # git clone https://github.com/sbwml/luci-app-quickfile package/luci-app-quickfile
+
+# # momo在 OpenWrt 上使用 sing-box 进行透明代理/nikki在 OpenWrt 上使用 Mihomo 进行透明代理。
+# echo "src-git momo https://github.com/nikkinikki-org/OpenWrt-momo;main" >> "feeds.conf.default"
+# echo "src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki;main" >> "feeds.conf.default"
+# # git clone https://github.com/nikkinikki-org/OpenWrt-momo package/luci-app-momo
+# # git clone https://github.com/nikkinikki-org/OpenWrt-nikki package/luci-app-nikki
+
+# # Openclash by vernesong
+# git_sparse_clone openclash https://github.com/vernesong/OpenClash package/openclash
+# # echo "src-git openclash https://github.com/vernesong/OpenClash.git" >> "feeds.conf.default"
+
+
+# # tailscale，官方推荐luci-app-tailscale by asvow
+# sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
+# git clone --depth=1 https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
+# # git clone https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
+
+# # vnt，官方https://github.com/vnt-dev/vnt，无luci-app，使用lmq8267
+# git clone --depth=1 https://github.com/lmq8267/luci-app-vnt package/luci-app-vnt
+# # git clone https://github.com/lmq8267/luci-app-vnt package/luci-app-vnt
+
+# # kenzok8/small-package，后备之选，只有上述的ipk地址缺失才会用到。
+# git clone --depth=1 https://github.com/kenzok8/small-package small
+# # git clone https://github.com/kenzok8/small-package small
+
+COMMENT
