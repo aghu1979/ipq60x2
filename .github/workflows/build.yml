@@ -1,7 +1,7 @@
 # .github/workflows/build.yml
 # =============================================================================
 # ImmortalWrt 自动编译工作流 (优化版)
-# 版本: 2.0.3
+# 版本: 2.0.4
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -33,12 +33,29 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # 清理运行器环境
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          # 清理运行器环境，但保留必要的软件源
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           # 更新包列表
           sudo -E apt-get -y update
-          # 使用原作者提供的依赖列表
-          sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
+          
+          # 尝试使用原作者的依赖安装脚本
+          echo ">>> 尝试使用原作者的依赖安装脚本..."
+          if ! sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends); then
+            echo ">>> 原作者的脚本失败，回退到备用依赖列表..."
+            # 备用依赖列表，适用于 Ubuntu 24.04
+            sudo -E apt-get -y install \
+              build-essential clang flex g++ gawk gcc-multilib gettext \
+              git libncurses5-dev libssl-dev python3-distutils python3-pyelftools \
+              python3-setuptools python3-venv rsync unzip zlib1g-dev wget file \
+              ccache ecj fastjar java-propose-classpath libelf-dev \
+              libgcrypt20-dev libgmp-dev libltdl-dev libmpc-dev libmpfr-dev \
+              libncursesw5-dev libpython3-dev libreadline-dev libsqlite3-dev \
+              libtool-bin m4 mkisofs ninja-build p7zip p7zip-full patch pkgconf \
+              python3-debian python3-pip python3-pyelftools python3-yaml \
+              qemu-user-static re2c sharutils subversion swig texinfo uglifyjs \
+              upx-ucl xsltproc zip zlib1g-dev
+          fi
+          
           # 清理不需要的包
           sudo -E apt-get -y autoremove --purge
           sudo -E apt-get -y clean
@@ -103,12 +120,29 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # 清理运行器环境
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          # 清理运行器环境，但保留必要的软件源
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           # 更新包列表
           sudo -E apt-get -y update
-          # 使用原作者提供的依赖列表
-          sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
+          
+          # 尝试使用原作者的依赖安装脚本
+          echo ">>> 尝试使用原作者的依赖安装脚本..."
+          if ! sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends); then
+            echo ">>> 原作者的脚本失败，回退到备用依赖列表..."
+            # 备用依赖列表，适用于 Ubuntu 24.04
+            sudo -E apt-get -y install \
+              build-essential clang flex g++ gawk gcc-multilib gettext \
+              git libncurses5-dev libssl-dev python3-distutils python3-pyelftools \
+              python3-setuptools python3-venv rsync unzip zlib1g-dev wget file \
+              ccache ecj fastjar java-propose-classpath libelf-dev \
+              libgcrypt20-dev libgmp-dev libltdl-dev libmpc-dev libmpfr-dev \
+              libncursesw5-dev libpython3-dev libreadline-dev libsqlite3-dev \
+              libtool-bin m4 mkisofs ninja-build p7zip p7zip-full patch pkgconf \
+              python3-debian python3-pip python3-pyelftools python3-yaml \
+              qemu-user-static re2c sharutils subversion swig texinfo uglifyjs \
+              upx-ucl xsltproc zip zlib1g-dev
+          fi
+          
           # 清理不需要的包
           sudo -E apt-get -y autoremove --purge
           sudo -E apt-get -y clean
@@ -208,12 +242,29 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # 清理运行器环境
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          # 清理运行器环境，但保留必要的软件源
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           # 更新包列表
           sudo -E apt-get -y update
-          # 使用原作者提供的依赖列表
-          sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
+          
+          # 尝试使用原作者的依赖安装脚本
+          echo ">>> 尝试使用原作者的依赖安装脚本..."
+          if ! sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends); then
+            echo ">>> 原作者的脚本失败，回退到备用依赖列表..."
+            # 备用依赖列表，适用于 Ubuntu 24.04
+            sudo -E apt-get -y install \
+              build-essential clang flex g++ gawk gcc-multilib gettext \
+              git libncurses5-dev libssl-dev python3-distutils python3-pyelftools \
+              python3-setuptools python3-venv rsync unzip zlib1g-dev wget file \
+              ccache ecj fastjar java-propose-classpath libelf-dev \
+              libgcrypt20-dev libgmp-dev libltdl-dev libmpc-dev libmpfr-dev \
+              libncursesw5-dev libpython3-dev libreadline-dev libsqlite3-dev \
+              libtool-bin m4 mkisofs ninja-build p7zip p7zip-full patch pkgconf \
+              python3-debian python3-pip python3-pyelftools python3-yaml \
+              qemu-user-static re2c sharutils subversion swig texinfo uglifyjs \
+              upx-ucl xsltproc zip zlib1g-dev
+          fi
+          
           # 清理不需要的包
           sudo -E apt-get -y autoremove --purge
           sudo -E apt-get -y clean
