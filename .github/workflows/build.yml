@@ -1,7 +1,7 @@
 # .github/workflows/build.yml
 # =============================================================================
 # ImmortalWrt 自动编译工作流 (优化版)
-# 版本: 2.0.0
+# 版本: 2.0.1
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -51,15 +51,15 @@ jobs:
       - name: 提取设备信息
         id: extract-devices
         run: |
-          chmod +x scripts/extract-devices.sh
-          devices_json=$(bash scripts/extract-devices.sh configs/base_ipq60xx.config)
+          chmod +x $GITHUB_WORKSPACE/scripts/extract-devices.sh
+          devices_json=$(bash $GITHUB_WORKSPACE/scripts/extract-devices.sh $GITHUB_WORKSPACE/configs/base_ipq60xx.config)
           echo "devices=$devices_json" >> $GITHUB_OUTPUT
           echo "$devices_json" > devices.json
 
       - name: 生成智能缓存键
         id: cache-key
         run: |
-          config_hash=$(cat configs/*.config scripts/diy.sh | sha256sum | cut -d' ' -f1)
+          config_hash=$(cat $GITHUB_WORKSPACE/configs/*.config $GITHUB_WORKSPACE/scripts/diy.sh | sha256sum | cut -d' ' -f1)
           key="immwrt-${{ github.sha }}-${config_hash}"
           echo "key=$key" >> $GITHUB_OUTPUT
           echo "生成的智能缓存键: $key"
@@ -77,10 +77,17 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 调试 - 列出工作空间内容
+        run: |
+          echo "当前工作目录: $(pwd)"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "工作空间内容:"
+          ls -la $GITHUB_WORKSPACE
+
       - name: 扩展磁盘空间
         run: |
-          chmod +x scripts/extend-disk.sh
-          bash scripts/extend-disk.sh
+          chmod +x $GITHUB_WORKSPACE/scripts/extend-disk.sh
+          bash $GITHUB_WORKSPACE/scripts/extend-disk.sh
 
       - name: 初始化编译环境
         run: |
@@ -96,6 +103,7 @@ jobs:
       - name: 克隆源码
         working-directory: /workdir
         run: |
+          df -hT $PWD
           git clone $REPO_URL -b $REPO_BRANCH immortalwrt
           ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
@@ -109,8 +117,8 @@ jobs:
 
       - name: 合并配置文件
         run: |
-          chmod +x scripts/merge-configs.sh
-          bash scripts/merge-configs.sh configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config /workdir/immortalwrt/.config
+          chmod +x $GITHUB_WORKSPACE/scripts/merge-configs.sh
+          bash $GITHUB_WORKSPACE/scripts/merge-configs.sh $GITHUB_WORKSPACE/configs/base_ipq60xx.config $GITHUB_WORKSPACE/configs/base_immwrt.config $GITHUB_WORKSPACE/configs/Ultra.config /workdir/immortalwrt/.config
 
       - name: 更新和安装Feeds
         run: |
@@ -120,8 +128,8 @@ jobs:
 
       - name: 生成Luci软件包报告
         run: |
-          chmod +x scripts/luci-report.sh
-          bash scripts/luci-report.sh /workdir/immortalwrt Ultra
+          chmod +x $GITHUB_WORKSPACE/scripts/luci-report.sh
+          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt Ultra
 
       - name: 上传Luci报告
         uses: actions/upload-artifact@v4
@@ -131,8 +139,8 @@ jobs:
 
       - name: 执行自定义DIY脚本
         run: |
-          chmod +x scripts/diy.sh
-          cp scripts/diy.sh /workdir/immortalwrt
+          chmod +x $GITHUB_WORKSPACE/scripts/diy.sh
+          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt
           cd /workdir/immortalwrt
           ./scripts/diy.sh
 
@@ -164,10 +172,17 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 调试 - 列出工作空间内容
+        run: |
+          echo "当前工作目录: $(pwd)"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "工作空间内容:"
+          ls -la $GITHUB_WORKSPACE
+
       - name: 扩展磁盘空间
         run: |
-          chmod +x scripts/extend-disk.sh
-          bash scripts/extend-disk.sh
+          chmod +x $GITHUB_WORKSPACE/scripts/extend-disk.sh
+          bash $GITHUB_WORKSPACE/scripts/extend-disk.sh
 
       - name: 初始化编译环境
         run: |
@@ -177,7 +192,7 @@ jobs:
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
           sudo timedatectl set-timezone "$TZ"
-            sudo mkdir -p /workdir
+          sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
       - name: 克隆源码
@@ -190,13 +205,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /workdir/immortalwrt
-          # 使用和 Ultra 相同的缓存键，确保能加载到它保存的环境
           key: ${{ needs.setup.outputs.cache-key }}
 
       - name: 合并配置文件
         run: |
-          chmod +x scripts/merge-configs.sh
-          bash scripts/merge-configs.sh configs/base_ipq60xx.config configs/base_immwrt.config configs/${{ matrix.variant }}.config /workdir/immortalwrt/.config
+          chmod +x $GITHUB_WORKSPACE/scripts/merge-configs.sh
+          bash $GITHUB_WORKSPACE/scripts/merge-configs.sh $GITHUB_WORKSPACE/configs/base_ipq60xx.config $GITHUB_WORKSPACE/configs/base_immwrt.config $GITHUB_WORKSPACE/configs/${{ matrix.variant }}.config /workdir/immortalwrt/.config
 
       - name: 更新和安装Feeds
         run: |
@@ -206,8 +220,8 @@ jobs:
 
       - name: 生成Luci软件包报告
         run: |
-          chmod +x scripts/luci-report.sh
-          bash scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }}
+          chmod +x $GITHUB_WORKSPACE/scripts/luci-report.sh
+          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }}
 
       - name: 上传Luci报告
         uses: actions/upload-artifact@v4
@@ -217,8 +231,8 @@ jobs:
 
       - name: 执行自定义DIY脚本
         run: |
-          chmod +x scripts/diy.sh
-          cp scripts/diy.sh /workdir/immortalwrt
+          chmod +x $GITHUB_WORKSPACE/scripts/diy.sh
+          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt
           cd /workdir/immortalwrt
           ./scripts/diy.sh
 
