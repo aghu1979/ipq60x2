@@ -1,7 +1,7 @@
 # scripts/repo.sh
 # =============================================================================
 # ImmortalWrt 第三方软件源添加脚本
-# 版本: 1.0.0
+# 版本: 1.0.6
 # 更新日期: 2025-11-18
 # =============================================================================
 
@@ -21,14 +21,24 @@ exec > >(tee -a "$LOG_FILE")
 exec 2>&1
 
 echo -e "${BLUE}🚀 开始添加第三方软件源...${NC}"
-echo -e "${CYAN}📅 版本: 1.0.0${NC}"
+echo -e "${CYAN}📅 版本: 1.0.6${NC}"
 echo -e "${CYAN}📅 更新日期: 2025-11-18${NC}"
 echo -e "${CYAN}📅 时间: $(date)${NC}"
 
 # 检查网络连接
+echo -e "${BLUE}🔍 检查网络连接...${NC}"
 if ! ping -c 1 github.com &> /dev/null; then
     echo -e "${RED}❌ 错误: 无法连接到GitHub，请检查网络连接${NC}"
-    exit 1
+    echo -e "${YELLOW}⚠️ 尝试使用DNS 8.8.8.8...${NC}"
+    # 尝试使用公共DNS
+    echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+    if ! ping -c 1 github.com &> /dev/null; then
+        echo -e "${RED}❌ 网络连接仍然失败，但继续执行脚本${NC}"
+    else
+        echo -e "${GREEN}✅ 网络连接已恢复${NC}"
+    fi
+else
+    echo -e "${GREEN}✅ 网络连接正常${NC}"
 fi
 
 # 创建备份目录
