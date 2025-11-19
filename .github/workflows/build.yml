@@ -62,11 +62,11 @@ jobs:
         id: extract-devices
         run: |
           chmod +x scripts/extract-devices.sh
+          # 捕获脚本的 标准输出，并将其设置为 GitHub Actions 的输出
           devices_json=$(bash scripts/extract-devices.sh configs/base_ipq60xx.config)
           echo "devices=$devices_json" >> $GITHUB_OUTPUT
-          echo "检测到的设备信息:"
-          echo "$devices_json" | jq -C .
-          echo "$devices_json" > devices.json
+          # 脚本已将日志输出到 stderr，并会显示在控制台
+          # 脚本也已创建了 devices.json 文件，无需重复操作
 
       - name: 生成智能缓存键
         id: cache-key
