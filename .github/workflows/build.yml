@@ -1,16 +1,14 @@
 # .github/workflows/build.yml
 # =============================================================================
-# ImmortalWrt 自动编译工作流
-# 版本: 1.2.0
+# ImmortalWrt 自动编译工作流 (优化版)
+# 版本: 2.0.0
 # 更新日期: 2025-11-19
 # =============================================================================
 
 name: ImmortalWrt Auto Build
 
 on:
-  # 允许手动触发工作流
   workflow_dispatch:
-  # 每周一上午8点自动触发 (UTC时间)
   # schedule:
   #   - cron: '0 8 * * 1'
 
@@ -23,13 +21,9 @@ jobs:
   setup:
     runs-on: ubuntu-24.04
     outputs:
-      # 将设备信息传递给后续作业
       devices: ${{ steps.extract-devices.outputs.devices }}
-      # 将统一的缓存键传递给所有编译作业
       cache-key: ${{ steps.cache-key.outputs.key }}
-      # 将发布标签传递给发布作业
       release-tag: ${{ steps.vars.outputs.release-tag }}
-      # 将构建日期传递给发布作业
       build-date: ${{ steps.vars.outputs.build-date }}
     steps:
       - name: 检出代码
@@ -49,32 +43,23 @@ jobs:
       - name: 设置变量
         id: vars
         run: |
-          # 生成构建日期 YYYY.MM.DD，仅用于发布说明
           build_date=$(date +'%Y.%m.%d')
           echo "build-date=$build_date" >> $GITHUB_OUTPUT
-          # 生成发布标签 imm-YYYYMMDD
           release_tag="imm-$(date +'%Y%m%d')"
           echo "release-tag=$release_tag" >> $GITHUB_OUTPUT
-          echo "构建日期: $build_date"
-          echo "发布标签: $release_tag"
 
       - name: 提取设备信息
         id: extract-devices
         run: |
           chmod +x scripts/extract-devices.sh
-          # 捕获脚本的 标准输出，并将其设置为 GitHub Actions 的输出
           devices_json=$(bash scripts/extract-devices.sh configs/base_ipq60xx.config)
           echo "devices=$devices_json" >> $GITHUB_OUTPUT
-          # 脚本已将日志输出到 stderr，并会显示在控制台
-          # 脚本也已创建了 devices.json 文件，无需重复操作
+          echo "$devices_json" > devices.json
 
       - name: 生成智能缓存键
         id: cache-key
         run: |
-          # 计算配置文件和DIY脚本的哈希值，确保内容变更时缓存失效
           config_hash=$(cat configs/*.config scripts/diy.sh | sha256sum | cut -d' ' -f1)
-          # 缓存键格式: immwrt-<commit-sha>-<config_hash>
-          # 这确保了只有在源码或配置变更时，缓存才会失效
           key="immwrt-${{ github.sha }}-${config_hash}"
           echo "key=$key" >> $GITHUB_OUTPUT
           echo "生成的智能缓存键: $key"
@@ -85,13 +70,9 @@ jobs:
           name: build-metadata
           path: devices.json
 
-  build:
+  build-ultra:
     needs: setup
     runs-on: ubuntu-24.04
-    strategy:
-      # 并行编译所有变体
-      matrix:
-        variant: [Ultra, Max, Pro]
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -115,7 +96,6 @@ jobs:
       - name: 克隆源码
         working-directory: /workdir
         run: |
-          df -hT $PWD
           git clone $REPO_URL -b $REPO_BRANCH immortalwrt
           ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
@@ -123,11 +103,95 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /workdir/immortalwrt
-          # 主缓存键，精确匹配
           key: ${{ needs.setup.outputs.cache-key }}
-          # 回退键，如果主键未命中，则尝试匹配最新的 immwrt- 缓存
           restore-keys: |
             immwrt-
+
+      - name: 合并配置文件
+        run: |
+          chmod +x scripts/merge-configs.sh
+          bash scripts/merge-configs.sh configs/base_ipq60xx.config configs/base_immwrt.config configs/Ultra.config /workdir/immortalwrt/.config
+
+      - name: 更新和安装Feeds
+        run: |
+          cd /workdir/immortalwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 生成Luci软件包报告
+        run: |
+          chmod +x scripts/luci-report.sh
+          bash scripts/luci-report.sh /workdir/immortalwrt Ultra
+
+      - name: 上传Luci报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-report-ultra
+          path: luci_report.txt
+
+      - name: 执行自定义DIY脚本
+        run: |
+          chmod +x scripts/diy.sh
+          cp scripts/diy.sh /workdir/immortalwrt
+          cd /workdir/immortalwrt
+          ./scripts/diy.sh
+
+      - name: 下载软件包
+        run: |
+          cd /workdir/immortalwrt
+          make defconfig
+          make download -j$(nproc)
+
+      - name: 编译固件
+        run: |
+          cd /workdir/immortalwrt
+          echo -e "$(nproc) 线程编译 Ultra 变体"
+          make -j$(nproc) || make -j1 || make -j1 V=s
+
+      - name: 上传固件工件
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-firmware-ultra
+          path: /workdir/immortalwrt/bin/targets/
+
+  build-others:
+    needs: [setup, build-ultra]
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        variant: [Max, Pro]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 扩展磁盘空间
+        run: |
+          chmod +x scripts/extend-disk.sh
+          bash scripts/extend-disk.sh
+
+      - name: 初始化编译环境
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2404)
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+            sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: 克隆源码
+        working-directory: /workdir
+        run: |
+          git clone $REPO_URL -b $REPO_BRANCH immortalwrt
+          ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
+
+      - name: 加载Ultra缓存
+        uses: actions/cache@v4
+        with:
+          path: /workdir/immortalwrt
+          # 使用和 Ultra 相同的缓存键，确保能加载到它保存的环境
+          key: ${{ needs.setup.outputs.cache-key }}
 
       - name: 合并配置文件
         run: |
@@ -153,47 +217,33 @@ jobs:
 
       - name: 执行自定义DIY脚本
         run: |
-          [ -e files ] && mv files /workdir/immortalwrt/files
           chmod +x scripts/diy.sh
           cp scripts/diy.sh /workdir/immortalwrt
           cd /workdir/immortalwrt
           ./scripts/diy.sh
 
       - name: 下载软件包
-        id: package
         run: |
           cd /workdir/immortalwrt
           make defconfig
           make download -j$(nproc)
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
 
       - name: 编译固件
-        id: compile
         run: |
           cd /workdir/immortalwrt
-          echo -e "$(nproc) 线程编译"
+          echo -e "$(nproc) 线程编译 ${{ matrix.variant }} 变体 (基于Ultra缓存)"
           make -j$(nproc) || make -j1 || make -j1 V=s
-          echo "status=success" >> $GITHUB_OUTPUT
-          grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-
-      - name: 检查磁盘空间
-        if: (!cancelled())
-        run: df -hT
 
       - name: 上传固件工件
         uses: actions/upload-artifact@v4
         with:
-          name: immortalwrt-firmware-${{ matrix.variant }}${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          name: immortalwrt-firmware-${{ matrix.variant }}
           path: /workdir/immortalwrt/bin/targets/
 
   release:
-    needs: [setup, build]
+    needs: [setup, build-ultra, build-others]
     runs-on: ubuntu-24.04
-    # 只有当所有编译作业都成功后才执行发布
-    if: needs.build.result == 'success'
+    if: needs.build-ultra.result == 'success' && needs.build-others.result == 'success'
     steps:
       - name: 下载所有固件工件
         uses: actions/download-artifact@v4
@@ -223,7 +273,6 @@ jobs:
 
       - name: 生成发布说明
         run: |
-          # 开始创建发布说明
           cat > release_notes.md << EOF
           # ImmortalWrt 固件发布
           
@@ -245,7 +294,6 @@ jobs:
           ## Luci软件包报告
           EOF
 
-          # 将所有变体的Luci报告追加到发布说明中
           for report_file in artifacts/reports/*.txt; do
             if [ -f "$report_file" ]; then
               variant_name=$(basename "$report_file" .txt | sed 's/luci-report-//')
@@ -257,7 +305,6 @@ jobs:
             fi
           done
           
-          # 添加使用说明
           cat >> release_notes.md << EOF
           
           ## 使用说明
