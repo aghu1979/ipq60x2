@@ -1,7 +1,7 @@
 # .github/workflows/build.yml
 # =============================================================================
 # ImmortalWrt 自动编译工作流 (优化版)
-# 版本: 2.0.1
+# 版本: 2.0.3
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -30,13 +30,23 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 初始化编译环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
+          # 清理运行器环境
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2404)
-          sudo -E apt-get -qq autoremove --purge
-          sudo -E apt-get -qq clean
+          # 更新包列表
+          sudo -E apt-get -y update
+          # 使用原作者提供的依赖列表
+          sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
+          # 清理不需要的包
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get -y clean
+          # 重载 systemd
+          sudo -E systemctl daemon-reload
+          # 设置时区
           sudo timedatectl set-timezone "$TZ"
+          # 创建工作目录
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
@@ -90,13 +100,23 @@ jobs:
           bash $GITHUB_WORKSPACE/scripts/extend-disk.sh
 
       - name: 初始化编译环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
+          # 清理运行器环境
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2404)
-          sudo -E apt-get -qq autoremove --purge
-          sudo -E apt-get -qq clean
+          # 更新包列表
+          sudo -E apt-get -y update
+          # 使用原作者提供的依赖列表
+          sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
+          # 清理不需要的包
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get -y clean
+          # 重载 systemd
+          sudo -E systemctl daemon-reload
+          # 设置时区
           sudo timedatectl set-timezone "$TZ"
+          # 创建工作目录
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
@@ -129,7 +149,7 @@ jobs:
       - name: 生成Luci软件包报告
         run: |
           chmod +x $GITHUB_WORKSPACE/scripts/luci-report.sh
-          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt Ultra
+          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt Ultra luci_report.txt
 
       - name: 上传Luci报告
         uses: actions/upload-artifact@v4
@@ -185,13 +205,23 @@ jobs:
           bash $GITHUB_WORKSPACE/scripts/extend-disk.sh
 
       - name: 初始化编译环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
+          # 清理运行器环境
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo -E apt-get -qq update
-          sudo -E apt-get -qq install $(curl -fsSL git.io/depends-ubuntu-2404)
-          sudo -E apt-get -qq autoremove --purge
-          sudo -E apt-get -qq clean
+          # 更新包列表
+          sudo -E apt-get -y update
+          # 使用原作者提供的依赖列表
+          sudo -E apt-get -y install $(curl -fsSL ophub.org/ubuntu2404-make-openwrt-depends)
+          # 清理不需要的包
+          sudo -E apt-get -y autoremove --purge
+          sudo -E apt-get -y clean
+          # 重载 systemd
+          sudo -E systemctl daemon-reload
+          # 设置时区
           sudo timedatectl set-timezone "$TZ"
+          # 创建工作目录
           sudo mkdir -p /workdir
           sudo chown $USER:$GROUPS /workdir
 
@@ -221,7 +251,7 @@ jobs:
       - name: 生成Luci软件包报告
         run: |
           chmod +x $GITHUB_WORKSPACE/scripts/luci-report.sh
-          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }}
+          bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }} luci_report.txt
 
       - name: 上传Luci报告
         uses: actions/upload-artifact@v4
