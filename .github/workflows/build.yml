@@ -1,7 +1,7 @@
 # .github/workflows/build.yml
 # =============================================================================
 # ImmortalWrt 自动编译工作流 (优化版)
-# 版本: 2.0.4
+# 版本: 2.0.5
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -194,9 +194,11 @@ jobs:
       - name: 执行自定义DIY脚本
         run: |
           chmod +x $GITHUB_WORKSPACE/scripts/diy.sh
-          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt
+          # 将脚本复制到源码根目录
+          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
           cd /workdir/immortalwrt
-          ./scripts/diy.sh
+          # 直接执行根目录下的脚本
+          ./diy.sh
 
       - name: 下载软件包
         run: |
@@ -313,9 +315,11 @@ jobs:
       - name: 执行自定义DIY脚本
         run: |
           chmod +x $GITHUB_WORKSPACE/scripts/diy.sh
-          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt
+          # 将脚本复制到源码根目录
+          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
           cd /workdir/immortalwrt
-          ./scripts/diy.sh
+          # 直接执行根目录下的脚本
+          ./diy.sh
 
       - name: 下载软件包
         run: |
