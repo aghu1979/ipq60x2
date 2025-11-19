@@ -1,7 +1,7 @@
 # .github/workflows/build.yml
 # =============================================================================
 # ImmortalWrt 自动编译工作流 (优化版)
-# 版本: 2.1.1
+# 版本: 2.2.0
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -176,10 +176,27 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: 生成基准配置并备份
+        run: |
+          cd /workdir/immortalwrt
+          make defconfig
+          cp .config .config.pre-diy
+
+      - name: 执行自定义DIY脚本
+        run: |
+          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
+          cd /workdir/immortalwrt
+          ./diy.sh
+
+      - name: 生成最终配置
+        run: |
+          cd /workdir/immortalwrt
+          make defconfig
+
       - name: 生成Luci软件包报告
         id: generate-report
         run: |
-          report_output=$(bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt Ultra $GITHUB_WORKSPACE/luci_report.txt)
+          report_output=$(bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt Ultra $GITHUB_WORKSPACE/luci_report.txt /workdir/immortalwrt/.config.pre-diy)
           echo "$report_output"
           echo "has_list=$(echo "$report_output" | grep '^has_list=' | cut -d'=' -f2)" >> $GITHUB_OUTPUT
 
@@ -190,16 +207,9 @@ jobs:
           name: luci-report-ultra
           path: luci_report.txt
 
-      - name: 执行自定义DIY脚本
-        run: |
-          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
-          cd /workdir/immortalwrt
-          ./diy.sh
-
       - name: 下载软件包
         run: |
           cd /workdir/immortalwrt
-          make defconfig
           make download -j$(nproc)
 
       - name: 编译固件
@@ -291,10 +301,27 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: 生成基准配置并备份
+        run: |
+          cd /workdir/immortalwrt
+          make defconfig
+          cp .config .config.pre-diy
+
+      - name: 执行自定义DIY脚本
+        run: |
+          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
+          cd /workdir/immortalwrt
+          ./diy.sh
+
+      - name: 生成最终配置
+        run: |
+          cd /workdir/immortalwrt
+          make defconfig
+
       - name: 生成Luci软件包报告
         id: generate-report
         run: |
-          report_output=$(bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }} $GITHUB_WORKSPACE/luci_report.txt)
+          report_output=$(bash $GITHUB_WORKSPACE/scripts/luci-report.sh /workdir/immortalwrt ${{ matrix.variant }} $GITHUB_WORKSPACE/luci_report.txt /workdir/immortalwrt/.config.pre-diy)
           echo "$report_output"
           echo "has_list=$(echo "$report_output" | grep '^has_list=' | cut -d'=' -f2)" >> $GITHUB_OUTPUT
 
@@ -305,16 +332,9 @@ jobs:
           name: luci-report-${{ matrix.variant }}
           path: luci_report.txt
 
-      - name: 执行自定义DIY脚本
-        run: |
-          cp $GITHUB_WORKSPACE/scripts/diy.sh /workdir/immortalwrt/
-          cd /workdir/immortalwrt
-          ./diy.sh
-
       - name: 下载软件包
         run: |
           cd /workdir/immortalwrt
-          make defconfig
           make download -j$(nproc)
 
       - name: 编译固件
