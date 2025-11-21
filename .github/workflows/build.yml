@@ -1,8 +1,8 @@
 # .github/workflows/build.yml
 # =============================================================================
 # ImmortalWrt 自动编译工作流 (优化版)
-# 版本: 2.3.0
-# 更新日期: 2025-11-21
+# 版本: 2.3.1
+# 更新日期: 2025-11-19
 # =============================================================================
 
 name: ImmortalWrt Auto Build
@@ -157,21 +157,21 @@ jobs:
       - name: 扩展磁盘空间
         run: |
           cd /workdir/immortalwrt
-          echo ">>> 扩展磁盘空间，将大文件夹链接到 /mnt..."
+          echo ">>> 扩展磁盘空间，将大文件夹链接到 /mnt/g..."
           df -h
 
-          # 在大容量磁盘 /mnt 上创建目录
-          echo ">>> 在大容量磁盘 /mnt 上创建目录..."
-          mkdir -p /mnt/openwrt-build/dl
-          mkdir -p /mnt/openwrt-build/build_dir
-          mkdir -p /mnt/openwrt-build/tmp
+          # 在大容量磁盘 /mnt/g 上创建目录
+          echo ">>> 在大容量磁盘 /mnt/g 上创建目录..."
+          mkdir -p /mnt/g/openwrt-build/dl
+          mkdir -p /mnt/g/openwrt-build/build_dir
+          mkdir -p /mnt/g/openwrt-build/tmp
 
           # 删除源码目录中原有的目录并创建软链接
           echo ">>> 删除源码目录中的大文件夹并创建软链接..."
           rm -rf ./dl ./build_dir ./tmp
-          ln -s /mnt/openwrt-build/dl ./dl
-          ln -s /mnt/openwrt-build/build_dir ./build_dir
-          ln -s /mnt/openwrt-build/tmp ./tmp
+          ln -s /mnt/g/openwrt-build/dl ./dl
+          ln -s /mnt/g/openwrt-build/build_dir ./build_dir
+          ln -s /mnt/g/openwrt-build/tmp ./tmp
 
           echo ">>> 软链接创建完成:"
           ls -l . | grep '^l'
@@ -296,21 +296,21 @@ jobs:
       - name: 扩展磁盘空间
         run: |
           cd /workdir/immortalwrt
-          echo ">>> 扩展磁盘空间，将大文件夹链接到 /mnt..."
+          echo ">>> 扩展磁盘空间，将大文件夹链接到 /mnt/g..."
           df -h
 
-          # 在大容量磁盘 /mnt 上创建目录
-          echo ">>> 在大容量磁盘 /mnt 上创建目录..."
-          mkdir -p /mnt/openwrt-build/dl
-          mkdir -p /mnt/openwrt-build/build_dir
-          mkdir -p /mnt/openwrt-build/tmp
+          # 在大容量磁盘 /mnt/g 上创建目录
+          echo ">>> 在大容量磁盘 /mnt/g 上创建目录..."
+          mkdir -p /mnt/g/openwrt-build/dl
+          mkdir -p /mnt/g/openwrt-build/build_dir
+          mkdir -p /mnt/g/openwrt-build/tmp
 
           # 删除源码目录中原有的目录并创建软链接
           echo ">>> 删除源码目录中的大文件夹并创建软链接..."
           rm -rf ./dl ./build_dir ./tmp
-          ln -s /mnt/openwrt-build/dl ./dl
-          ln -s /mnt/openwrt-build/build_dir ./build_dir
-          ln -s /mnt/openwrt-build/tmp ./tmp
+          ln -s /mnt/g/openwrt-build/dl ./dl
+          ln -s /mnt/g/openwrt-build/build_dir ./build_dir
+          ln -s /mnt/g/openwrt-build/tmp ./tmp
 
           echo ">>> 软链接创建完成:"
           ls -l . | grep '^l'
