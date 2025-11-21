@@ -1,7 +1,7 @@
 # .github/workflows/build.yml
 # =============================================================================
 # ImmortalWrt 自动编译工作流 (优化版)
-# 版本: 2.3.1
+# 版本: 2.3.2
 # 更新日期: 2025-11-19
 # =============================================================================
 
@@ -154,30 +154,37 @@ jobs:
           git clone $REPO_URL -b $REPO_BRANCH immortalwrt
           ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
-      - name: 扩展磁盘空间
+      # =================================================================
+      # 关键步骤：使用软链接扩展磁盘空间 (修正权限问题)
+      # =================================================================
+      - name: Free Disk Space and Extend with /mnt
         run: |
-          cd /workdir/immortalwrt
-          echo ">>> 扩展磁盘空间，将大文件夹链接到 /mnt/g..."
-          df -h
+            echo "当前磁盘使用情况:"
+            df -h
 
-          # 在大容量磁盘 /mnt/g 上创建目录
-          echo ">>> 在大容量磁盘 /mnt/g 上创建目录..."
-          mkdir -p /mnt/g/openwrt-build/dl
-          mkdir -p /mnt/g/openwrt-build/build_dir
-          mkdir -p /mnt/g/openwrt-build/tmp
+            # 在大容量磁盘 /mnt 上创建目录 (需要 sudo 权限)
+            echo "在大容量磁盘 /mnt 上创建目录..."
+            sudo mkdir -p /mnt/openwrt-build/dl
+            sudo mkdir -p /mnt/openwrt-build/build_dir
+            sudo mkdir -p /mnt/openwrt-build/tmp
 
-          # 删除源码目录中原有的目录并创建软链接
-          echo ">>> 删除源码目录中的大文件夹并创建软链接..."
-          rm -rf ./dl ./build_dir ./tmp
-          ln -s /mnt/g/openwrt-build/dl ./dl
-          ln -s /mnt/g/openwrt-build/build_dir ./build_dir
-          ln -s /mnt/g/openwrt-build/tmp ./tmp
+            # 将新创建的目录的所有权更改为当前用户，避免后续权限问题
+            echo "更改目录所有权..."
+            sudo chown -R $USER:$USER /mnt/openwrt-build
 
-          echo ">>> 软链接创建完成:"
-          ls -l . | grep '^l'
-          
-          echo ">>> 扩展后的磁盘使用情况:"
-          df -h
+            # 删除源码目录中原有的目录并创建软链接
+            echo "删除源码目录中的大文件夹并创建软链接..."
+            rm -rf ./dl ./build_dir ./tmp
+            ln -s /mnt/openwrt-build/dl ./dl
+            ln -s /mnt/openwrt-build/build_dir ./build_dir
+            ln -s /mnt/openwrt-build/tmp ./tmp
+
+            echo "软链接创建完成:"
+            ls -l . | grep '^l'
+            
+            echo "扩展后的磁盘使用情况:"
+            df -h
+      # =================================================================
 
       - name: 加载或回退缓存
         uses: actions/cache@v4
@@ -293,30 +300,37 @@ jobs:
           git clone $REPO_URL -b $REPO_BRANCH immortalwrt
           ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
-      - name: 扩展磁盘空间
+      # =================================================================
+      # 关键步骤：使用软链接扩展磁盘空间 (修正权限问题)
+      # =================================================================
+      - name: Free Disk Space and Extend with /mnt
         run: |
-          cd /workdir/immortalwrt
-          echo ">>> 扩展磁盘空间，将大文件夹链接到 /mnt/g..."
-          df -h
+            echo "当前磁盘使用情况:"
+            df -h
 
-          # 在大容量磁盘 /mnt/g 上创建目录
-          echo ">>> 在大容量磁盘 /mnt/g 上创建目录..."
-          mkdir -p /mnt/g/openwrt-build/dl
-          mkdir -p /mnt/g/openwrt-build/build_dir
-          mkdir -p /mnt/g/openwrt-build/tmp
+            # 在大容量磁盘 /mnt 上创建目录 (需要 sudo 权限)
+            echo "在大容量磁盘 /mnt 上创建目录..."
+            sudo mkdir -p /mnt/openwrt-build/dl
+            sudo mkdir -p /mnt/openwrt-build/build_dir
+            sudo mkdir -p /mnt/openwrt-build/tmp
 
-          # 删除源码目录中原有的目录并创建软链接
-          echo ">>> 删除源码目录中的大文件夹并创建软链接..."
-          rm -rf ./dl ./build_dir ./tmp
-          ln -s /mnt/g/openwrt-build/dl ./dl
-          ln -s /mnt/g/openwrt-build/build_dir ./build_dir
-          ln -s /mnt/g/openwrt-build/tmp ./tmp
+            # 将新创建的目录的所有权更改为当前用户，避免后续权限问题
+            echo "更改目录所有权..."
+            sudo chown -R $USER:$USER /mnt/openwrt-build
 
-          echo ">>> 软链接创建完成:"
-          ls -l . | grep '^l'
-          
-          echo ">>> 扩展后的磁盘使用情况:"
-          df -h
+            # 删除源码目录中原有的目录并创建软链接
+            echo "删除源码目录中的大文件夹并创建软链接..."
+            rm -rf ./dl ./build_dir ./tmp
+            ln -s /mnt/openwrt-build/dl ./dl
+            ln -s /mnt/openwrt-build/build_dir ./build_dir
+            ln -s /mnt/openwrt-build/tmp ./tmp
+
+            echo "软链接创建完成:"
+            ls -l . | grep '^l'
+            
+            echo "扩展后的磁盘使用情况:"
+            df -h
+      # =================================================================
 
       - name: 加载Ultra缓存
         uses: actions/cache@v4
