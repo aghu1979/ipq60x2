@@ -154,22 +154,28 @@ jobs:
           git clone $REPO_URL -b $REPO_BRANCH immortalwrt
           ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
-      # =================================================================
-      # 关键步骤：动态查找挂载点并扩展磁盘空间
-      # =================================================================
-      - name: Free Disk Space and Extend with Dynamic Mount Point
+      - name: 扩展磁盘空间
         run: |
+          set -e # 任何命令失败则退出
           cd /workdir/immortalwrt
           echo ">>> 查找最佳挂载点以扩展磁盘空间..."
           df -h
 
-          # 使用 awk 查找可用空间大于 10GB 且不是根目录(/) 的挂载点
-          # 我们优先选择非根目录，因为它通常是辅助磁盘
-          TARGET_MOUNT_POINT=$(df -h | awk 'NR>1 {gsub(/G/, "", $4); if($4 > 10 && $6 != "/") print $6}' | head -n 1)
+          # 查找可用空间最大的非tmpfs挂载点
+          TARGET_MOUNT_POINT=$(df -h | awk '
+            NR>1 && $2!="tmpfs" {
+              gsub(/G/, "", $5);
+              gsub(/M/, "0.001", $5);
+              gsub(/K/, "0.000001", $5);
+              if($5 > 10 && $6 != "/") {
+                print $5, $6
+              }
+            }
+          ' | sort -n | tail -n 1 | awk '{print $2}')
 
+          # 如果找不到，则回退到根目录
           if [ -z "$TARGET_MOUNT_POINT" ]; then
-            echo "错误: 未找到合适的挂载点 (可用空间 > 10GB 且不是根目录)。"
-            echo "将回退到根目录，这可能导致空间不足。"
+            echo "警告: 未找到合适的辅助挂载点。将回退到根目录，这可能导致空间不足。"
             TARGET_MOUNT_POINT="/"
           else
             echo "找到最佳挂载点: $TARGET_MOUNT_POINT"
@@ -209,7 +215,6 @@ jobs:
             echo "错误: dl 目录不可写，软链接可能失效！"
             exit 1
           fi
-      # =================================================================
 
       - name: 加载或回退缓存
         uses: actions/cache@v4
@@ -325,17 +330,24 @@ jobs:
           git clone $REPO_URL -b $REPO_BRANCH immortalwrt
           ln -sf /workdir/immortalwrt $GITHUB_WORKSPACE/immortalwrt
 
-      # =================================================================
-      # 关键步骤：动态查找挂载点并扩展磁盘空间
-      # =================================================================
-      - name: Free Disk Space and Extend with Dynamic Mount Point
+      - name: 扩展磁盘空间
         run: |
+          set -e
           cd /workdir/immortalwrt
           echo ">>> 查找最佳挂载点以扩展磁盘空间..."
           df -h
 
-          # 使用 awk 查找可用空间大于 10GB 且不是根目录(/) 的挂载点
-          TARGET_MOUNT_POINT=$(df -h | awk 'NR>1 {gsub(/G/, "", $4); if($4 > 10 && $6 != "/") print $6}' | head -n 1)
+          # 查找可用空间最大的非tmpfs挂载点
+          TARGET_MOUNT_POINT=$(df -h | awk '
+            NR>1 && $2!="tmpfs" {
+              gsub(/G/, "", $5);
+              gsub(/M/, "0.001", $5);
+              gsub(/K/, "0.000001", $5);
+              if($5 > 10 && $6 != "/") {
+                print $5, $6
+              }
+            }
+          ' | sort -n | tail -n 1 | awk '{print $2}')
 
           if [ -z "$TARGET_MOUNT_POINT" ]; then
             echo "警告: 未找到合适的辅助挂载点。将回退到根目录，这可能导致空间不足。"
@@ -344,18 +356,15 @@ jobs:
             echo "找到最佳挂载点: $TARGET_MOUNT_POINT"
           fi
 
-          # 创建子目录用于存放构建文件
           BUILD_DIR="$TARGET_MOUNT_POINT/openwrt-build"
           echo ">>> 在 $TARGET_MOUNT_POINT 上创建构建目录: $BUILD_DIR"
           sudo mkdir -p "$BUILD_DIR/dl"
           sudo mkdir -p "$BUILD_DIR/build_dir"
           sudo mkdir -p "$BUILD_DIR/tmp"
 
-          # 更改目录所有权
           echo ">>> 更改目录所有权..."
           sudo chown -R $USER:$USER "$BUILD_DIR"
 
-          # 删除源码目录中的大文件夹并创建软链接
           echo ">>> 删除源码目录中的大文件夹并创建软链接..."
           rm -rf ./dl ./build_dir ./tmp
           ln -s "$BUILD_DIR/dl" ./dl
@@ -368,7 +377,6 @@ jobs:
           echo ">>> 扩展后的磁盘使用情况:"
           df -h
 
-          # 验证软链接是否生效
           echo ">>> 验证软链接是否生效..."
           touch ./dl/test_file
           if [ -f ./dl/test_file" ]; then
@@ -378,7 +386,6 @@ jobs:
             echo "错误: dl 目录不可写，软链接可能失效！"
             exit 1
           fi
-      # =================================================================
 
       - name: 加载Ultra缓存
         uses: actions/cache@v4
